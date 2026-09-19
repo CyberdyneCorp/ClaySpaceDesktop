@@ -158,6 +158,10 @@ impl SceneViewModel {
         key: LayerKey,
         settings: clayspace_model::RemeshSettings,
     ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
+        // Measured here rather than through `edit`, which deals in
+        // `Result<(), _>` and would announce through `finish`: a rebuild
+        // answers with what it destroyed, and the refusal below says so in its
+        // own words. The count is the same count, taken once.
         let before = self.model.history_depth();
         let rebuilt = self.model.remesh_layer(key, settings);
         self.unbanked.record(before, self.model.history_depth());
@@ -223,6 +227,29 @@ impl SceneViewModel {
         self.finish(outcome)
     }
 
+    /// Acts on the active grid's stack of recorded passes.
+    ///
+    /// Here rather than in the composition root, which is where it used to run
+    /// straight at the document. Two things came of the move. The refusal — a
+    /// second recording opened over an open one, a merge with nothing beneath
+    /// it, a pass addressed on a layer that is not a grid — lands on the same
+    /// line every other scene refusal lands on, instead of on a terminal
+    /// nobody has open. And the operation is banked, so dialling a pass is one
+    /// thing to take back: measured before this, a strength change was not
+    /// undoable at all and the Cmd+Z after it took back the stroke before.
+    ///
+    /// Takes [`clayspace_model::SculptLayerOp`], which addresses a pass by its
+    /// position in a grid's stack, and never the hierarchy's operation — see
+    /// [`SceneViewModel::apply_sculpt_layer_op`], which is the other one.
+    pub fn apply_grid_pass_op(
+        &mut self,
+        op: clayspace_model::SculptLayerOp,
+    ) -> Result<(), ModelError> {
+        // Through `edit`, which measures and announces both: it is the one
+        // seam every scene operation that changes the document goes through.
+        self.edit(move |model| model.apply_sculpt_layer_op(op))
+    }
+
     /// What subdividing the active hierarchy once more would cost.
     ///
     /// Asked whenever the panel is drawn rather than held, because it moves
@@ -261,6 +288,12 @@ impl SceneViewModel {
     /// adjustable long after the strokes that filled them, and a sculptor
     /// whose next undo took back a slider rather than the work would have to
     /// choose between the two.
+    ///
+    /// A *grid's* stack of recorded passes is not one of those and does come
+    /// through — see [`SceneViewModel::apply_grid_pass_op`]. Dialling one
+    /// replays the diffs the passes hold and visibly moves the surface, so it
+    /// is work rather than a way of looking at it; the engine records nothing
+    /// for the replay, and the document keeps the way back itself.
     fn edit(
         &mut self,
         run: impl FnOnce(&mut dyn SceneModel) -> Result<(), ModelError>,

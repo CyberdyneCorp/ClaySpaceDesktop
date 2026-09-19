@@ -21,6 +21,11 @@ struct Calls {
     moved: Vec<(LayerKey, usize)>,
     /// What was asked of a hierarchy's stack of passes, in order.
     passes: Vec<clayspace_model::MultiresSculptLayerOp>,
+    /// What was asked of a grid's stack of passes, in order. A different
+    /// stack, addressed a different way — see [`SceneModel`].
+    grid_passes: Vec<clayspace_model::SculptLayerOp>,
+    /// Which layers were asked to rebuild their topology.
+    rebuilt: Vec<LayerKey>,
     /// What the document's history holds, as the engine's does: one entry per
     /// operation that changed the stack, and none for a way of looking at it.
     entries: usize,
@@ -91,6 +96,44 @@ impl SceneModel for FakeScene {
     ) -> Result<(), ModelError> {
         self.calls.borrow_mut().passes.push(op);
         self.guard()
+    }
+
+    fn apply_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::SculptLayerOp,
+    ) -> Result<(), ModelError> {
+        self.guard()?;
+        let mut calls = self.calls.borrow_mut();
+        // As the document does: opening and closing a recording decide where
+        // the next edits are filed and leave nothing to take back; everything
+        // else replays cells and is one thing.
+        if op.changes_the_surface() {
+            calls.entries += 1;
+        }
+        calls.grid_passes.push(op);
+        Ok(())
+    }
+
+    fn remesh_layer(
+        &mut self,
+        key: LayerKey,
+        _settings: clayspace_model::RemeshSettings,
+    ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
+        self.guard()?;
+        let mut calls = self.calls.borrow_mut();
+        calls.rebuilt.push(key);
+        // The engine records a rebuild as one entry: capture, rebuild,
+        // validate, replace, record.
+        calls.entries += 1;
+        Ok(clayspace_model::RemeshOutcome {
+            triangles_before: 1_000,
+            triangles_after: 800,
+            voxel_size: 0.01,
+            pieces: 1,
+            pieces_removed: 0,
+            watertight: true,
+            uvs_dropped: false,
+        })
     }
 
     fn scene(&self) -> Scene {
@@ -820,5 +863,111 @@ fn a_refused_layer_operation_banks_nothing() {
         .dispatch(&Command::AddLayer(Representation::Sdf))
         .is_err());
     assert!(vm.dispatch(&Command::RemoveLayer(LayerKey(2))).is_err());
+    assert!(vm.take_unbanked_actions().is_empty());
+}
+
+// -- a rebuild and a grid's passes -------------------------------------------
+
+/// Every operation this ViewModel runs that a sculptor would expect to take
+/// back banks exactly one action.
+///
+/// The history a sculptor presses is the sculpting ViewModel's: a stack of how
+/// many entries each action spent, where one Cmd+Z pops one count and undoes
+/// that many. An operation banked nowhere left the next Cmd+Z spending the
+/// *previous* command's count on entries that belonged to this one — measured
+/// in the audit, the undo after a rebuild removed two subtools the rebuild had
+/// never touched, and dialling a pass was not undoable at all.
+#[test]
+fn a_rebuild_and_a_pass_dialled_each_bank_one_action() {
+    use clayspace_model::SculptLayerOp as Grid;
+
+    let (mut vm, _) = fixture();
+
+    vm.remesh(LayerKey(1), clayspace_model::RemeshSettings::default())
+        .expect("a rebuild");
+    assert_eq!(
+        vm.take_unbanked_actions(),
+        vec![1],
+        "a rebuild is not exactly one thing to take back"
+    );
+
+    for op in [
+        Grid::SetStrength {
+            index: 0,
+            strength: 0.5,
+        },
+        Grid::SetVisible {
+            index: 0,
+            visible: false,
+        },
+        Grid::Move { from: 1, to: 0 },
+        Grid::MergeDown { index: 1 },
+        Grid::Remove { index: 1 },
+    ] {
+        vm.apply_grid_pass_op(op.clone()).expect("the operation");
+        assert_eq!(
+            vm.take_unbanked_actions(),
+            vec![1],
+            "{op:?} is not exactly one thing to take back"
+        );
+    }
+}
+
+/// Opening a recording is not an edit, so it banks nothing.
+///
+/// It decides where the *next* edits are filed and draws nothing new. A count
+/// banked for it would be a Cmd+Z that appears to do nothing, and the one
+/// after it would reach the work.
+#[test]
+fn opening_a_recording_banks_nothing() {
+    use clayspace_model::SculptLayerOp as Grid;
+
+    let (mut vm, calls) = fixture();
+    vm.apply_grid_pass_op(Grid::BeginRecording { name: "p1".into() })
+        .expect("a pass opened");
+    vm.apply_grid_pass_op(Grid::EndRecording)
+        .expect("the pass closed");
+
+    assert_eq!(
+        calls.borrow().grid_passes.len(),
+        2,
+        "the operations have to reach the model rather than being answered here"
+    );
+    assert!(
+        vm.take_unbanked_actions().is_empty(),
+        "an undo entry was banked for an operation that drew nothing"
+    );
+}
+
+/// An operation the model refused never happened, so there is nothing to take
+/// back. A count banked for one would spend an entry belonging to the command
+/// before.
+#[test]
+fn a_refused_operation_banks_nothing() {
+    let (mut vm, _) = fixture_with(|model| model.refuse = Some("essa camada não é uma grade"));
+
+    assert!(vm
+        .apply_grid_pass_op(clayspace_model::SculptLayerOp::SetStrength {
+            index: 0,
+            strength: 0.5,
+        })
+        .is_err());
+    assert!(vm
+        .remesh(LayerKey(1), clayspace_model::RemeshSettings::default())
+        .is_err());
+    assert!(
+        vm.take_unbanked_actions().is_empty(),
+        "an undo entry was banked for an operation that was refused"
+    );
+}
+
+/// And the counts are taken once. Banked twice, one operation would be two
+/// undos, the second of which reaches whatever came before it.
+#[test]
+fn what_an_operation_cost_is_handed_over_once() {
+    let (mut vm, _) = fixture();
+    vm.remesh(LayerKey(1), clayspace_model::RemeshSettings::default())
+        .expect("a rebuild");
+    assert_eq!(vm.take_unbanked_actions(), vec![1]);
     assert!(vm.take_unbanked_actions().is_empty());
 }

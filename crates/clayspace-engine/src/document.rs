@@ -857,6 +857,9 @@ enum Step {
 enum Undoable {
     /// A gesture on geometry the host carries, which costs the engine nothing.
     Mesh,
+    /// An operation on a grid's stack of passes, which costs the engine
+    /// nothing either. See [`PassEdit`].
+    Pass,
     /// The engine's own newest entry, taken back whole as a crossing.
     Crossing,
     /// The engine's own newest entry, which a visibility gesture put there.
@@ -917,6 +920,40 @@ enum GestureRecord {
     /// take at level 4 over a 16×16 cage, and 8.15 ms to put back. The bytes
     /// are what [`crate::multires::HISTORY_BYTES`] bounds.
     Hierarchy(Vec<u8>),
+}
+
+/// One operation on a grid's stack of passes, and how to take it back.
+///
+/// A pass is a slider rather than an entry on a stack, which is why the engine
+/// records nothing for one: dialling a pass *recomposes* the grid by replaying
+/// the diffs its passes hold, and clay.h is explicit that a replay is not an
+/// edit. Measured on the pinned engine — a strength change and a visibility
+/// change each left the undo depth exactly where they found it.
+///
+/// It still changes the surface a sculptor is looking at, though, and an
+/// operation that changes the surface and banks nothing is an operation whose
+/// next undo reaches past it: in the audit, dialling a pass was not undoable
+/// and the undo after it took back the stroke before. So the document keeps
+/// the way back itself, the way it already keeps one for a mesh gesture, and
+/// orders it against everything else by stamp.
+///
+/// Both directions are held rather than one. A pass operation is not its own
+/// inverse — `SetStrength { index, 0.5 }` is undone by the strength that was
+/// there before and redone by 0.5 — so a record that carried one operation
+/// could go back or forward and not both.
+struct PassEdit {
+    /// The grid whose stack this addresses. Carried rather than taken from
+    /// whichever layer happens to be active when the step runs: a sculptor
+    /// dials a pass, selects another subtool and presses Cmd+Z, and the pass
+    /// that moves has to be the one they dialled.
+    layer: LayerKey,
+    /// What puts the stack back where the operation found it.
+    back: clayspace_model::SculptLayerOp,
+    /// What puts the operation on again.
+    forward: clayspace_model::SculptLayerOp,
+    /// Where this sits in the document's history order. See
+    /// [`ClayDocument::history_seq`].
+    stamp: u64,
 }
 
 /// One crossing, and the layer whose presence in the scene follows it.
@@ -1317,6 +1354,13 @@ pub struct ClayDocument {
     /// stamp off the top, and the mesh gesture becomes the most recent again.
     mesh_undo: Vec<MeshGesture>,
     mesh_redo: Vec<MeshGesture>,
+    /// Operations on a grid's passes undo can take back, newest last.
+    ///
+    /// Interleaved by stamp exactly as `mesh_undo` is, and for the same
+    /// reason: the engine records nothing for one, so its own stamp is what
+    /// says whether it is newer than the engine's top entry. See [`PassEdit`].
+    pass_undo: Vec<PassEdit>,
+    pass_redo: Vec<PassEdit>,
     /// Crossings undo can take back whole, newest last.
     ///
     /// A crossing is a layer plus what fills it. Since
@@ -1548,6 +1592,8 @@ impl ClayDocument {
             engine_redo_marks: Vec::new(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            pass_undo: Vec::new(),
+            pass_redo: Vec::new(),
             crossing_undo: Vec::new(),
             retopo_target: None,
             crossing_redo: Vec::new(),
@@ -2509,6 +2555,9 @@ impl ClayDocument {
             // A mesh gesture costs the engine nothing, so the engine is not
             // stepped at all.
             Some(Undoable::Mesh) => return self.undo_mesh_gesture(),
+            // Nor by a pass operation, for the same reason: the engine records
+            // nothing for a recompose, so the way back is the document's own.
+            Some(Undoable::Pass) => return self.undo_pass_edit(),
             // A crossing sits on its own engine entry, and taking back only
             // the engine's half would leave the layer it made standing and
             // empty.
@@ -2554,6 +2603,7 @@ impl ClayDocument {
         self.hop_visibility_forward()?;
         match self.next_redoable() {
             Some(Undoable::Mesh) => return self.redo_mesh_gesture(),
+            Some(Undoable::Pass) => return self.redo_pass_edit(),
             Some(Undoable::Crossing) => return self.redo_crossing(),
             _ => {}
         }
@@ -6104,6 +6154,15 @@ impl ClayDocument {
     /// beyond them.
     const BRICK_MARGIN: f32 = 16.0;
 
+    /// How many operations on a grid's passes the document keeps a way back
+    /// to. See [`ClayDocument::trim_pass_history`].
+    ///
+    /// Deeper than the engine's own history budget reaches on a working
+    /// document, so a sculptor who dials a stack of passes never finds the
+    /// oldest one has quietly stopped being undoable while the entries around
+    /// it still are.
+    const PASS_HISTORY: usize = 512;
+
     /// Chunk keys drained from a grid in one go.
     ///
     /// The engine stages the whole queue on the first call after a large edit
@@ -7422,6 +7481,7 @@ impl ClayDocument {
     /// new edit had already built over.
     fn forget_the_redo_line(&mut self) {
         self.mesh_redo.clear();
+        self.pass_redo.clear();
         self.crossing_redo.clear();
         self.visibility_redo.clear();
         self.skin_redo.clear();
@@ -7524,18 +7584,48 @@ impl ClayDocument {
         self.skin_undo.push(change);
     }
 
+    /// The newest of the records the engine knows nothing about, and its
+    /// stamp.
+    ///
+    /// A mesh gesture and an operation on a grid's passes both cost the engine
+    /// no entry, so each carries a stamp of its own — and the two have to be
+    /// ordered against each other as well as against the engine's top entry. A
+    /// session that dialled a pass and then sculpted a mesh subtool holds one
+    /// of each, and the greater stamp is the one the sculptor made last.
+    fn newest_carried(&self) -> Option<(u64, Undoable)> {
+        [
+            self.mesh_undo.last().map(|it| (it.stamp, Undoable::Mesh)),
+            self.pass_undo.last().map(|it| (it.stamp, Undoable::Pass)),
+        ]
+        .into_iter()
+        .flatten()
+        .max_by_key(|(stamp, _)| *stamp)
+    }
+
+    /// The mirror: the *oldest* undone carried record, which is the one the
+    /// next redo puts back.
+    fn next_carried(&self) -> Option<(u64, Undoable)> {
+        [
+            self.mesh_redo.last().map(|it| (it.stamp, Undoable::Mesh)),
+            self.pass_redo.last().map(|it| (it.stamp, Undoable::Pass)),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(stamp, _)| *stamp)
+    }
+
     /// Which history holds the newest thing, asked once.
     ///
-    /// This is the whole of the ordering. A mesh gesture adds no engine entry,
-    /// so it wins when its stamp is above the engine's top one; everything
-    /// else *is* the engine's top entry, and the question is only which record
-    /// on this side claims it.
+    /// This is the whole of the ordering. A mesh gesture and a pass operation
+    /// add no engine entry, so one of them wins when its stamp is above the
+    /// engine's top one; everything else *is* the engine's top entry, and the
+    /// question is only which record on this side claims it.
     fn newest_undoable(&mut self) -> Option<Undoable> {
         self.note_engine_entries();
         let engine = self.engine_undo_marks.last().copied();
-        if let Some(gesture) = self.mesh_undo.last() {
-            if engine.is_none_or(|top| gesture.stamp > top) {
-                return Some(Undoable::Mesh);
+        if let Some((stamp, which)) = self.newest_carried() {
+            if engine.is_none_or(|top| stamp > top) {
+                return Some(which);
             }
         }
         let top = engine?;
@@ -7561,9 +7651,9 @@ impl ClayDocument {
     fn next_redoable(&mut self) -> Option<Undoable> {
         self.note_engine_entries();
         let engine = self.engine_redo_marks.last().copied();
-        if let Some(gesture) = self.mesh_redo.last() {
-            if engine.is_none_or(|next| gesture.stamp < next) {
-                return Some(Undoable::Mesh);
+        if let Some((stamp, which)) = self.next_carried() {
+            if engine.is_none_or(|next| stamp < next) {
+                return Some(which);
             }
         }
         let next = engine?;
@@ -7603,6 +7693,220 @@ impl ClayDocument {
         };
         self.mesh_undo.push(gesture);
         Ok(true)
+    }
+
+    /// Takes back one operation on a grid's passes.
+    fn undo_pass_edit(&mut self) -> Result<bool, ModelError> {
+        let Some(edit) = self.pass_undo.pop() else {
+            return Ok(false);
+        };
+        self.step_pass(edit, Step::Back)
+    }
+
+    /// Puts one back.
+    fn redo_pass_edit(&mut self) -> Result<bool, ModelError> {
+        let Some(edit) = self.pass_redo.pop() else {
+            return Ok(false);
+        };
+        self.step_pass(edit, Step::Forward)
+    }
+
+    /// Runs one pass record in a direction and hands it to the other stack.
+    ///
+    /// A record whose grid has left the document is dropped rather than
+    /// applied: there is no stack to put back, and the step is still a step —
+    /// the record was what the history held at that position, and refusing
+    /// here would leave a Cmd+Z that does nothing and says nothing.
+    fn step_pass(&mut self, edit: PassEdit, step: Step) -> Result<bool, ModelError> {
+        if self.index_of(edit.layer).is_err() {
+            return Ok(true);
+        }
+        let op = match step {
+            Step::Back => edit.back.clone(),
+            Step::Forward => edit.forward.clone(),
+        };
+        // Through the same function the operation itself went through, and
+        // deliberately not through `apply_sculpt_layer_op`: a step through the
+        // history is not a new edit, and banking one for it would leave a
+        // record the next undo would take back again.
+        self.run_pass_op(edit.layer, &op)?;
+        match step {
+            Step::Back => self.pass_redo.push(edit),
+            Step::Forward => self.pass_undo.push(edit),
+        }
+        Ok(true)
+    }
+
+    /// Applies one operation to a grid's stack of passes, and nothing else.
+    ///
+    /// The whole of what a pass operation *does*, with no account taken of the
+    /// history — which is what lets a step through the history reuse it.
+    fn run_pass_op(
+        &mut self,
+        key: LayerKey,
+        op: &clayspace_model::SculptLayerOp,
+    ) -> Result<(), ModelError> {
+        use clayspace_model::SculptLayerOp as Op;
+
+        let index = self.index_of(key)?;
+        let engine_name = self.layers[index].engine_name.clone();
+        let mut recording = self.recording_pass;
+        {
+            let (_, mut grid) = self
+                .document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
+            match op {
+                Op::BeginRecording { name } => {
+                    let name = (!name.is_empty()).then_some(name.as_str());
+                    grid.begin_sculpt_layer(name).map_err(ModelError::engine)?;
+                    recording = true;
+                }
+                Op::EndRecording => {
+                    grid.end_sculpt_layer().map_err(ModelError::engine)?;
+                    recording = false;
+                }
+                Op::SetStrength { index, strength } => grid
+                    .set_sculpt_layer_strength(*index, *strength)
+                    .map_err(ModelError::engine)?,
+                Op::SetVisible { index, visible } => grid
+                    .set_sculpt_layer_visible(*index, *visible)
+                    .map_err(ModelError::engine)?,
+                Op::Remove { index } => grid
+                    .remove_sculpt_layer(*index)
+                    .map_err(ModelError::engine)?,
+                Op::MergeDown { index } => grid
+                    .merge_sculpt_layer_down(*index)
+                    .map_err(ModelError::engine)?,
+                Op::Move { from, to } => grid
+                    .move_sculpt_layer(*from, *to)
+                    .map_err(ModelError::engine)?,
+            }
+        }
+
+        self.recording_pass = recording;
+        self.refresh_sculpt_layers(key)?;
+        // Everything but starting and stopping a recording replays cells, so
+        // the surface has changed and the viewport has to re-mesh it. Starting
+        // one decides where the *next* edits are filed and draws nothing new.
+        if op.changes_the_surface() {
+            let layer_id = self
+                .layers
+                .iter()
+                .find(|layer| layer.key == key)
+                .map(|layer| layer.id);
+            if let Some(id) = layer_id {
+                self.refill(id, &[])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The pass an operation addresses, as it stands now.
+    ///
+    /// `None` where the operation addresses no single pass — beginning and
+    /// ending a recording do not — or where the index is one the grid does not
+    /// have, which the engine refuses a moment later.
+    fn pass_at(
+        &self,
+        key: LayerKey,
+        op: &clayspace_model::SculptLayerOp,
+    ) -> Option<clayspace_model::SculptLayer> {
+        use clayspace_model::SculptLayerOp as Op;
+
+        let index = match op {
+            Op::SetStrength { index, .. }
+            | Op::SetVisible { index, .. }
+            | Op::Remove { index }
+            | Op::MergeDown { index } => *index,
+            Op::Move { from, .. } => *from,
+            Op::BeginRecording { .. } | Op::EndRecording => return None,
+        };
+        let layer = self.layers.iter().find(|layer| layer.key == key)?;
+        layer.sculpt_layers.get(index).cloned()
+    }
+
+    /// Records the way back from one pass operation, or lets go of the records
+    /// an operation has made meaningless.
+    ///
+    /// `was` is the pass as it stood before the operation ran. See
+    /// [`PassEdit`] for why the document keeps this at all.
+    fn bank_pass_op(
+        &mut self,
+        key: LayerKey,
+        op: clayspace_model::SculptLayerOp,
+        was: Option<clayspace_model::SculptLayer>,
+    ) {
+        use clayspace_model::SculptLayerOp as Op;
+
+        let back = match (&op, was) {
+            // Where the next edits are filed rather than an edit of its own:
+            // nothing drawn moves, and every index keeps the pass it named.
+            (Op::BeginRecording { .. } | Op::EndRecording, _) => return,
+            (Op::SetStrength { index, .. }, Some(was)) => Some(Op::SetStrength {
+                index: *index,
+                strength: was.strength,
+            }),
+            (Op::SetVisible { index, .. }, Some(was)) => Some(Op::SetVisible {
+                index: *index,
+                visible: was.visible,
+            }),
+            // A reorder is its own inverse, run the other way.
+            (Op::Move { from, to }, _) => Some(Op::Move {
+                from: *to,
+                to: *from,
+            }),
+            // Removing a pass and merging one down destroy the recorded diff
+            // they act on, and clay.h names both among the operations that are
+            // not a step "because nothing records it". Nothing this side holds
+            // can put a discarded diff back, so nothing pretends to — and every
+            // record already held for this grid addresses a pass by position
+            // over a stack that has just been renumbered, so those go too
+            // rather than be applied to passes they were never about.
+            (Op::Remove { .. } | Op::MergeDown { .. }, _) => None,
+            // A pass the stack did not have, which the engine refuses — so an
+            // operation that reached here addressed one that existed and this
+            // arm is not reachable. Treated as the destructive ones are rather
+            // than assumed away: if it ever is reached, what this side knows
+            // about that stack is wrong, and letting go of it is the safe way
+            // to be wrong.
+            (Op::SetStrength { .. } | Op::SetVisible { .. }, None) => None,
+        };
+        let Some(back) = back else {
+            self.forget_the_passes_of(key);
+            return;
+        };
+        let stamp = self.stamp_history();
+        self.pass_undo.push(PassEdit {
+            layer: key,
+            back,
+            forward: op,
+            stamp,
+        });
+        // The pass records alone, for the reason a mesh gesture clears its own
+        // stack alone: this costs the engine no entry, so the engine's redo
+        // stack is still reachable and its marks still describe it.
+        self.pass_redo.clear();
+        self.trim_pass_history();
+    }
+
+    /// Lets go of every way back into one grid's stack of passes.
+    fn forget_the_passes_of(&mut self, key: LayerKey) {
+        self.pass_undo.retain(|edit| edit.layer != key);
+        self.pass_redo.retain(|edit| edit.layer != key);
+    }
+
+    /// Bounds the pass history, oldest first.
+    ///
+    /// A count rather than a budget, because a record is two operations and a
+    /// stamp — tens of bytes, against the hundreds of kilobytes a carried
+    /// gesture's record costs — so what wants bounding here is a stack that
+    /// would otherwise grow for the life of a session, not the memory it
+    /// occupies.
+    fn trim_pass_history(&mut self) {
+        while self.pass_undo.len() > Self::PASS_HISTORY {
+            self.pass_undo.remove(0);
+        }
     }
 
     /// Applies one carried gesture in a direction, and hands back the record
@@ -8597,10 +8901,11 @@ impl SculptModel for ClayDocument {
     }
 
     fn history(&self) -> HistoryState {
-        // Both histories, because the menu and the shortcut ask this one
-        // question and a mesh gesture is as undoable as an engine entry. A
-        // depth that counted only the engine's would grey out Undo in the
-        // middle of a mesh sculpting session.
+        // Every history, because the menu and the shortcut ask this one
+        // question and a mesh gesture or a pass dialled is as undoable as an
+        // engine entry. A depth that counted only the engine's would grey out
+        // Undo in the middle of a mesh sculpting session, and would say a
+        // strength change had left nothing to take back.
         //
         // And minus what solo left there. Those are entries the engine holds
         // and the sculptor never made: counted, the panel would say a fresh
@@ -8619,10 +8924,14 @@ impl SculptModel for ClayDocument {
                     .redo_depth
                     .saturating_sub(hopped_forward + folded_forward);
                 HistoryState {
-                    can_undo: undo_depth > 0 || !self.mesh_undo.is_empty(),
-                    can_redo: redo_depth > 0 || !self.mesh_redo.is_empty(),
-                    depth: undo_depth + self.mesh_undo.len(),
-                    redo_depth: redo_depth + self.mesh_redo.len(),
+                    can_undo: undo_depth > 0
+                        || !self.mesh_undo.is_empty()
+                        || !self.pass_undo.is_empty(),
+                    can_redo: redo_depth > 0
+                        || !self.mesh_redo.is_empty()
+                        || !self.pass_redo.is_empty(),
+                    depth: undo_depth + self.mesh_undo.len() + self.pass_undo.len(),
+                    redo_depth: redo_depth + self.mesh_redo.len() + self.pass_redo.len(),
                 }
             }
             Err(_) => HistoryState::default(),
@@ -9245,8 +9554,9 @@ fn hierarchy_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
 const _: fn(Operation) -> &'static str = Operation::label;
 
 impl SceneModel for ClayDocument {
-    /// The history the interface counts, which is the one these operations
-    /// are banked on. See [`ClayDocument::history_depth`].
+    /// The history the interface counts, which is the one these operations —
+    /// a rebuild and an operation on a grid's passes among them — are banked
+    /// on. See [`ClayDocument::history_depth`].
     fn history_depth(&self) -> usize {
         ClayDocument::history_depth(self)
     }
@@ -9487,8 +9797,6 @@ impl SceneModel for ClayDocument {
         &mut self,
         op: clayspace_model::SculptLayerOp,
     ) -> Result<(), ModelError> {
-        use clayspace_model::SculptLayerOp as Op;
-
         let layer = self.active_layer();
         if layer.representation != Representation::Voxel {
             // Named rather than generic: a sculptor on a field or a mesh needs
@@ -9515,56 +9823,11 @@ impl SceneModel for ClayDocument {
             ));
         }
         let key = layer.key;
-        let engine_name = layer.engine_name.clone();
-        let mut recording = self.recording_pass;
-        {
-            let (_, mut grid) = self
-                .document
-                .voxel_layer(&engine_name)
-                .map_err(ModelError::engine)?;
-            match &op {
-                Op::BeginRecording { name } => {
-                    let name = (!name.is_empty()).then_some(name.as_str());
-                    grid.begin_sculpt_layer(name).map_err(ModelError::engine)?;
-                    recording = true;
-                }
-                Op::EndRecording => {
-                    grid.end_sculpt_layer().map_err(ModelError::engine)?;
-                    recording = false;
-                }
-                Op::SetStrength { index, strength } => grid
-                    .set_sculpt_layer_strength(*index, *strength)
-                    .map_err(ModelError::engine)?,
-                Op::SetVisible { index, visible } => grid
-                    .set_sculpt_layer_visible(*index, *visible)
-                    .map_err(ModelError::engine)?,
-                Op::Remove { index } => grid
-                    .remove_sculpt_layer(*index)
-                    .map_err(ModelError::engine)?,
-                Op::MergeDown { index } => grid
-                    .merge_sculpt_layer_down(*index)
-                    .map_err(ModelError::engine)?,
-                Op::Move { from, to } => grid
-                    .move_sculpt_layer(*from, *to)
-                    .map_err(ModelError::engine)?,
-            }
-        }
-
-        self.recording_pass = recording;
-        self.refresh_sculpt_layers(key)?;
-        // Everything but starting and stopping a recording replays cells, so
-        // the surface has changed and the viewport has to re-mesh it. Starting
-        // one decides where the *next* edits are filed and draws nothing new.
-        if op.changes_the_surface() {
-            let layer_id = self
-                .layers
-                .iter()
-                .find(|layer| layer.key == key)
-                .map(|layer| layer.id);
-            if let Some(id) = layer_id {
-                self.refill(id, &[])?;
-            }
-        }
+        // Read before the operation runs, because what it holds is exactly
+        // what the operation is about to replace.
+        let was = self.pass_at(key, &op);
+        self.run_pass_op(key, &op)?;
+        self.bank_pass_op(key, op, was);
         Ok(())
     }
 
@@ -9974,7 +10237,19 @@ impl SceneModel for ClayDocument {
         if let Some(refusal) = layer.protection.refusal() {
             return Err(ModelError::engine(refusal));
         }
-        let id = layer.id;
+        // And refused while a gesture is open, rather than rebuilt underneath
+        // one. An open gesture holds an adjacency, a BVH and a `MeshDeltas`
+        // over the very triangles this replaces: the rebuild landed,
+        // `clay_mesh_sculptor_flush_normals` and `clay_mesh_deltas_revert`
+        // then failed against geometry that no longer existed, and the band
+        // the gesture had drawn survived every undo afterwards. The sentence
+        // names the stroke because ending it is what the sculptor has to do.
+        if self.live_mesh.is_some() || self.live_gesture_is_open() {
+            return Err(ModelError::engine(
+                "termine o traço antes de remalhar a camada",
+            ));
+        }
+        let id = self.layers[index].id;
 
         // Dropped *before* the rebuild rather than after it. The sculptor
         // holds an adjacency and a BVH over triangles the rebuild is about to
@@ -10609,6 +10884,8 @@ impl ClayDocument {
             engine_redo_marks: Vec::new(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            pass_undo: Vec::new(),
+            pass_redo: Vec::new(),
             crossing_undo: Vec::new(),
             retopo_target: None,
             crossing_redo: Vec::new(),

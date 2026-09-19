@@ -22,8 +22,8 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     BrushSettings, Combine, CombineSettings, Direction, ExtrudeSettings, GestureSample, LayerKey,
-    MaskModel, MaskOp, MaskOutline, ObjectModel, OutlineFrame, OutlineMode, Representation,
-    SceneModel, SculptModel, Shape, ToolKind,
+    MaskModel, MaskOp, MaskOutline, ObjectModel, OutlineFrame, OutlineMode, RemeshSettings,
+    Representation, SceneModel, SculptLayerOp, SculptModel, Shape, ToolKind,
 };
 
 fn document() -> ClayDocument {
@@ -103,6 +103,18 @@ struct Digest {
     /// mask a command that changed nothing. The three samples are what tells a
     /// region put back from one merely the same size.
     mask: (bool, usize, Option<Vec<u32>>),
+    /// Every grid's stack of recorded passes: which layer holds it, where each
+    /// pass sits, what it is called, how far it is dialled in, whether it is
+    /// shown, and how many cells it changed.
+    ///
+    /// Here for the reason the mask is. Reordering two passes that touch no
+    /// cell in common moves no vertex — an additive stack commutes — so a
+    /// harness without this would call the reorder a command that changed
+    /// nothing and refuse to take it back. The strength is compared as bits
+    /// rather than as a float, because what a step through the history puts
+    /// back is put back exactly and `f32` carries a `PartialEq` that is not an
+    /// equality.
+    passes: Vec<(LayerKey, usize, String, u32, bool, usize)>,
 }
 
 /// The three places an operation on a mask can be told apart: the middle of
@@ -142,11 +154,30 @@ fn digest(doc: &mut ClayDocument) -> Digest {
             )
         })
         .collect();
+    let passes = doc
+        .scene()
+        .layers
+        .iter()
+        .flat_map(|layer| {
+            let key = layer.key;
+            layer.sculpt_layers.iter().map(move |pass| {
+                (
+                    key,
+                    pass.index,
+                    pass.name.clone(),
+                    pass.strength.to_bits(),
+                    pass.visible,
+                    pass.cells,
+                )
+            })
+        })
+        .collect();
     let mask = doc.mask_state();
     Digest {
         layers,
         carried: doc.visible_mesh_geometry().0,
         mask: (mask.present, mask.painted_cells, frozen_at(doc)),
+        passes,
     }
 }
 
@@ -597,4 +628,236 @@ fn clearing_an_empty_mask_costs_nothing() {
         revision,
         "the viewport was sent to re-sample a mask nothing had touched"
     );
+}
+
+// -- a grid's passes, a rebuild, and what a gesture holds ---------------------
+
+/// A grid with two recorded passes on it, each having moved the surface.
+///
+/// Through a crossing, so the passes sit on a grid with cells in it rather
+/// than on an empty one, and both are dabbed at the same place — so reordering
+/// them decides which value survives, which is the whole point of being able
+/// to reorder.
+fn grid_with_two_passes() -> ClayDocument {
+    let mut doc = document();
+    doc.convert_layer(Direction::SdfToVoxel, 0.05, 0)
+        .expect("into a grid");
+    for (pass, tool) in [
+        ("primeiro", ToolKind::Padrao),
+        ("segundo", ToolKind::Apagar),
+    ] {
+        doc.apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
+            name: pass.to_string(),
+        })
+        .expect("a pass opened");
+        let at = height_at(&doc, 0.0, 0.0).expect("the ray met the form");
+        doc.apply_stroke(
+            tool,
+            brush(),
+            &[GestureSample {
+                position: [0.0, 0.0, at],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("a dab into the pass");
+        doc.apply_sculpt_layer_op(SculptLayerOp::EndRecording)
+            .expect("the pass closed");
+    }
+    doc
+}
+
+/// Every operation on a grid's passes is one command in and one command out.
+///
+/// The engine records nothing for one — dialling a pass recomposes the grid by
+/// replaying the diffs its passes hold, and a replay is not an edit — so the
+/// way back is the document's own. Measured in the audit before this:
+/// `set_strength` was not undoable at all, the undo after it took back the
+/// stroke that came before, and strokes already taken back came up with it.
+#[test]
+fn every_grid_pass_operation_is_one_undo_and_puts_the_stack_back() {
+    let mut doc = grid_with_two_passes();
+    apply_then_undo_restores_exactly(&mut doc, "a pass dialled down", |doc| {
+        doc.apply_sculpt_layer_op(SculptLayerOp::SetStrength {
+            index: 1,
+            strength: 0.25,
+        })
+        .expect("the strength");
+    });
+    apply_then_undo_restores_exactly(&mut doc, "a pass hidden", |doc| {
+        doc.apply_sculpt_layer_op(SculptLayerOp::SetVisible {
+            index: 1,
+            visible: false,
+        })
+        .expect("the visibility");
+    });
+    apply_then_undo_restores_exactly(&mut doc, "a pass moved under the other", |doc| {
+        doc.apply_sculpt_layer_op(SculptLayerOp::Move { from: 1, to: 0 })
+            .expect("the reorder");
+    });
+}
+
+/// And it is exactly one step of the history the interface reads.
+///
+/// The count is what an undo spends. A pass operation that moved the depth by
+/// none left the next Cmd+Z spending the previous command's count on it, and
+/// one that moved it by two would be two undos for one change.
+#[test]
+fn dialling_a_pass_is_exactly_one_step_of_history() {
+    let mut doc = grid_with_two_passes();
+    let start = doc.history().depth;
+
+    doc.apply_sculpt_layer_op(SculptLayerOp::SetStrength {
+        index: 1,
+        strength: 0.5,
+    })
+    .expect("the strength");
+    assert_eq!(
+        doc.history().depth,
+        start + 1,
+        "a strength change was not one step"
+    );
+
+    doc.apply_sculpt_layer_op(SculptLayerOp::SetVisible {
+        index: 0,
+        visible: false,
+    })
+    .expect("the visibility");
+    assert_eq!(
+        doc.history().depth,
+        start + 2,
+        "hiding a pass was not one step"
+    );
+
+    // Where the next edits are filed is not an edit: nothing drawn moves, and
+    // a sculptor who opened a pass and pressed Cmd+Z means the work before it.
+    doc.apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
+        name: "terceiro".into(),
+    })
+    .expect("a pass opened");
+    doc.apply_sculpt_layer_op(SculptLayerOp::EndRecording)
+        .expect("the pass closed");
+    assert_eq!(
+        doc.history().depth,
+        start + 2,
+        "opening a recording was counted as something to take back"
+    );
+}
+
+/// A pass dialled interleaves with the engine's own entries in the order the
+/// sculptor made them.
+///
+/// The pair the ordering exists for, on this stack: a pass operation costs the
+/// engine no entry and carries a stamp of its own, so a run that alternates
+/// between the two has to come apart one command at a time and go back
+/// together the same way.
+#[test]
+fn a_pass_and_an_engine_edit_come_back_in_the_order_they_were_made() {
+    let mut doc = grid_with_two_passes();
+    let grid = doc.scene().active.expect("the grid is active");
+    let mut moments = vec![digest(&mut doc)];
+
+    doc.apply_sculpt_layer_op(SculptLayerOp::SetStrength {
+        index: 1,
+        strength: 0.4,
+    })
+    .expect("the strength");
+    moments.push(digest(&mut doc));
+
+    doc.add_layer("Depois", Representation::Sdf)
+        .expect("another subtool");
+    moments.push(digest(&mut doc));
+
+    // Back onto the grid, because adding a subtool selects the one it made and
+    // a pass is addressed on whichever layer is active.
+    doc.set_active_layer(grid).expect("the grid again");
+    doc.apply_sculpt_layer_op(SculptLayerOp::SetVisible {
+        index: 0,
+        visible: false,
+    })
+    .expect("the visibility");
+    moments.push(digest(&mut doc));
+
+    for expected in moments.iter().rev().skip(1) {
+        assert!(
+            doc.undo().expect("undo"),
+            "the run ran out of history early"
+        );
+        assert_eq!(
+            digest(&mut doc),
+            *expected,
+            "an undo landed somewhere other than the moment before the command \
+             it was meant for"
+        );
+    }
+
+    for expected in moments.iter().skip(1) {
+        assert!(doc.redo().expect("redo"), "the run ran out of redo early");
+        assert_eq!(
+            digest(&mut doc),
+            *expected,
+            "a redo landed somewhere other than the moment after the command it \
+             was meant for"
+        );
+    }
+}
+
+/// Rebuilding a mesh layer's topology is one command in and one command out.
+///
+/// The engine records the rebuild as a single entry — capture, rebuild,
+/// validate, replace, record — so the defect was never here: it was that
+/// nothing above banked that entry, and the undo after a rebuild reached past
+/// it and removed two subtools the rebuild had never touched. Held at the
+/// document because this is where the count the banking reads comes from.
+#[test]
+fn a_rebuild_is_one_undo_and_leaves_the_mesh_it_replaced() {
+    let mut doc = mesh_subtool();
+    let key = doc.scene().active.expect("an active subtool");
+    apply_then_undo_restores_exactly(&mut doc, "a rebuild", |doc| {
+        doc.remesh_layer(
+            key,
+            RemeshSettings {
+                // Coarser than the default, so the rebuild visibly replaces
+                // the topology rather than landing back on it.
+                resolution: 48,
+                ..RemeshSettings::default()
+            },
+        )
+        .expect("the rebuild");
+    });
+}
+
+/// A rebuild is refused while a gesture is open, and changes nothing.
+///
+/// An open gesture holds an adjacency, a BVH and a `MeshDeltas` over the very
+/// triangles a rebuild replaces. Accepted mid-stroke, the rebuild landed and
+/// `clay_mesh_sculptor_flush_normals` and `clay_mesh_deltas_revert` then failed
+/// against geometry that no longer existed — leaving a band the gesture had
+/// drawn that survived every undo afterwards.
+#[test]
+fn a_rebuild_during_a_gesture_is_refused_and_changes_nothing() {
+    let mut doc = mesh_subtool();
+    let key = doc.scene().active.expect("an active subtool");
+
+    SculptModel::begin_gesture(&mut doc);
+    dab_on_the_mesh(&mut doc, 0.0, 0.0);
+    let mid_gesture = digest(&mut doc);
+
+    let refused = doc.remesh_layer(key, RemeshSettings::default());
+    assert!(
+        refused.is_err(),
+        "a rebuild was accepted over the triangles an open gesture is holding"
+    );
+    assert_eq!(
+        digest(&mut doc),
+        mid_gesture,
+        "a refused rebuild changed the document"
+    );
+
+    // And it goes through once the stroke is finished, so what the refusal
+    // gates is the gesture rather than the layer.
+    SculptModel::end_gesture(&mut doc);
+    doc.remesh_layer(key, RemeshSettings::default())
+        .expect("a rebuild after the stroke");
 }

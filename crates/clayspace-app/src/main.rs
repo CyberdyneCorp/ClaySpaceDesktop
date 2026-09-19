@@ -1424,20 +1424,30 @@ impl App {
 
     /// Acts on a recorded pass of the active voxel layer.
     ///
-    /// Not routed through the edit path, and not because it is cheap: a pass is
-    /// not undo. Dialling one is a property of the stack that stays adjustable
-    /// long after the strokes are finished, and filing it as an undo entry
-    /// would mean a sculptor's next undo took back a slider rather than the
-    /// work.
+    /// Through the scene ViewModel rather than at the document directly, as
+    /// the hierarchy's own stack is and for the same two reasons. The refusal
+    /// is half the operation — a second `begin_recording` over an open one, a
+    /// merge with nothing beneath it — and it used to be printed and nothing
+    /// else, so the agent that asked was told a pass had been opened. And the
+    /// ViewModel banks what the operation cost.
+    ///
+    /// **A pass dialled is one thing to take back.** This file used to say the
+    /// opposite — that a pass is a slider rather than an undo entry — and the
+    /// sculptor's experience was the argument against it: dialling a pass
+    /// visibly moves the surface, and an operation that moves the surface and
+    /// banks nothing leaves the next Cmd+Z spending the previous command's
+    /// count. Measured in the audit: `set_strength` was not undoable at all
+    /// and brought back strokes that had already been taken back.
     fn run_sculpt_layer_op(&mut self, op: clayspace_model::SculptLayerOp) {
         let changes_the_surface = op.changes_the_surface();
-        let outcome = self
-            .document
-            .with(|document| document.apply_sculpt_layer_op(op));
-        // A pass belongs to no ViewModel, so the refusal it answers with has
-        // nowhere of its own to go: a second `begin_recording` was refused,
-        // printed, and reported to the agent that asked for it as a pass that
-        // had been opened.
+        let outcome = self.scene.apply_grid_pass_op(op);
+        // Banked here rather than in `dispatch_to_models`, because a pass
+        // operation does not pass through it: the composition root has to know
+        // whether the picture moved, so it runs this one directly. Outside the
+        // branch below so that no count can be stranded by an outcome this
+        // file decided not to act on; a refused operation wrote nothing and
+        // therefore banks nothing on its own.
+        self.bank_edits();
         if self.stated(outcome).is_some() {
             self.scene.refresh();
             if changes_the_surface {
@@ -4212,7 +4222,12 @@ impl App {
         if let Some(outcome) = self.stated(outcome) {
             // Banked here because a rebuild does not pass through
             // `dispatch_to_models`: the outcome is a value the interface
-            // shows, so the composition root runs it directly.
+            // shows, so the composition root runs it directly. The engine
+            // records a rebuild as one entry and this file used to push
+            // nothing for it, so the next Cmd+Z popped the PREVIOUS command's
+            // count and spent it here: measured in the audit, the undo after a
+            // rebuild removed two subtools the rebuild had never touched, and
+            // the redo restored none of them.
             self.bank_edits();
             self.remesh_outcome = Some(outcome);
             self.document_vm.touched();

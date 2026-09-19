@@ -1565,10 +1565,18 @@ length of the gesture rather than deferred to its end — a control that appeare
 to move and then silently applied later is the worse surprise. A rename, a lock
 and a change of which pass takes the next stroke move no vertex and go through.
 
-**A pass is not undo.** Dialling one is a property of the stack that stays
-adjustable long after the strokes that filled it, so it is not an entry in the
-history: a sculptor whose next undo took back a slider rather than the work
-would have to choose between the two.
+**A hierarchy's pass is not undo.** Dialling one is a property of the stack
+that stays adjustable long after the strokes that filled it, so it is not an
+entry in the history: a sculptor whose next undo took back a slider rather than
+the work would have to choose between the two.
+
+**A grid's is**, and the two now differ on purpose. The argument above is about
+what a slider *means*; the argument against it is what a sculptor sees, and on a
+grid dialling a pass visibly moves the surface. An operation that moves the
+surface and banks nothing leaves the next Cmd+Z spending the previous command's
+count — which is what the audit measured, along with strokes already taken back
+coming up again. See *History*. The hierarchy's stack is addressed by an id
+rather than by a position and is left as it is until the same is measured of it.
 
 **A pass stroke is stamped rather than resolved.** The layered transaction the
 engine offers carries stamps and no stroke resolver, so what a resolved stroke
@@ -3936,6 +3944,36 @@ that can destroy work need a consent the file cannot supply.
   eye back with it. **Solo is not**: the entries it makes are hopped rather
   than offered — see *Showing one subtool alone* for why they have to be made
   at all.
+- **Dialling, hiding or moving a grid's recorded pass is one entry**, and the
+  engine records none of them. Composing a grid from its passes reverts the
+  ones above, applies the change and replays them, and a replay is not an edit
+  — measured on the pinned engine, a strength change and a visibility change
+  each leave the undo depth exactly where they found it. So the way back is the
+  document's own, stamped on the same sequence everything else is ordered by,
+  and it holds *both* directions: a strength is taken back by the one that was
+  there and put forward by the one that was asked for. Beginning and ending a
+  recording decide where the next edits are filed, draw nothing, and cost no
+  entry.
+- **Removing a pass and merging one down cannot be taken back**, and clay.h
+  says so before this application could: they are named there among the
+  operations that are not a step "because nothing records it", and there is no
+  snapshot of a grid's pass stack across the ABI to hold one with. They bank
+  nothing rather than appearing to, and they let go of the ways back into that
+  grid's stack — every one of those addresses a pass by its position, and a
+  merge has just renumbered them.
+- **Rebuilding a mesh layer's topology is one entry.** The engine records the
+  rebuild as one — capture, rebuild, validate, replace, record — and for a
+  while nothing above claimed it, so the next Cmd+Z popped the *previous*
+  command's count and spent it here. Measured in the audit: the depth was
+  unchanged after a rebuild, and the undo after it removed two subtools the
+  rebuild had never touched.
+- **A rebuild is refused while a gesture is open.** It replaces every vertex
+  and every index, and an open gesture holds an adjacency, a spatial index and
+  an exact record of what it has moved over those same triangles. Accepted
+  mid-stroke it left `clay_mesh_sculptor_flush_normals` and
+  `clay_mesh_deltas_revert` failing against geometry that no longer existed,
+  and a band that survived every undo. The refusal names the stroke and the
+  layer is byte-identical afterwards.
 - Renaming a layer is one entry too, and the new name is **saved**: it goes
   into the document rather than being kept beside it, so a reopened file shows
   what the layer was called and not what it was created as. A blank name is
