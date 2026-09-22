@@ -5,7 +5,9 @@ Lets a program outside the application drive the session a sculptor is already
 in — through the same commands the interface emits, over a channel that only
 this machine can reach, with the operations that can destroy work held behind a
 consent the channel itself cannot supply.
+
 ## Requirements
+
 ### Requirement: The application listens for as long as it is open
 The application SHALL run a Model Context Protocol server for the whole of its
 lifetime, started as part of opening and stopped as part of closing, so that a
@@ -171,6 +173,23 @@ outline — a tool that would change the document SHALL be refused and SHALL say
 that a gesture is in progress. Tools that only read SHALL be served during a
 gesture.
 
+While the **agent itself** is holding a gesture it opened, only the verbs that
+carry that gesture on or close it SHALL be applied. Every other tool that would
+change the document SHALL be refused, naming the open gesture. Opening a second
+gesture on top of an open one SHALL be refused on the same ground: the engine
+holds one gesture at a time.
+
+For both rules, "would change the document" SHALL be the wide question and not
+the edit history's narrower one. An operation that marks the document on a path
+of its own rather than through the ordinary edit path — a crossing, an import,
+a pass of the active layer's stack — SHALL be refused during a gesture like any
+other change.
+
+A gesture a caller opened that the application refused SHALL NOT count as a
+gesture in progress. The record of whose gesture is open states an intent
+before the command is applied, and an intent that opened nothing SHALL NOT
+stand.
+
 #### Scenario: The answer means it happened
 - **WHEN** a tool that inserts a subtool returns
 - **THEN** the subtool is in the document and visible to any other reader of
@@ -189,6 +208,20 @@ gesture.
 - **WHEN** a changing tool is called while a stroke is being drawn by hand
 - **THEN** it is refused, saying a gesture is in progress, and the stroke is
   unaffected
+
+#### Scenario: An agent may finish the stroke it opened
+- **WHEN** an agent that has begun a stroke calls continue, end or cancel
+- **THEN** each is applied, and the stroke becomes one entry in the history
+
+#### Scenario: An agent may do nothing else inside its own stroke
+- **WHEN** an agent that has begun a stroke calls a structural tool — adding a
+  layer, rebuilding one, undoing, crossing a representation
+- **THEN** it is refused naming the open gesture, and the document is unchanged
+
+#### Scenario: A refused begin does not wedge the door
+- **WHEN** an agent's stroke is refused by the application and the agent then
+  calls a changing tool
+- **THEN** the call is applied, because no gesture was ever opened
 
 ### Requirement: What can destroy work is held behind a consent the secret cannot supply
 Operations that can lose a person's work SHALL require a consent separate from
@@ -258,3 +291,62 @@ observable — rather than blocking either the interface or the answer.
 - **THEN** it can observe the operation's progress, and the interface stays
   responsive while it runs
 
+### Requirement: A refused command is answered as a refusal, never as a success
+A command the application did not carry out SHALL be answered to the client as
+an error carrying the reason, and SHALL NOT be answered with an applied result.
+In particular a command that changed nothing SHALL NOT report that it touched
+the document.
+
+This SHALL hold for every command the application can refuse, including the
+ones the composition root runs itself rather than dispatching to a ViewModel —
+a repair, a crossing, a rebuild, a pass of the active layer's stack, a
+hierarchy's levels.
+
+Writing the reason only to the process's error stream SHALL NOT count as
+answering it. A stream nobody is reading is not a surface the client can reach,
+and a refusal whose only record is one SHALL be treated as a refusal that was
+lost.
+
+#### Scenario: An operation refused for the representation is an error
+- **WHEN** a client asks for a repair on a layer the operation does not apply
+  to
+- **THEN** it is refused with the sentence naming the representation, and no
+  applied result is returned
+
+#### Scenario: A crossing priced past its budget is an error
+- **WHEN** a client asks for a conversion whose cell size prices the result
+  past the memory budget
+- **THEN** it is refused with the sentence naming the cost and the budget, and
+  the document is unchanged
+
+#### Scenario: A refused command did not touch the document
+- **WHEN** any refused command is compared against the document before it
+- **THEN** the document is unchanged, and nothing in the answer says it was
+  touched
+
+### Requirement: A refused deformation or scene-composition command is an error
+A cage, a curve, a boolean, a ZSphere rig, a cut or a reference command the
+application did not carry out SHALL be answered to the client as an error
+carrying the reason, and SHALL NOT be answered with an applied result.
+
+The reason SHALL be the sentence the interface would have shown for the same
+refusal. A refusal recorded on the panel's own channel and read by nobody SHALL
+be treated as a refusal that was lost.
+
+#### Scenario: A boolean the engine will not run is an error
+- **WHEN** a client asks for a boolean whose operands the engine refuses —
+  no pair chosen, a hierarchy offered as an operand, or a result priced past
+  the memory budget
+- **THEN** it is refused with the sentence naming why, no subtool is produced,
+  and nothing in the answer says the document was touched
+
+#### Scenario: A cage command the layer will not take is an error
+- **WHEN** a client asks to raise, drag or apply a cage on a layer that has no
+  lattice route, or asks for a cage movement the engine refuses
+- **THEN** it is refused with the sentence naming why, and the same sentence is
+  on the interface's "why that did not happen" line
+
+#### Scenario: A refused ZSphere or curve command is an error
+- **WHEN** a client asks for a rig or curve edit the model refuses
+- **THEN** it is refused with the sentence naming why, rather than being
+  reported as an edit that happened

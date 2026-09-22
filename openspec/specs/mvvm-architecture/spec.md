@@ -5,7 +5,9 @@ The layering the workspace is built on — Model, ViewModel, View — the single
 command path every mutation flows through, and the edges that keep the engine
 out of the View, the interface out of the ViewModel, and the wiring in one
 composition root.
+
 ## Requirements
+
 ### Requirement: The workspace is layered Model, ViewModel, View
 The application SHALL be organized into crates with a strict dependency direction: `clayspace-model` (the domain) ← `clayspace-vm` (ViewModels) ← `clayspace-view` (interface and rendering) ← `clayspace-app` (composition root). No crate SHALL depend on a crate later in that order.
 
@@ -123,3 +125,95 @@ Each ViewModel SHALL expose a change signal that lets the interface redraw only 
 - **WHEN** a ViewModel is constructed in a test
 - **THEN** it accepts a Model interface as a parameter, allowing a test double to be supplied in place of the engine-backed implementation
 
+### Requirement: An operation the composition root runs states its refusal where the interface reads it
+A few operations are run by the composition root rather than dispatched to a
+ViewModel, because each carries an answer back rather than a `Result<(), _>`.
+Every one of them SHALL write its refusal to an observable channel the
+interface draws and the agent door counts, on the same terms as a ViewModel's
+own refusal: announced rather than set, so that the same impossible request
+asked twice is two refusals and not one, while the words on screen do not
+redraw for a repeat.
+
+The refusal SHALL be cleared by the next operation that works, so the line
+belongs to the last thing that was asked rather than to the last thing that
+failed.
+
+No operation's outcome SHALL be discarded — by `.is_ok()`, by an ignored
+`Result`, or by a branch that neither acts nor states.
+
+#### Scenario: A refused operation says why on screen
+- **WHEN** an operation the composition root runs is refused
+- **THEN** the reason appears on the interface's one "why that did not happen"
+  line, in the words the operation was refused with
+
+#### Scenario: The same refusal twice is two refusals
+- **WHEN** the same impossible operation is asked for twice in a row
+- **THEN** each attempt is counted as its own refusal, and the line on screen
+  is not redrawn for the second
+
+#### Scenario: A refusal does not outlive what it was about
+- **WHEN** a refused operation is followed by one that works
+- **THEN** the reason is taken down
+
+### Requirement: Every notice channel a ViewModel owns is one the shell reads
+A ViewModel that can refuse SHALL carry its refusal on an observable channel,
+and the composition root SHALL read every such channel: both to draw it on the
+interface's one "why that did not happen" line and to compare it either side of
+a command for the agent door.
+
+The channels SHALL be named in one list rather than in each reader. A reader
+that samples a channel's count before a command and reads its words afterwards
+SHALL take both from that one list, so a channel present in one reading and
+absent from the other is not expressible.
+
+Registering a channel SHALL NOT be a matter of review. Adding a ViewModel that
+owns a notice channel without adding it to the list SHALL fail an automated
+check that names the channel.
+
+Writing a refusal to the process's error stream SHALL NOT stand in for either
+reader.
+
+#### Scenario: A panel's refusal reaches both readers
+- **WHEN** a cage, a curve, a boolean or a rig command is refused
+- **THEN** the reason appears on the interface's one "why that did not happen"
+  line, and the command is answered to the client as a refusal carrying the
+  same reason
+
+#### Scenario: A ViewModel added without registering its channel fails a check
+- **WHEN** a ViewModel the composition root holds owns a notice channel that no
+  reader is named against
+- **THEN** an automated check fails, naming the channel that is written and
+  never read
+
+#### Scenario: A refusal on any channel is the command's answer
+- **WHEN** a command is refused on a channel other than the first
+- **THEN** it is still answered as a refusal, with the sentence that channel
+  was written
+
+### Requirement: One command reaches every ViewModel against one document state
+A command SHALL be dispatched to the ViewModels in an order that lets each of
+them read a document the command has already reached. Where one ViewModel
+changes document state that others read while handling the same command, that
+ViewModel SHALL be dispatched to first.
+
+The active layer is the case this exists for: the scene ViewModel is the only
+one that moves it, and the sculpting, mask, cage and manipulator ViewModels all
+read it while handling the same command. Dispatched after any of them, a
+selection leaves each follower set up for the layer that was left, and the
+*next* command is the first to see a consistent document — an error that is
+always exactly one command behind and therefore reads as a defect in whatever
+was done next.
+
+Where the composition root moves the active layer without a command passing
+through the ViewModels — a conversion, opening a document, starting a rig — it
+SHALL tell the ViewModels that read the active layer to catch up, by name.
+
+#### Scenario: A follower reads the layer the command selected
+- **WHEN** a layer-selection command is dispatched
+- **THEN** every ViewModel that reads the active layer while handling it reads
+  the newly selected layer, not the previous one
+
+#### Scenario: The order is a property of the composition root
+- **WHEN** the composition root's dispatch is inspected
+- **THEN** the ViewModel that moves the active layer is dispatched to before
+  every ViewModel that reads it
