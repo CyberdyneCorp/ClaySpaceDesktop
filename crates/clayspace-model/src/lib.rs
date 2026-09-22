@@ -22,6 +22,7 @@ pub mod detail;
 pub mod diagnostics;
 pub mod document;
 pub mod exchange;
+pub mod field;
 pub mod gizmo;
 pub mod instrument;
 pub mod lattice;
@@ -63,6 +64,7 @@ pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
     WrittenMesh,
 };
+pub use field::{Clamped, FieldBudget, FieldRefusal};
 pub use gizmo::{
     drag_plane, perpendicular_frame, ray_hits_segment, ray_hits_sphere, ring_samples, snapped,
     GizmoDrag, GizmoHandle, GizmoMode, Transform, SNAP_DEGREES,

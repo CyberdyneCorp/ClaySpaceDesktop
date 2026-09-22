@@ -610,6 +610,33 @@ fn a_size_out_of_range_is_brought_back_in() {
     );
 }
 
+/// A size brought back in is said, and said as a remark.
+///
+/// The panel used to answer a different number than it was handed and account
+/// for it nowhere, so a sculptor who asked for 400 read 4.08 off the control
+/// with nothing to say where the figure came from. A remark and not a notice:
+/// the size was taken, so a door that read this as a refusal would report a
+/// change that happened as one that did not.
+#[test]
+fn a_clamped_size_is_reported_as_a_remark() {
+    let (mut vm, _) = viewmodel();
+    send(&mut vm, Command::SetShape(Shape::Sphere));
+    send(&mut vm, Command::SetShapeParameters(vec![400.0]));
+
+    let said = vm.remark().get().clone().expect("the clamp said nothing");
+    let used = vm.parameters().get()[0];
+    assert!(said.contains("radius"), "the remark said {said:?}");
+    assert!(
+        said.contains(&used.to_string()),
+        "the remark {said:?} does not name the {used} it used"
+    );
+    assert!(vm.notice().get().is_none(), "a clamp is not a refusal");
+
+    // A size the field can hold is not an event, and takes the remark down.
+    send(&mut vm, Command::SetShapeParameters(vec![0.5]));
+    assert!(vm.remark().get().is_none());
+}
+
 #[test]
 fn placing_on_a_grid_says_why_it_cannot() {
     let (mut vm, calls) = viewmodel();

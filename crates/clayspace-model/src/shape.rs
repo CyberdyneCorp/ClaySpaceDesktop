@@ -78,13 +78,51 @@ impl ShapeParameter {
         }
         value.clamp(self.min, self.max)
     }
+
+    /// The same clamp, saying what it did.
+    ///
+    /// Beside [`ShapeParameter::clamp`] rather than replacing it, because most
+    /// callers have nowhere to put the answer: a saved document being read
+    /// back is not a sculptor asking for something, and a panel redrawing
+    /// itself is not either. The callers that *are* a sculptor asking — the
+    /// picker's controls, an agent's `shape/set_parameters` — owe them a word,
+    /// and this is what they say it with.
+    pub fn clamp_reported(&self, value: f32) -> crate::Clamped {
+        crate::Clamped {
+            key: self.key,
+            asked: value,
+            used: self.clamp(value),
+        }
+    }
 }
 
 /// A size that reads as nothing rather than as small.
 const SMALLEST: f32 = 0.005;
-/// Room to place something large beside the reference form without inviting a
-/// shape whose influence bound covers the document.
-const LARGEST: f32 = 10.0;
+/// The largest half-extent the field can hold a form of.
+///
+/// **This used to be 10.0, and 10.0 stood for nothing.** The comment beside it
+/// said "room to place something large beside the reference form without
+/// inviting a shape whose influence bound covers the document", which is the
+/// right intention measured against nothing at all: a sphere at radius 4 was
+/// inside it and added four and a half million triangles in one insert, and
+/// the session that did it never recovered.
+///
+/// So it is derived. 4.08 is fifty-one bricks across — as far as the cube root
+/// of the 134217 bricks a 512 MB cache fills at ten samples a side will reach
+/// — times the 0.16 world units one brick spans, halved because every
+/// parameter this application offers is a half-extent or a radius. A single
+/// form at this bound fills the cache, which is what "as large as the document
+/// can hold" means.
+///
+/// A constant rather than a call, because [`ShapeParameter`] is const and
+/// [`Shape::parameters`] hands back a `'static` slice. The arithmetic is held
+/// against [`crate::FieldBudget::DEFAULT`] by
+/// `a_shape_parameter_is_bounded_by_the_layer`, so the two cannot drift.
+///
+/// It bounds one number and not the form. A torus with both radii at the bound
+/// reaches four times this, which is why the *placement* is priced as well —
+/// see `ClayDocument::afford_region`.
+const LARGEST: f32 = 4.08;
 
 // Named rather than written inline, because `&[ShapeParameter::new(..)]` is a
 // reference to a temporary: a const fn call is not promoted to `'static`, and
@@ -253,6 +291,31 @@ impl Shape {
             .enumerate()
             .map(|(at, parameter)| parameter.clamp(*values.get(at).unwrap_or(&parameter.default)))
             .collect()
+    }
+
+    /// The same numbers, and every one of them that had to move to get inside
+    /// the bounds.
+    ///
+    /// Only the ones the caller actually supplied are reported. A short list
+    /// filled out from the defaults is a document written by another version
+    /// of this application, not a sculptor asking for a size — telling them
+    /// their torus was clamped to a minor radius they never typed would be a
+    /// sentence about nothing.
+    pub fn sanitised_reported(self, values: &[f32]) -> (Vec<f32>, Vec<crate::Clamped>) {
+        let mut sanitised = Vec::with_capacity(self.parameters().len());
+        let mut clamped = Vec::new();
+        for (at, parameter) in self.parameters().iter().enumerate() {
+            let Some(asked) = values.get(at) else {
+                sanitised.push(parameter.default);
+                continue;
+            };
+            let report = parameter.clamp_reported(*asked);
+            sanitised.push(report.used);
+            if report.moved() {
+                clamped.push(report);
+            }
+        }
+        (sanitised, clamped)
     }
 }
 
@@ -989,5 +1052,54 @@ mod tests {
         for value in Shape::Box.sanitised(&[f32::NAN; 3]) {
             assert!(value.is_finite(), "a NaN reached the parameter block");
         }
+    }
+
+    /// The upper bound is the field's and not a number somebody liked.
+    ///
+    /// Held against [`crate::FieldBudget::DEFAULT`] rather than restated,
+    /// because `LARGEST` has to be a constant and a constant cannot take a
+    /// cube root. Re-tuning the cache and leaving this behind is what this
+    /// catches, and what the fixed 10.0 it replaced could never have caught:
+    /// 10.0 was twice what the cache could hold, so the largest form the
+    /// picker offered was one the document could not carry.
+    #[test]
+    fn a_shape_parameter_is_bounded_by_the_layer() {
+        let bound = crate::FieldBudget::DEFAULT.largest_half_extent();
+        assert!(
+            (LARGEST - bound).abs() < 1e-3,
+            "the parameter bound is {LARGEST}, the field holds {bound}"
+        );
+        for shape in Shape::ALL {
+            for parameter in shape.parameters() {
+                assert!(
+                    parameter.max <= bound,
+                    "{shape:?}'s {} reaches {}, past the {bound} the field holds",
+                    parameter.key,
+                    parameter.max
+                );
+            }
+        }
+    }
+
+    /// A control that answers a different number than it was handed says so.
+    #[test]
+    fn a_clamped_parameter_is_reported() {
+        let (used, clamped) = Shape::Sphere.sanitised_reported(&[400.0]);
+        assert_eq!(used, vec![RADIUS.max]);
+        assert_eq!(clamped.len(), 1, "the clamp was not reported");
+        assert_eq!(clamped[0].key, "radius");
+        assert_eq!(clamped[0].asked, 400.0);
+        assert_eq!(clamped[0].used, RADIUS.max);
+
+        // A number already inside the bounds is not an event.
+        let (used, clamped) = Shape::Sphere.sanitised_reported(&[0.5]);
+        assert_eq!(used, vec![0.5]);
+        assert!(clamped.is_empty());
+
+        // Nor is a number the caller never supplied: a short list is another
+        // version's document, not a sculptor asking for a size.
+        let (used, clamped) = Shape::Box.sanitised_reported(&[1.0]);
+        assert_eq!(used, vec![1.0, HALF_Y.default, HALF_Z.default]);
+        assert!(clamped.is_empty());
     }
 }
