@@ -54,7 +54,7 @@ impl Sculpting {
     /// root banks them. See `App::bank_scene_actions`.
     fn bank(&mut self) {
         for entries in self.scene.take_unbanked_actions() {
-            self.sculpt.record_external_action(entries);
+            self.sculpt.record_external_action("grid pass", entries);
         }
     }
 
@@ -128,7 +128,7 @@ impl Sculpting {
             .with(|d| d.convert_layer(direction, 0.05, 0))
             .expect("the crossing");
         let spent = self.document.with(|d| SceneModel::history_depth(d)) - before;
-        self.sculpt.record_external_action(spent);
+        self.sculpt.record_external_action("convert", spent);
         self.scene.refresh();
     }
 
@@ -223,7 +223,7 @@ fn a_rebuild_is_one_step_and_one_undo_leaves_the_subtools_standing() {
     app.document
         .with(|d| d.add_layer("Segunda", Representation::Sdf))
         .expect("a second subtool");
-    app.sculpt.record_external_action(1);
+    app.sculpt.record_external_action("add subtool", 1);
     app.scene.refresh();
     // Back onto the form, because adding a subtool selects the empty one it
     // made and a crossing reads whichever layer is active.

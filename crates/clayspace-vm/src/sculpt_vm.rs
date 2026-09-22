@@ -51,6 +51,22 @@ pub struct LastAction {
     pub changed: bool,
 }
 
+/// One thing a sculptor did, and what it cost the document's history.
+///
+/// The label is carried beside the count rather than derived from it because
+/// the only other place a name for it existed was [`LastAction`], which names
+/// the *previous* thing that happened and is overwritten by the undo itself.
+/// Reading it as "what the next undo would take back" is how a session that
+/// had just undone a clay stroke reported that its next undo would undo an
+/// "undo" — see `SculptViewModel::next_undo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BankedAction {
+    /// In the words the interface uses for it, which is what a person reads
+    /// off the history panel and what an agent is told it is about to revert.
+    label: String,
+    entries: usize,
+}
+
 /// Everything the sculpting interface reads.
 pub struct SculptViewModel {
     model: Box<dyn SculptModel>,
@@ -113,8 +129,8 @@ pub struct SculptViewModel {
 
     stroke: Option<ActiveStroke>,
 
-    /// How many model-level entries each user-visible action produced, newest
-    /// last.
+    /// What each user-visible action was, and how many model-level entries it
+    /// produced, newest last.
     ///
     /// A live stroke reaches the document as several calls so the clay moves
     /// under the pointer, and each is its own entry in the document's history.
@@ -123,9 +139,9 @@ pub struct SculptViewModel {
     /// engine's own undo grouping does not collapse them (measured: three
     /// grouped strokes left seven entries, and undoing twice reverted none),
     /// so the count is kept here and `Undo` spends it all at once.
-    undo_stack: Vec<usize>,
-    /// The same counts for actions that have been undone.
-    redo_stack: Vec<usize>,
+    undo_stack: Vec<BankedAction>,
+    /// The same, for actions that have been undone.
+    redo_stack: Vec<BankedAction>,
     /// Where the model's history stood when the gesture in progress opened.
     ///
     /// What a gesture cost is the distance from this line to where the history
@@ -263,6 +279,23 @@ impl SculptViewModel {
 
     pub fn last_action(&self) -> &Observable<LastAction> {
         &self.last_action
+    }
+
+    /// What the next undo would take back, in the words the interface uses.
+    ///
+    /// The question a caller about to press Cmd+Z is actually asking, and not
+    /// the one [`Self::last_action`] answers: that names the last thing that
+    /// *happened*, which after an undo is the undo. A status area can live
+    /// with the difference because a person watched the undo happen; an agent
+    /// reading state cannot, and read "undo" as the name of the edit it was
+    /// about to revert.
+    pub fn next_undo(&self) -> Option<&str> {
+        self.undo_stack.last().map(|action| action.label.as_str())
+    }
+
+    /// What the next redo would put back. The mirror of [`Self::next_undo`].
+    pub fn next_redo(&self) -> Option<&str> {
+        self.redo_stack.last().map(|action| action.label.as_str())
     }
 
     pub fn pending_remesh(&self) -> &Observable<usize> {
@@ -1109,11 +1142,14 @@ impl SculptViewModel {
     ///
     /// Clears the redo stack for the same reason any new action does: history
     /// branched, and the old forward path is no longer reachable.
-    pub fn record_external_action(&mut self, entries: usize) {
+    pub fn record_external_action(&mut self, label: impl Into<String>, entries: usize) {
         if entries == 0 {
             return;
         }
-        self.undo_stack.push(entries);
+        self.undo_stack.push(BankedAction {
+            label: label.into(),
+            entries,
+        });
         self.redo_stack.clear();
         self.publish_history();
     }
@@ -1136,7 +1172,17 @@ impl SculptViewModel {
         };
         let entries = self.model.history().depth.saturating_sub(floor);
         if entries > 0 {
-            self.undo_stack.push(entries);
+            // The tool that made it, as the last segment named it. `record`
+            // writes that name on every segment, so by the time a gesture
+            // closes it is the tool the clay actually moved under — which is
+            // not always the tool on the shelf, since a layer can substitute
+            // one. The shelf's own name is the fallback for a gesture that
+            // banked entries without any segment reaching `record`.
+            let label = match self.last_action.get().label.as_str() {
+                "" => self.tool.get().label().to_string(),
+                named => named.to_string(),
+            };
+            self.undo_stack.push(BankedAction { label, entries });
             self.publish_history();
         }
     }
@@ -1179,7 +1225,7 @@ impl SculptViewModel {
 
     /// Reverts the whole of the last action, however many entries it took.
     fn undo_action(&mut self) -> Result<(), ModelError> {
-        let Some(entries) = self.undo_stack.pop() else {
+        let Some(action) = self.undo_stack.pop() else {
             self.last_action.set(LastAction {
                 tool: None,
                 label: "undo".to_string(),
@@ -1188,14 +1234,19 @@ impl SculptViewModel {
             return Ok(());
         };
         let mut reverted = 0;
-        for _ in 0..entries {
+        for _ in 0..action.entries {
             if !self.model.undo()? {
                 break;
             }
             reverted += 1;
         }
         if reverted > 0 {
-            self.redo_stack.push(reverted);
+            // The name travels with the count, so a redo can say what it would
+            // put back rather than answering "redo".
+            self.redo_stack.push(BankedAction {
+                label: action.label,
+                entries: reverted,
+            });
         }
         self.after_history_change("undo", reverted > 0);
         Ok(())
@@ -1203,7 +1254,7 @@ impl SculptViewModel {
 
     /// Reapplies the whole of the last undone action.
     fn redo_action(&mut self) -> Result<(), ModelError> {
-        let Some(entries) = self.redo_stack.pop() else {
+        let Some(action) = self.redo_stack.pop() else {
             self.last_action.set(LastAction {
                 tool: None,
                 label: "redo".to_string(),
@@ -1212,14 +1263,17 @@ impl SculptViewModel {
             return Ok(());
         };
         let mut redone = 0;
-        for _ in 0..entries {
+        for _ in 0..action.entries {
             if !self.model.redo()? {
                 break;
             }
             redone += 1;
         }
         if redone > 0 {
-            self.undo_stack.push(redone);
+            self.undo_stack.push(BankedAction {
+                label: action.label,
+                entries: redone,
+            });
         }
         self.after_history_change("redo", redone > 0);
         Ok(())

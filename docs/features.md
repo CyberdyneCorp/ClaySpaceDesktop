@@ -3983,11 +3983,39 @@ already made.
 
 ### What it can measure
 
-`state` reads the document, the scene tree, the active tool, the camera, the
-history, the mask, running jobs, the memory ledger by the part of the document
-that holds it, the frame timings, the stalls, the active backend and every
-operation that fell back to another. Reading marks nothing changed, so an agent
-polling the session is never the reason an idle application stops sleeping.
+`state` reads the document, the scene tree, the active tool, the whole brush
+panel beside it, how a stroke and a placed form each combine with what is under
+them, the camera, the history, the mask, the cage, the deform settings, the
+forms a sculptor has placed with the node ids that name them, what the last
+rebuild, retopology and crossing came to, how the viewport is presented, the
+reference images, the import and export settings, running jobs, the memory
+ledger by the part of the document that holds it, the frame timings, the
+stalls, the active backend and every operation that fell back to another.
+Reading marks nothing changed, so an agent polling the session is never the
+reason an idle application stops sleeping.
+
+**Twenty sections, and the list is written once.** An agent can ask for the
+ones it wants by name; the names the reader knows, the names a refusal offers
+and the names the tool surface advertises all come from the same list, so a
+section cannot be advertised and then refused. Verification used to fall back
+to comparing screenshots because `state` reported what the ViewModels happened
+to publish as each feature landed: a stroke's flow, a mask's step count, a
+standing cage and the last rebuild's piece count were all things a command
+could change and nothing could read back. Twice in the audit, state the report
+did not expose corrupted a test without the tester noticing.
+
+Two figures that were reported as one are now named apart. The status area
+shows the brick cache and the ledger shows the whole document with its
+surfaces; they count different things, and an agent comparing 0.00 GB against
+359 MB without being told which is which reads the difference as a defect.
+Making one figure of them, with host-owned memory in it, is separate work.
+
+`scene.layers[].objects` counts the forms placed in the layer, on every
+representation. It used to be the length of the grid's recorded pass stack —
+so a field layer holding a dozen shapes reported none, and a grid reported its
+passes under a name that says objects. The passes are beside it under their own
+name, with the grid's cell size and occupied cells, and a hierarchy carries its
+levels, its write domain and its passes the same way.
 
 `measure` runs one action with the clock around it and reports the wall time,
 whether a frame stalled, and the conditions. It always says it is a live figure
@@ -4031,6 +4059,16 @@ that can destroy work need a consent the file cannot supply.
   command never touched.
 - **A new edit ends the redo line**, on this side as well as the engine's. A
   stroke taken back and then built over is not put back by a later redo.
+- **The history says what the next step would take, in both directions.** Each
+  banked action carries its own name — the tool that made the stroke, or the
+  command's own label where another part of the application banked it — and the
+  name travels with the count as an undo moves it onto the redo stack and back.
+  What an agent reads is therefore the *next* step rather than the last thing
+  that happened, and the two differ exactly where it matters: after an undo the
+  last thing that happened is the undo, and after a cancelled gesture it is the
+  tool whose work the cancel had already taken back. Both were reported as what
+  the next undo would revert. A redo depth sits beside the undo depth, so an
+  agent that took four things back can tell how many redoes put them.
 - A stroke of any length is **one** history entry, mirrored halves included.
   What the gesture cost is *measured* — the document's history depth at the
   press against its depth at the release — rather than counted from the
