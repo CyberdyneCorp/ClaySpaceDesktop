@@ -678,6 +678,20 @@ pub trait ObjectModel {
         Vec::new()
     }
 
+    /// Whether a subtool can be chosen as a boolean operand at all.
+    ///
+    /// Asked when the panel is *set*, not only when it is run, so a pair that
+    /// can only be refused is refused while the sculptor is still choosing it —
+    /// the audit's hierarchy was accepted by the panel, priced, and refused a
+    /// minute later by a run that said nothing. What is answered here is what
+    /// the operand *is*: gone, empty, or a hierarchy. Protection is left to the
+    /// run, because it is a flag the sculptor may lift between choosing and
+    /// confirming, and a run re-checks every one of these anyway.
+    fn admit_boolean_operand(&mut self, operand: crate::LayerKey) -> Result<(), crate::ModelError> {
+        let _ = operand;
+        Ok(())
+    }
+
     /// The resolution a boolean between these two would default to.
     ///
     /// From the operands' own detail rather than a fixed constant, as the

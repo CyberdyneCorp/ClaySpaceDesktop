@@ -164,6 +164,17 @@ impl BooleanSettings {
 pub enum BooleanRefusal {
     /// One of the two carries nothing to sample.
     Empty { operand: String },
+    /// One of the two holds strokes but no form of its own.
+    ///
+    /// Distinct from [`Self::Empty`] because the sculptor can see work in it:
+    /// a relief or incise stroke offsets a surface rather than making one, so a
+    /// field layer holding only those has an extent — every stroke has a box —
+    /// and nothing at all once it is sampled alone. Told it was "empty", the
+    /// sculptor who drew on it would reasonably disbelieve the refusal.
+    Formless { operand: String },
+    /// One of the two is a subdivision hierarchy, whose layer holds the cage
+    /// rather than the form the sculptor sees.
+    Hierarchy { operand: String },
     /// One of the two is ghosted or locked.
     Protected { operand: String, ghost: bool },
     /// An intersection of two forms that do not meet, which is nothing.
@@ -180,6 +191,16 @@ impl std::fmt::Display for BooleanRefusal {
             Self::Empty { operand } => write!(
                 f,
                 "o subtool «{operand}» está vazio, então não há o que combinar"
+            ),
+            Self::Formless { operand } => write!(
+                f,
+                "o subtool «{operand}» não tem forma própria: os traços nele só \
+                 deslocam uma superfície, e sozinho ele não deixa nada"
+            ),
+            Self::Hierarchy { operand } => write!(
+                f,
+                "o subtool «{operand}» é uma hierarquia de subdivisão e não entra \
+                 numa booleana; converta um nível para malha primeiro"
             ),
             Self::Protected { operand, ghost } => write!(
                 f,
@@ -284,6 +305,15 @@ mod tests {
             operand: "Cilindro".into(),
         };
         assert!(empty.to_string().contains("Cilindro"));
+        let formless = BooleanRefusal::Formless {
+            operand: "Relevo".into(),
+        };
+        assert!(formless.to_string().contains("Relevo"));
+        let hierarchy = BooleanRefusal::Hierarchy {
+            operand: "Cabeça".into(),
+        };
+        assert!(hierarchy.to_string().contains("Cabeça"));
+        assert!(hierarchy.to_string().contains("hierarquia"));
         let ghosted = BooleanRefusal::Protected {
             operand: "Esfera".into(),
             ghost: true,
