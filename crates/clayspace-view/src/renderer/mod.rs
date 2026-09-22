@@ -200,7 +200,9 @@ struct MaterialUniform {
 /// Geometry living on the GPU.
 ///
 /// Buffers grow when the geometry outgrows them and are kept when it shrinks,
-/// so a sculpting session does not reallocate on every dab.
+/// so a sculpting session does not reallocate on every dab — including when a
+/// layout is taken afresh, which asks for the same figures it asked for last
+/// time on any settle that did not grow the surface.
 pub struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -210,17 +212,100 @@ pub struct GpuMesh {
     bounds: Option<(Vec3, Vec3)>,
 }
 
-fn write_mapped_buffer(gpu: &Gpu, buffer: &wgpu::Buffer, bytes: u64, fill: impl FnOnce(&mut [u8])) {
+fn write_mapped_buffer(
+    gpu: &Gpu,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    bytes: u64,
+    fill: impl FnOnce(&mut [u8]),
+) {
     let Some(size) = wgpu::BufferSize::new(bytes) else {
         return;
     };
     let mut staging = gpu
         .queue
-        .write_buffer_with(buffer, 0, size)
+        .write_buffer_with(buffer, offset, size)
         .expect("allocate upload staging buffer");
     fill(&mut staging);
     drop(staging);
     gpu.note_upload(bytes);
+}
+
+/// Writes runs into one buffer, merging the ones that abut.
+///
+/// Each `Queue::write_buffer` takes a staging buffer of its own, which the
+/// device holds until the submission that consumed it has completed. A settle
+/// touching forty keys therefore costs forty of them per buffer, and it is
+/// that count rather than the bytes that a long session's footprint follows.
+/// Runs whose destinations are adjacent carry the same bytes in one staging
+/// allocation instead.
+///
+/// `runs` is sorted in place, because a caller that walked a hash map has no
+/// order to offer and the merge needs one. Runs must not overlap, which the
+/// slot layout already guarantees: every key owns its span.
+fn patch_runs<T: bytemuck::Pod>(gpu: &Gpu, buffer: &wgpu::Buffer, runs: &mut [(u32, &[T])]) {
+    let stride = std::mem::size_of::<T>();
+    runs.sort_unstable_by_key(|(first, _)| *first);
+    let mut start = 0;
+    while start < runs.len() {
+        // How far the run beginning at `start` reaches before a gap.
+        let mut end = start + 1;
+        let mut count = runs[start].1.len();
+        while end < runs.len() && runs[end].0 as usize == runs[start].0 as usize + count {
+            count += runs[end].1.len();
+            end += 1;
+        }
+        let offset = (runs[start].0 as usize * stride) as u64;
+        let bytes = (count * stride) as u64;
+        if end - start == 1 {
+            // One run is what `write_buffer` already does well; going through
+            // mapped staging for it would only add a copy.
+            if bytes > 0 {
+                gpu.queue
+                    .write_buffer(buffer, offset, bytemuck::cast_slice(runs[start].1));
+                gpu.note_upload(bytes);
+            }
+        } else {
+            write_mapped_buffer(gpu, buffer, offset, bytes, |into| {
+                let mut at = 0;
+                for (_, data) in &runs[start..end] {
+                    let source: &[u8] = bytemuck::cast_slice(data);
+                    into[at..at + source.len()].copy_from_slice(source);
+                    at += source.len();
+                }
+            });
+        }
+        start = end;
+    }
+}
+
+/// Creates a buffer for mesh geometry, and says so.
+///
+/// Every mesh allocation goes through here so the counter behind
+/// [`Gpu::note_allocation`] is the whole truth about them.
+fn mesh_buffer(gpu: &Gpu, label: &str, bytes: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    gpu.note_allocation();
+    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: bytes.max(4),
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// How large to make a buffer that must hold `required` items of `stride`
+/// bytes and holds `current` now.
+///
+/// Geometric where the device will take it, exact where it will not: growing
+/// past the ceiling to leave room for geometry that has not arrived would
+/// refuse an upload that fits.
+fn grow_within(gpu: &Gpu, current: usize, required: usize, stride: usize) -> usize {
+    let wanted = grown(current, required);
+    if (wanted as u64).saturating_mul(stride as u64) <= gpu.max_buffer_size() {
+        wanted
+    } else {
+        required
+    }
 }
 
 impl GpuMesh {
@@ -259,39 +344,7 @@ impl GpuMesh {
             );
             return;
         }
-        if vertices.len() > self.vertex_capacity {
-            let wanted = grown(self.vertex_capacity, vertices.len());
-            // Only if the device will hold the grown figure. Growing past the
-            // ceiling to leave room for a mesh that has not arrived would
-            // refuse an upload that fits.
-            let capacity = if Self::fits(gpu, wanted, 0) {
-                wanted
-            } else {
-                vertices.len()
-            };
-            self.vertices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("vertices"),
-                size: (capacity * Vertex::STRIDE) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.vertex_capacity = capacity;
-        }
-        if indices.len() > self.index_capacity {
-            let wanted = grown(self.index_capacity, indices.len());
-            let capacity = if Self::fits(gpu, 0, wanted) {
-                wanted
-            } else {
-                indices.len()
-            };
-            self.indices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("indices"),
-                size: (capacity * 4) as u64,
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.index_capacity = capacity;
-        }
+        self.grow_to(gpu, vertices.len(), indices.len());
 
         if !vertices.is_empty() {
             gpu.queue
@@ -307,34 +360,59 @@ impl GpuMesh {
         self.set_bounds(Vertex::bounds(vertices));
     }
 
-    /// Allocates buffers of a fixed size without writing anything.
+    /// Grows either buffer that cannot hold the given counts, and leaves
+    /// alone either that can.
+    ///
+    /// A buffer that is kept keeps its old contents, so every caller of this
+    /// writes the whole range it goes on to draw. Both layout paths do: a
+    /// fresh layout allocates its slots back to back from zero and writes
+    /// each one whole, padding included.
+    fn grow_to(&mut self, gpu: &Gpu, vertices: usize, indices: usize) {
+        if vertices > self.vertex_capacity {
+            let capacity = grow_within(gpu, self.vertex_capacity, vertices, Vertex::STRIDE);
+            self.vertices = mesh_buffer(
+                gpu,
+                "vertices",
+                (capacity * Vertex::STRIDE) as u64,
+                wgpu::BufferUsages::VERTEX,
+            );
+            self.vertex_capacity = capacity;
+        }
+        if indices > self.index_capacity {
+            let capacity = grow_within(gpu, self.index_capacity, indices, 4);
+            self.indices = mesh_buffer(
+                gpu,
+                "indices",
+                (capacity * 4) as u64,
+                wgpu::BufferUsages::INDEX,
+            );
+            self.index_capacity = capacity;
+        }
+    }
+
+    /// Makes room for a layout of a fixed size without writing anything.
     ///
     /// The incremental path needs the addresses to exist before it knows what
     /// goes in them, which `upload` cannot offer — it sizes the buffers to the
     /// data it is given.
     ///
-    /// Returns whether it did. A reservation the device cannot hold is refused
-    /// with the buffers left as they were, so the caller can draw coarser
-    /// instead of the process ending in a validation panic.
+    /// Buffers already large enough are kept. This used to allocate a fresh
+    /// pair every time, which meant a settle that re-laid a surface of an
+    /// unchanged size dropped two buffers and took two more — hundreds of
+    /// megabytes of churn over a session, returned to the process only as
+    /// fast as the driver felt like returning it. Measured against a session
+    /// whose footprint climbed to 26 GB while the application reported 13 MB
+    /// in use, this is the allocation that was climbing.
+    ///
+    /// Returns whether the reservation was made. One the device cannot hold is
+    /// refused with the buffers left as they were, so the caller can draw
+    /// coarser instead of the process ending in a validation panic.
     #[must_use]
     pub fn reserve(&mut self, gpu: &Gpu, vertices: usize, indices: usize) -> bool {
         if !Self::fits(gpu, vertices, indices) {
             return false;
         }
-        self.vertices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("vertices"),
-            size: (vertices * Vertex::STRIDE).max(4) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.indices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("indices"),
-            size: (indices * 4).max(4) as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.vertex_capacity = vertices;
-        self.index_capacity = indices;
+        self.grow_to(gpu, vertices, indices);
         self.index_count = 0;
         true
     }
@@ -385,7 +463,13 @@ impl GpuMesh {
             count <= self.vertex_capacity,
             "vertex upload exceeds its buffer"
         );
-        write_mapped_buffer(gpu, &self.vertices, (count * Vertex::STRIDE) as u64, fill);
+        write_mapped_buffer(
+            gpu,
+            &self.vertices,
+            0,
+            (count * Vertex::STRIDE) as u64,
+            fill,
+        );
     }
 
     /// Fill a prefix of the index buffer directly in mapped upload storage.
@@ -396,7 +480,36 @@ impl GpuMesh {
             count <= self.index_capacity,
             "index upload exceeds its buffer"
         );
-        write_mapped_buffer(gpu, &self.indices, (count * 4) as u64, fill);
+        write_mapped_buffer(gpu, &self.indices, 0, (count * 4) as u64, fill);
+    }
+
+    /// Overwrites several runs of vertices, merging the ones that abut.
+    ///
+    /// The settle's path. A dab re-meshes twenty-odd keys and each one used to
+    /// take a write of its own; the keys a settle relocates are placed back to
+    /// back, so their runs merge into one upload instead. `runs` is sorted in
+    /// place — a caller walking a set of touched keys has no order to offer.
+    pub fn patch_vertex_runs(&mut self, gpu: &Gpu, runs: &mut [(u32, &[Vertex])]) {
+        debug_assert!(
+            runs.iter()
+                .all(|(first, data)| *first as usize + data.len() <= self.vertex_capacity),
+            "a patch must lie inside the allocated buffer"
+        );
+        patch_runs(gpu, &self.vertices, runs);
+    }
+
+    /// Overwrites several runs of indices, merging the ones that abut.
+    ///
+    /// Index runs cover their whole slot, padding included, so consecutive
+    /// slots meet exactly and a settle that relocated several keys writes them
+    /// as one range.
+    pub fn patch_index_runs(&mut self, gpu: &Gpu, runs: &mut [(u32, &[u32])]) {
+        debug_assert!(
+            runs.iter()
+                .all(|(first, data)| *first as usize + data.len() <= self.index_capacity),
+            "a patch must lie inside the allocated buffer"
+        );
+        patch_runs(gpu, &self.indices, runs);
     }
 
     /// How many indices the draw call covers.
@@ -449,12 +562,7 @@ fn grown(current: usize, required: usize) -> usize {
 }
 
 fn empty_buffer(gpu: &Gpu, label: &str, usage: wgpu::BufferUsages) -> wgpu::Buffer {
-    gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: 4,
-        usage: usage | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    mesh_buffer(gpu, label, 4, usage)
 }
 
 /// What the viewport draws behind the sculpt.
@@ -2457,6 +2565,16 @@ impl Renderer {
 
         gpu.queue.submit(Some(encoder.finish()));
         profiler.after_submit();
+
+        // Nothing else in an ordinary frame polls the device. Every
+        // `write_buffer` since the last frame is holding a staging buffer that
+        // wgpu frees only when the submission consuming it is *seen* to have
+        // completed, and it is a poll that looks — so without this the
+        // staging memory of a whole session accumulates, which is how a
+        // process reporting 13 MB in use reached a 26 GB footprint. `Poll`
+        // rather than `Wait`: the point is to collect what has already
+        // finished, not to stall the frame on what has not.
+        let _ = gpu.device.poll(wgpu::Maintain::Poll);
     }
 
     /// Fills the studio rig's shadow map, in Studio mode.

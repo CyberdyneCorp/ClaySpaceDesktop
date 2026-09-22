@@ -534,6 +534,31 @@ The upload is now the smallest term and no longer scales with the model, which
 is the property that matters: it is the edit that is paid for, not the sculpt.
 `dab_profile.rs` fails if it ever dominates again.
 
+**What the upload costs in memory, not time.** Both of those figures count
+bytes and milliseconds; neither counts allocations, and that is where an
+audited session's footprint reached 26 GB while the application reported 13 MB
+in use. Three habits made it, and all three are gone:
+
+- A layout allocated a fresh pair of buffers every time. It now keeps a buffer
+  the reservation already fits and grows only the one that ran out of room, so
+  a settle that does not grow the surface allocates nothing. Kept buffers are
+  safe because every path that reserves writes the whole range it then draws,
+  degenerate padding included.
+- Every key was patched with a write of its own, and in wgpu each
+  `Queue::write_buffer` takes a staging buffer of its own. A settle now places
+  every touched key first and merges the spans that abut into one write each;
+  the keys a settle relocates are placed back to back, so their index spans —
+  which cover their whole slot — become a single upload. Full rebuilds keep
+  their per-brick writes, which `batch-whole-surface-uploads` measured to be
+  the faster arrangement for that path.
+- Nothing polled the device, and wgpu frees a staging buffer only when the
+  submission that consumed it is *seen* to have completed. The frame now ends
+  with one non-blocking `Maintain::Poll`.
+
+`gpu_memory.rs` holds all three: what a reservation may allocate, what a
+settle's writes may cost, and that a merged write places the same bytes at the
+same destinations as the separate ones did.
+
 ## MVVM, mechanically
 
 A View function is a pure function of ViewModel state that emits commands. It

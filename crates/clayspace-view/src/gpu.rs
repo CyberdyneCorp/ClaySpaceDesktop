@@ -25,6 +25,22 @@ pub struct Gpu {
     /// which is what makes it the *device's* upload traffic rather than one
     /// caller's.
     uploaded: Arc<AtomicU64>,
+    /// How many writes those bytes arrived in, since the counter was last
+    /// read.
+    ///
+    /// Separate from the byte count because the two answer different
+    /// questions. Bytes say what the transfer cost; writes say how many
+    /// staging allocations wgpu made to carry it, and it is the *count* that
+    /// a session's footprint follows — each `write_buffer` takes its own
+    /// staging buffer, held until the submission consuming it completes.
+    writes: Arc<AtomicU64>,
+    /// How many mesh buffers have been created, since the counter was last
+    /// read.
+    ///
+    /// The gate on buffer reuse: a settle that does not grow the surface must
+    /// add nothing here, and a session whose surface has stopped growing must
+    /// stop allocating.
+    allocations: Arc<AtomicU64>,
     adapter: Arc<wgpu::Adapter>,
     /// How much multisampling this device draws the scene with. See
     /// [`Gpu::msaa`] for why it does not change.
@@ -121,6 +137,8 @@ impl Gpu {
             device: Arc::new(device),
             queue: Arc::new(queue),
             uploaded: Arc::new(AtomicU64::new(0)),
+            writes: Arc::new(AtomicU64::new(0)),
+            allocations: Arc::new(AtomicU64::new(0)),
             instance,
         })
     }
@@ -218,6 +236,16 @@ impl Gpu {
     /// bypassed would under-report exactly the paths worth watching.
     pub fn note_upload(&self, bytes: u64) {
         self.uploaded.fetch_add(bytes, Ordering::Relaxed);
+        self.writes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a buffer created for mesh geometry.
+    ///
+    /// Only mesh buffers: uniforms and overlays are created once and live as
+    /// long as the renderer, while these are the ones a sculpting session can
+    /// make thousands of.
+    pub fn note_allocation(&self) {
+        self.allocations.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Bytes uploaded since this was last called, and resets the count.
@@ -228,6 +256,16 @@ impl Gpu {
     /// Bytes uploaded so far, without resetting.
     pub fn uploaded_bytes(&self) -> u64 {
         self.uploaded.load(Ordering::Relaxed)
+    }
+
+    /// Buffer writes since this was last called, and resets the count.
+    pub fn take_writes(&self) -> u64 {
+        self.writes.swap(0, Ordering::Relaxed)
+    }
+
+    /// Mesh buffers created since this was last called, and resets the count.
+    pub fn take_allocations(&self) -> u64 {
+        self.allocations.swap(0, Ordering::Relaxed)
     }
 
     /// How many anisotropic samples a texture filter may take.
