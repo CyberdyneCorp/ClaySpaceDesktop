@@ -11136,8 +11136,11 @@ impl DocumentModel for ClayDocument {
         // A solo is a way of looking at the document, not part of it. Written
         // as it stands, the file would reopen with everything but one subtool
         // hidden — and so would the crash recovery, which is the copy nobody
-        // gets to check before trusting it. So the real pattern goes down and
-        // the solo is put back around the write.
+        // gets to check before trusting it. So the real pattern is what goes
+        // into the file, and only into the file: borrowed, because the fold
+        // the cache holds is the same fold on both sides of a pattern that is
+        // put straight back. See [`Self::with_borrowed_visibility`] for why
+        // the scene stays where it is while that happens.
         match self.solo.clone() {
             Some(solo) => self.with_borrowed_visibility(&solo.was, |doc| {
                 doc.document.save(path).map_err(ModelError::engine)

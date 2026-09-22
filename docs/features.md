@@ -2663,10 +2663,21 @@ something, put the flags back. The restore owns the exit, including the failing
 one — an operation that refuses halfway leaves the sculptor's scene exactly as
 it was, and its own commands are not left for anyone to undo.
 
-**Saving while soloed writes the real pattern.** A solo is a way of looking at
-the document, not part of it, so the file gets the visibility the sculptor set,
-and the solo is put back around the write. A reopened or crash-recovered
-document shows what they set and is not soloed.
+**Saving while soloed writes the real pattern, and draws nothing.** A solo is a
+way of looking at the document, not part of it, so the file gets the visibility
+the sculptor set. The flags go into the file and only into the file: the scene
+on the screen is not taken out of solo and put back, because a save is not an
+edit and nothing about writing one should re-draw what is being looked at. A
+reopened or crash-recovered document shows what they set and is not soloed.
+
+This used to go the long way round — the real pattern was written to the live
+document, the file was saved, and the solo was written back — and each of those
+writes refilled every field subtool it touched, on the interface thread. On a
+worked document that was 146 s inside one autosave, twice the whole scene, with
+the next autosave due before the window came back. The pattern is borrowed
+now, for the reason [What a command is allowed to
+dirty](#what-a-command-is-allowed-to-dirty) gives about a bake: what goes down
+and comes straight back up leaves the same fold on both sides.
 
 ### What an eye costs
 
@@ -4239,6 +4250,13 @@ worse trade.
   *Abrir recente*, which prunes documents that are no longer there — a menu
   that offers a file and then fails to open it is worse than a shorter menu.
 - **Autosave every two minutes**, and only while there is something to lose.
+  Two minutes of *idle* time: the clock starts when an autosave finishes, not
+  when it starts, so a document whose save takes longer than the interval is
+  not due again the moment it lands. A save that fails waits out the same two
+  minutes rather than being retried on every turn of the event loop.
+  An autosave is also skipped while a stroke, a drag or an outline is open —
+  the hand is still moving, and the tick is not lost, it is taken as soon as
+  the gesture ends.
   A marker file written when a session opens and removed when it closes is
   what tells the next run whether the last one crashed; a marker still there
   means the autosave beside it is offered back.
