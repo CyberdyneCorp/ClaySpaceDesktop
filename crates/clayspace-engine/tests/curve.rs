@@ -12,7 +12,7 @@
 //! missing was a tool that placed one.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{CurveJoin, CurveModel, CurveProfile, SculptModel};
+use clayspace_model::{CurveJoin, CurveModel, CurveProfile, FieldRefusal, ModelError, SculptModel};
 
 fn document() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -639,4 +639,68 @@ fn dragging_a_point_leaves_nothing_stale_behind_it() {
          so dragging a control point had left bricks stale — most likely where \
          the point came from rather than where it went"
     );
+}
+
+/// A thickness the field cannot hold is refused, and the curve is left alone.
+///
+/// **This number had no upper bound at all.** It was clamped to a minimum and
+/// nothing above it, so `curve/set_radius 5` on a three-point guide was
+/// accepted: the application held for more than thirty seconds and took itself
+/// to four and a half gigabytes sweeping a tube nobody could have wanted. It
+/// is priced now, the way a crossing has always been priced, and the price is
+/// paid before a single radius is written.
+#[test]
+fn an_oversized_curve_radius_is_refused() {
+    let mut document = document();
+    lay(&mut document);
+    let before = document.curve().points.clone();
+
+    let refused = document
+        .set_curve_radius(5.0)
+        .expect_err("a radius of 5 was accepted");
+    assert!(
+        matches!(
+            refused,
+            ModelError::Field(FieldRefusal::RegionOverBudget { .. })
+        ),
+        "refused for the wrong reason: {refused}"
+    );
+
+    assert_eq!(
+        document.curve().points,
+        before,
+        "a refused thickness reached the guide anyway"
+    );
+
+    // A thickness the document can carry still goes through, so this is a
+    // bound and not a wall. Laying a point leaves it selected, so it is that
+    // point which takes the new thickness and the rest that keep theirs.
+    document
+        .set_curve_radius(0.3)
+        .expect("an ordinary thickness was refused");
+    let after = document.curve().points;
+    assert!((after[2].radius - 0.3).abs() < 1e-6);
+    assert_eq!(after[0].radius, before[0].radius);
+}
+
+/// A guide that has been refused a thickness is still a guide that can be
+/// taken away.
+///
+/// The measured failure was the other way round: a region past the cache's
+/// limit left a curve that could not be removed, so the document could not be
+/// repaired by the person who broke it. Refusing the thickness is what stops
+/// that region existing, and this holds the rest of the way — the refusal does
+/// not strand the curve.
+#[test]
+fn a_curve_over_the_brick_limit_can_be_removed() {
+    let mut document = document();
+    lay(&mut document);
+    assert!(document.set_curve_radius(5.0).is_err());
+
+    document
+        .remove_curve_points()
+        .expect("the refused curve would not give up its points");
+
+    document.cancel_curve();
+    assert!(!document.curve().active, "the curve outlived its removal");
 }

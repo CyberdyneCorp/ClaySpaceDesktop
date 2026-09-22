@@ -145,6 +145,15 @@ pub struct ObjectViewModel {
     /// `None` when no drag is open.
     drag_floor: Option<usize>,
     notice: Observable<Option<String>>,
+    /// Something that *did* happen, said beside the answer rather than in
+    /// place of it: a size the field brought back inside its bounds.
+    ///
+    /// Not the notice channel. A refusal is read by the agent door as an
+    /// error, and a clamped parameter is not an error — the placement went
+    /// ahead, at a number the sculptor did not type. Saying nothing was the
+    /// old behaviour and it is the reason a panel could answer 4.08 to a
+    /// request for 400 with no account of where the figure came from.
+    remark: Observable<Option<String>>,
     /// What the placed forms and the manipulator have cost the history, one
     /// count per action, waiting for the ViewModel that owns Cmd+Z to bank
     /// them. See [`crate::Unbanked`].
@@ -176,6 +185,7 @@ impl ObjectViewModel {
             settling: false,
             placement: None,
             notice: Observable::new(None),
+            remark: Observable::new(None),
             unbanked: crate::Unbanked::default(),
         }
     }
@@ -225,6 +235,11 @@ impl ObjectViewModel {
 
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
+    }
+
+    /// What was said beside the last answer, where anything was.
+    pub fn remark(&self) -> &Observable<Option<String>> {
+        &self.remark
     }
 
     /// Takes the notice back down.
@@ -450,7 +465,25 @@ impl ObjectViewModel {
             }
             Command::SetShapeParameters(values) => {
                 let shape = *self.shape.get();
-                self.parameters.set_if_changed(shape.sanitised(values));
+                let (sanitised, clamped) = shape.sanitised_reported(values);
+                // The first clamp and not all of them. A sculptor who typed
+                // four numbers and had three brought back in has one thing to
+                // learn from this — that the form is larger than the document
+                // can hold — and three sentences saying it is three sentences.
+                match clamped.first() {
+                    // Announced rather than set, for the reason every channel
+                    // here announces: asking for the same impossible size
+                    // twice says the same sentence twice, and a reader that
+                    // can only see the revision reads the second one as a
+                    // request nothing was said about.
+                    Some(report) => self.remark.announce(Some(report.to_string())),
+                    // Taken down rather than announced as nothing, so a size
+                    // that fits is not an event.
+                    None => {
+                        self.remark.set_if_changed(None);
+                    }
+                }
+                self.parameters.set_if_changed(sanitised);
             }
             Command::InsertShape => self.insert(representation),
             Command::SetInsertAs(destination) => {

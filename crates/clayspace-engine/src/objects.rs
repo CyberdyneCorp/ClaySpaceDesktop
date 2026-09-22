@@ -194,6 +194,48 @@ pub fn primitive_of(shape: Shape, parameters: &[f32]) -> Primitive {
     }
 }
 
+/// How far a shape reaches along each axis, as the size of a box around it.
+///
+/// The engine's `node_influence_bound` is the authority once an item is
+/// placed. This is the question asked *before* one is: what placing it would
+/// cost the cache. So it reads the same parameters [`primitive_of`] reads, in
+/// the same order and on the same axes, and the exhaustive match is what keeps
+/// the two from drifting — the same job that match already does for the call
+/// itself.
+///
+/// A full extent rather than a half one, because a region is what gets priced.
+/// It is the shape's *box*, which for a torus or a frame is larger than the
+/// shape: the cache dirties the box either way, so pricing the box is pricing
+/// what happens.
+pub fn extent_of(shape: Shape, parameters: &[f32]) -> [f32; 3] {
+    let p = shape.sanitised(parameters);
+    let across = |half: [f32; 3]| half.map(|reach| reach * 2.0);
+    match shape {
+        Shape::Box | Shape::BoxFrame => across([p[0], p[1], p[2]]),
+        Shape::Ellipsoid => across([p[0], p[1], p[2]]),
+        Shape::Sphere | Shape::Octahedron => across([p[0]; 3]),
+        Shape::Cylinder => across([p[0], p[1], p[0]]),
+        Shape::Cone => {
+            // The wider of the two ends, since either may be the larger one.
+            let radius = p[1].max(p[2]);
+            across([radius, p[0], radius])
+        }
+        // A ring lying in XZ: the tube reaches the major radius plus its own
+        // either side, and only its own above and below.
+        Shape::Torus => across([p[0] + p[1], p[1], p[0] + p[1]]),
+        // Offered as a radius and a half-height, swept between two points on Y
+        // — so it reaches the half-height plus a cap at each end.
+        Shape::Capsule => across([p[0], p[1] + p[0], p[0]]),
+        // The one shape not measured by its parameters alone: the engine
+        // builds it on a unit square base, standing to `height`.
+        Shape::Pyramid => [1.0, p[0], 1.0],
+        Shape::RoundBox => across([p[0] + p[3], p[1] + p[3], p[2] + p[3]]),
+        Shape::RoundedCylinder => across([p[0] + p[1], p[2] + p[1], p[0] + p[1]]),
+        // A radius across the flats and a half-depth, the prism running on Z.
+        Shape::HexPrism | Shape::TriPrism => across([p[0], p[0], p[1]]),
+    }
+}
+
 /// The box two states of one node between them reach.
 ///
 /// A move has to dirty where the object went *and* where it came from:
