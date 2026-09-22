@@ -21,7 +21,7 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, GestureSample, SculptModel, SmoothBlur, ToolKind, VoxelDisplay,
+    BrushSettings, GestureSample, SceneModel, SculptModel, SmoothBlur, ToolKind, VoxelDisplay,
 };
 
 fn sculpted() -> ClayDocument {
@@ -301,5 +301,59 @@ fn an_unchanged_grid_is_not_meshed_again() {
         document.mesh_revision(),
         "an untouched grid kept moving its revision, so the viewport would \
          re-upload the same surface every frame"
+    );
+}
+
+#[test]
+fn a_display_change_does_not_remesh_a_hidden_grid() {
+    // A whole-grid smooth mesh is 17 to 21 ms and nothing else in the settle
+    // is close to it, so a document carrying six hidden grids paid over a
+    // tenth of a second on the UI thread to change a picture none of them is
+    // in. The mesh is not built until the frame that draws the grid, which is
+    // the frame that needs it.
+    let mut document = sculpted();
+    let grid = document.scene().active.expect("the grid is active");
+    document
+        .set_layer_visible(grid, false)
+        .expect("hide the grid");
+
+    document
+        .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::default())
+        .expect("refused");
+
+    assert_eq!(
+        document.smoothed_grids(),
+        0,
+        "the display change meshed a grid nobody is looking at"
+    );
+    assert!(
+        drawn(&mut document).0.is_empty(),
+        "a hidden grid was handed to the viewport"
+    );
+
+    // And it is built the moment it is asked for, so what the sculptor gets
+    // back is the picture they chose rather than the boxes they left.
+    document.set_layer_visible(grid, true).expect("show it");
+    let shown = drawn(&mut document);
+    assert_eq!(
+        document.smoothed_grids(),
+        1,
+        "the grid came back without its smooth surface being built"
+    );
+    assert!(
+        !shown.0.is_empty(),
+        "the grid came back with nothing to draw"
+    );
+
+    // The same surface a grid that was never hidden would have: skipping the
+    // rebuild is a deferral and not a different picture.
+    let mut always_shown = sculpted();
+    always_shown
+        .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::default())
+        .expect("refused");
+    assert_eq!(
+        shown.0,
+        drawn(&mut always_shown).0,
+        "the deferred rebuild produced a different surface"
     );
 }

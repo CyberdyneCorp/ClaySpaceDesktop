@@ -2036,6 +2036,16 @@ preferences:
   grid to sit on the frame path rather than waiting for a gesture to settle,
   which a form that lagged the brush by a whole stroke would have to.
 
+**A hidden grid is not meshed.** Those 17 to 21 ms are per grid and the whole
+document used to pay them, so changing the picture over a document carrying six
+hidden grids took over a tenth of a second on the interface thread to rebuild
+surfaces none of them is in. The work is deferred and not dropped: a grid shown
+again is drawn with the picture that is chosen, on the frame that draws it,
+which is the frame that needs it. The chunk pass beside this one *does* mesh
+hidden grids, deliberately and for the opposite reason — it drains the engine's
+dirty set, so skipping a layer would leave its keys queued for whichever frame
+brings it back and re-mesh the whole backlog at once.
+
 **Suavização** is the engine's `blur`, in passes of a 3×3×3 box over occupancy,
 and its trade is real in both directions. At **0** nothing is filtered and
 nothing can be lost, but the surface still *terraces* — every crossing over
@@ -2613,6 +2623,36 @@ it was, and its own commands are not left for anyone to undo.
 the document, not part of it, so the file gets the visibility the sculptor set,
 and the solo is put back around the write. A reopened or crash-recovered
 document shows what they set and is not soloed.
+
+### What an eye costs
+
+Clicking one is not free, and what it costs depends on which kind of subtool it
+is on.
+
+**A grid's or a mesh's eye costs nothing.** The surface cache holds the merged
+field of the *field* subtools and nothing else. A grid and a carried mesh are
+drawn from a separate buffer, and which of them is in it is decided by the same
+eye — so hiding one leaves it out of the next frame and re-evaluates nothing,
+however much material it holds. This used to refill a layer the field has no
+term for, on the reasonable-sounding grounds that an eye changes what is drawn.
+
+**A field subtool's eye costs its refill.** Hiding one really does change the
+field: the bricks it reached have to be rewritten or the viewport goes on
+drawing a surface the document no longer describes. There is nothing per-layer
+to switch off instead, because the cache holds one merged field addressed in
+world bricks. On a worked subtool that is still seconds, on the interface
+thread, and it is not fixed here — it waits on the refill drain becoming
+something the frame loop spends a budget on rather than something a command
+runs to completion.
+
+**Stepping back over a solo brings the subtools back to the screen, not only to
+the stack.** The hop used to refill whichever subtool happened to be *active*,
+which is not the one whose eye moved: a ⌘Z over a solo of four subtools gave
+three of them back to the document and one back to the cache, so the stack
+showed four and the viewport drew two until something else dirtied that
+ground. The gesture now carries the layers it actually wrote a flag on — not
+the pattern it was asked for, since a flag already at the wanted value is left
+alone — and the hop refills exactly those.
 
 ### When the clay is behind your hand
 

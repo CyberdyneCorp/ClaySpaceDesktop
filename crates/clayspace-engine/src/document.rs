@@ -461,6 +461,23 @@ impl Layer {
     fn editable(&self) -> bool {
         self.visible && self.protection.is_editable()
     }
+
+    /// Whether this layer is one of the terms the brick cache evaluates.
+    ///
+    /// The field the cache holds is the fold of the **visible SDF** layers and
+    /// nothing else — the engine's own compile filters on `visible && kind ==
+    /// Sdf` at every site. A grid and a carried mesh arrive by the other route
+    /// entirely: `visible_mesh_geometry` assembles them into one buffer and
+    /// selects which spans to hand over by the same `visible` flag, so their
+    /// eye is honoured when the frame is drawn rather than by re-evaluating
+    /// anything.
+    ///
+    /// So this is the question "can showing or hiding this layer move a
+    /// sample of the field?", and for two of the three representations the
+    /// answer is no however much material they hold.
+    fn is_in_the_field(&self) -> bool {
+        self.representation == Representation::Sdf
+    }
 }
 
 /// A ClayCore document driven by the domain's vocabulary.
@@ -1029,6 +1046,16 @@ struct VisibilityGesture {
     /// beside them, so it borrows their stamps instead of taking one of its
     /// own. See [`ClayDocument::history_seq`].
     stamps: Vec<u64>,
+    /// The layers the batch actually wrote a flag on, in the order it wrote
+    /// them.
+    ///
+    /// Not the pattern it was *asked* for: a flag already at the wanted value
+    /// is left alone, so a solo re-engaged on the same subtool writes nothing
+    /// and owes no refill. Carried because a hop in either direction has to
+    /// refill exactly these — see [`ClayDocument::after_visibility_history`],
+    /// which used to refill the ACTIVE layer instead and left the layer whose
+    /// eye had moved stale.
+    moved: Vec<LayerKey>,
     /// What was shown alone before the batch, and after it.
     ///
     /// Carried so that hopping the gesture in either direction restores the
@@ -1037,6 +1064,17 @@ struct VisibilityGesture {
     /// saying otherwise would describe a state that had left.
     before: Option<Solo>,
     after: Option<Solo>,
+}
+
+/// What a batch of visibility writes left behind, as it is written.
+///
+/// The two lists are kept together because they are two accounts of the same
+/// batch and a caller that grew one without the other would either step over
+/// an entry it did not make or leave a layer's bricks stale.
+#[derive(Default)]
+struct VisibilityWrites {
+    stamps: Vec<u64>,
+    moved: Vec<LayerKey>,
 }
 
 /// Which slice of the carried buffer one layer's triangles occupy.
@@ -1186,6 +1224,14 @@ pub struct ClayDocument {
     /// A measurement rather than bookkeeping: it is what says an edit costs
     /// the edit, and it is what a test can assert on without timing anything.
     meshed_chunks: usize,
+    /// Grids the last [`ClayDocument::resmooth_voxels`] rebuilt a smooth
+    /// surface for.
+    ///
+    /// The same kind of measurement `meshed_chunks` is, for the whole-grid
+    /// pass beside it: a whole-grid smooth mesh is 17 to 21 ms, so what that
+    /// pass skips is the thing worth holding a test to, and a count says it
+    /// without timing anything.
+    smoothed_grids: usize,
     /// Whether a gesture is open and should be previewed rather than banked.
     ///
     /// Written only by [`ClayDocument::set_previewing`], because two other
@@ -1584,6 +1630,7 @@ impl ClayDocument {
             live_gesture: None,
             surface_epoch: 0,
             meshed_chunks: 0,
+            smoothed_grids: 0,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
             picked_seed: std::cell::Cell::default(),
@@ -2054,6 +2101,16 @@ impl ClayDocument {
     /// **A caller that marks owes a drain**, on the failing path as much as on
     /// the succeeding one: a mark left standing is a cache that disagrees with
     /// the document until something else happens to drain it.
+    ///
+    /// Nothing is marked for a layer the field does not hold. This used to mark
+    /// unconditionally, on the reasonable-sounding grounds that an eye changes
+    /// what is drawn — but a grid's eye and a mesh's are read where the frame
+    /// is assembled, and only an SDF layer is a term of the field the cache
+    /// evaluates. Marking for the other two asked the engine for the influence
+    /// bound of a layer that has no field content, which answers with an empty
+    /// box and marks nothing; what it cost was the walk and the drain behind
+    /// it, on the UI thread, for every toggle of a grid or mesh subtool and for
+    /// every grid row a solo hides. See [`Layer::is_in_the_field`].
     fn write_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
         let id = self.layers[index].id;
@@ -2061,6 +2118,9 @@ impl ClayDocument {
             .set_layer_visible(id, visible)
             .map_err(ModelError::engine)?;
         self.layers[index].visible = visible;
+        if !self.layers[index].is_in_the_field() {
+            return Ok(());
+        }
         self.mark_for_refill(id, &[])
     }
 
@@ -2298,8 +2358,8 @@ impl ClayDocument {
         after: Option<Solo>,
     ) -> Result<(), ModelError> {
         let before = self.solo.clone();
-        let mut stamps = Vec::new();
-        let outcome = self.write_each_visibility(wanted, &mut stamps);
+        let mut written = VisibilityWrites::default();
+        let outcome = self.write_each_visibility(wanted, &mut written);
         // Owed whether the batch finished or stopped halfway: the flags that
         // did land have marked their layers, and a mark left standing is a
         // cache disagreeing with the document until something else drains it.
@@ -2317,9 +2377,10 @@ impl ClayDocument {
         }
         // Recorded even when it failed halfway, because half a batch is still
         // entries in the engine's history and undo has to step over those too.
-        if !stamps.is_empty() {
+        if !written.stamps.is_empty() {
             self.visibility_undo.push(VisibilityGesture {
-                stamps,
+                stamps: written.stamps,
+                moved: written.moved,
                 before,
                 after: self.solo.clone(),
             });
@@ -2339,7 +2400,7 @@ impl ClayDocument {
     fn write_each_visibility(
         &mut self,
         wanted: &[(LayerKey, bool)],
-        stamps: &mut Vec<u64>,
+        written: &mut VisibilityWrites,
     ) -> Result<(), ModelError> {
         for &(key, visible) in wanted {
             // A layer the snapshot names and the document no longer has: undo
@@ -2353,12 +2414,13 @@ impl ClayDocument {
                 continue;
             }
             self.write_layer_visible(key, visible)?;
+            written.moved.push(key);
             // The entry the write just made, stamped now so the gesture is
             // named by the entries it owns rather than by how many the engine
             // held at the time.
             self.note_engine_entries();
             if let Some(&stamp) = self.engine_undo_marks.last() {
-                stamps.push(stamp);
+                written.stamps.push(stamp);
             }
         }
         Ok(())
@@ -2451,8 +2513,9 @@ impl ClayDocument {
             }
             self.engine_marks_stepped_back();
             self.solo = gesture.before.clone();
+            let moved = gesture.moved.clone();
             self.visibility_redo.push(gesture);
-            self.after_visibility_history()?;
+            self.after_visibility_history(&moved)?;
         }
         Ok(())
     }
@@ -2470,22 +2533,59 @@ impl ClayDocument {
             }
             self.engine_marks_stepped_forward();
             self.solo = gesture.after.clone();
+            let moved = gesture.moved.clone();
             self.visibility_undo.push(gesture);
-            self.after_visibility_history()?;
+            self.after_visibility_history(&moved)?;
         }
         Ok(())
     }
 
     /// What either direction owes once the engine has moved the flags.
-    fn after_visibility_history(&mut self) -> Result<(), ModelError> {
+    ///
+    /// `moved` is the layers the gesture wrote, which is the only correct
+    /// bound there is. This used to refill the ACTIVE layer, on the reasoning
+    /// that "a hidden layer contributes nothing to the field, so the surface is
+    /// a different surface either way and the bound is the whole layer" — true
+    /// of the layer whose eye moved and false of the one that happens to be
+    /// selected. Undoing a hide of some other subtool refilled the active
+    /// layer's bricks and left the returning subtool's stale, so the document
+    /// showed it back in the stack and the viewport went on not drawing it
+    /// until something else dirtied that region.
+    ///
+    /// It is also what a hop costs now: one layer for a hand-made hide instead
+    /// of whichever layer is selected, nothing at all for a grid or a mesh, and
+    /// for a solo the layers it actually hid rather than one of them.
+    fn after_visibility_history(&mut self, moved: &[LayerKey]) -> Result<(), ModelError> {
         // `reconcile_layers` re-reads what the document now shows, so the eye
         // in the stack follows the hop rather than sitting where the gesture
         // left it.
         self.reconcile_layers();
-        let layer = self.active_layer().id;
-        // A hidden layer contributes nothing to the field, so the surface is a
-        // different surface either way and the bound is the whole layer.
-        self.refill(layer, &[])?;
+        // Marked together and drained once, for the reason `mark_for_refill`
+        // gives: the regions overlap more often than not and a brick two
+        // layers share is then refilled once rather than once each. The drain
+        // is owed whether or not every mark landed, exactly as it is in
+        // `write_visibility`.
+        let marked = self.mark_what_moved(moved);
+        let settled = self.drain_dirty();
+        marked.and(settled)
+    }
+
+    /// Marks the field layers in `moved`, and says whether every one of them
+    /// could be marked.
+    fn mark_what_moved(&mut self, moved: &[LayerKey]) -> Result<(), ModelError> {
+        for &key in moved {
+            // A layer the gesture named and the document no longer holds: a
+            // crossing may have retired it since. Nothing to refill, and
+            // refusing here would strand the layers that are still there.
+            let Ok(index) = self.index_of(key) else {
+                continue;
+            };
+            if !self.layers[index].is_in_the_field() {
+                continue;
+            }
+            let id = self.layers[index].id;
+            self.mark_for_refill(id, &[])?;
+        }
         Ok(())
     }
 
@@ -6734,14 +6834,28 @@ impl ClayDocument {
     }
 
     pub fn resmooth_voxels(&mut self) -> Result<(), ModelError> {
+        self.smoothed_grids = 0;
         if self.voxel_display != VoxelDisplay::Smooth {
             self.voxel_smooth.clear();
             return Ok(());
         }
+        // Only the grids that are drawn. A hidden one is not in the buffer
+        // `visible_mesh_geometry` assembles — it selects its spans by the same
+        // eye — so meshing it builds a surface nothing reads, and a whole-grid
+        // smooth mesh is 17 to 21 ms each. A document with six hidden grids
+        // paid all six of those on the UI thread for a display change that
+        // could not alter a pixel.
+        //
+        // The chunk pass above does mesh hidden grids, deliberately, and the
+        // two are not inconsistent: that one drains the engine's dirty set, so
+        // skipping a layer leaves its keys queued for whichever frame shows it
+        // again. This one is a whole-grid rebuild guarded on the grid's change
+        // count, so the work skipped here is simply done on the frame the
+        // sculptor asks to see it — which is the frame that needs it.
         let grids: Vec<(LayerKey, String)> = self
             .layers
             .iter()
-            .filter(|layer| layer.representation == Representation::Voxel)
+            .filter(|layer| layer.representation == Representation::Voxel && layer.visible)
             .map(|layer| (layer.key, layer.engine_name.clone()))
             .collect();
         let blur = self.voxel_blur.passes();
@@ -6766,6 +6880,7 @@ impl ClayDocument {
                 }
                 (changes, grid.mesh_smooth(blur).map_err(ModelError::engine)?)
             };
+            self.smoothed_grids += 1;
             if mesh.vertex_count() == 0 {
                 self.voxel_smooth.remove(&key);
                 continue;
@@ -6814,6 +6929,16 @@ impl ClayDocument {
     /// which on a shared machine measures the machine.
     pub fn meshed_chunks(&self) -> usize {
         self.meshed_chunks
+    }
+
+    /// How many grids the last settle rebuilt a smooth surface for.
+    ///
+    /// Zero where no grid moved and where every grid that did is hidden.
+    /// Exposed for the reason [`Self::meshed_chunks`] is: the promise is that
+    /// a picture nobody is looking at is not built, and a count holds it
+    /// without measuring a shared machine's clock.
+    pub fn smoothed_grids(&self) -> usize {
+        self.smoothed_grids
     }
 
     /// A number that changes when the carried geometry does.
@@ -9657,9 +9782,11 @@ impl SceneModel for ClayDocument {
     }
 
     fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
-        // Hiding a layer removes its contribution, so the surface moves — and
-        // one layer hidden is one thing the sculptor did, so it settles here.
-        // The callers that write several flags as one action mark through
+        // Hiding a field layer removes its contribution, so the surface moves
+        // — and one layer hidden is one thing the sculptor did, so it settles
+        // here. The drain is harmless where `write_layer_visible` marked
+        // nothing, which is every grid and every carried mesh. The callers
+        // that write several flags as one action mark through
         // `write_layer_visible` and drain once themselves.
         self.write_layer_visible(key, visible)?;
         self.drain_dirty()
@@ -10909,6 +11036,7 @@ impl ClayDocument {
             live_gesture: None,
             surface_epoch: 0,
             meshed_chunks: 0,
+            smoothed_grids: 0,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
             picked_seed: std::cell::Cell::default(),
