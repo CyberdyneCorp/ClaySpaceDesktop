@@ -287,7 +287,7 @@ sequenceDiagram
     G-->>V: upload
 ```
 
-Four properties are load-bearing:
+Five properties are load-bearing:
 
 **The whole gesture arrives at once.** The stroke engine then decides stamp
 spacing from arc length rather than from how many samples the device delivered,
@@ -305,6 +305,12 @@ everything.
 **The dirty set is dilated by face neighbours.** A key meshed alone regenerates
 the triangles on its boundary while its neighbour still holds the previous
 version of the same seam, which shows as a thin crack tracing the edit.
+
+**The drain is bounded by a budget the host sets.** `ClayDocument::drain_dirty`
+takes from the cache until a `RefillBudget` is spent and then returns, leaving
+the rest where it was — the composition root pumps another budget at the top of
+each frame and asks for the next frame while `refill_is_pending`. A document
+with no budget set drains in full, which is what every headless caller needs.
 
 ### How a gesture reaches the model, and when
 
