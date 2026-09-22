@@ -135,6 +135,35 @@ a bound 99.9x more pessimistic than the truth, and the marcher takes its step
 size from the declared one. Fixed upstream; picking on a worked form roughly
 halved by moving the pin, with no code of ours involved.
 
+That lowered the curve and left its shape: the chain still only grew. Measured
+again on the pinned engine (v0.120.0) with the front-only gate on, the step
+scale falls by 0.735 per grab — 0.54 per mirrored gesture — and the first of 512
+marched rays is lost at **0.0134**, unmirrored chain 14. Mirrored, chain 24
+finds the surface 274 times, chain 26 41 times, chain 28 not at all. Stamps
+(Padrão, Inflar, Camada) build no chain over sixteen gestures; their step scale
+falls for the other reason, a long edit list, whose cure is the whole-layer
+bake.
+
+**Baking the worked patch bounds the chain and does not make the layer
+cheaper.** `ClayDocument` now carries the region each field gesture touched,
+plans a regional collapse at a calibrated floor of 0.05, bakes only where the
+plan stays local, and stops if the closure ratchets — and the chain returns to
+zero, the first collapse takes the starting form and every later one is local,
+mirrored or not. Then the layer is a sampled volume, and a refill over one costs
+about **sixty times** the analytic chain per brick. An undo refills the whole
+bound of the node a grab hangs off, thousands of bricks either way, so the price
+per brick is the whole story: an undo at gesture 11 went from 61 ms to
+**3.6 s** baked at the cache's spacing, and to 760 ms at twice it. The chain
+stays bounded; the cost it stood for does not, over any session measured. So
+the mechanism ships with its floor at zero, and
+`a_baked_patch_still_refills_dearer_than_its_chain` fails the day that stops
+being true (`crates/clayspace-engine/src/compaction.rs` has the series).
+
+What would actually bound undo is upstream and is either half of that product:
+a sampled volume that refills near an analytic item's price, or an undo bound
+for a deformer append that is the deformer's support rather than its node's —
+and the second would help the uncollapsed chain just as much.
+
 ### And one hardcoded literal was making it worse
 
 `front_only: true` was written at every Move call site, so the near side of a
@@ -162,7 +191,7 @@ Five plausible explanations died on measurement:
 | tape-compile cache | 10–18%, inside noise |
 | cull pad / batch union / spatial grouping | refuted; a 9.3x smaller union moves nothing |
 | `point_the_mirror` per press | **0.00 ms** — it short-circuits |
-| regional consolidation | **see below — this entry was wrong** |
+| regional consolidation | **see below — this entry was wrong, and then right for a third reason** |
 | whole-layer consolidation | measured **6x worse** for a deformer chain |
 
 ### One of those was refuted later, and the correction is worth more than the entry
@@ -199,6 +228,22 @@ So the entry above reached the right operational conclusion (do not bind it) for
 the wrong reason, which meant it would have stayed wrong after the reason
 stopped applying. The honest version is: **its price depends on how many times
 you have already called it.**
+
+### And then it was bound, and measured for what it leaves behind
+
+ClayCore #601 (v0.116.0) stopped the ratchet: the engine retains a baked
+volume's unaffected samples and rebuilds only the patch. On our own starting
+sphere the closure now holds its width — 3.80 for the first bake, flat after —
+the first bake takes the form and every later one is local, and the chain it
+exists to bound returns to zero. Everything the bake itself promised, it does.
+
+What nobody had measured is the layer it leaves. A baked patch is a sampled
+volume, and refilling bricks over it costs about sixty times what refilling them
+over the analytic chain did; an undo refills the whole node bound either way, so
+undo after a bake went from 61 ms to 3.6 s. The operational conclusion is back
+where the first entry had it — do not collapse a chain by default — and this
+time for a measured reason, with a tripwire that says when it stops holding.
+See "The decay" above for the figures.
 
 ---
 

@@ -13,6 +13,7 @@
 
 pub mod alpha;
 pub mod backend;
+pub mod compaction;
 pub mod document;
 mod live;
 mod maintenance;
@@ -25,6 +26,7 @@ mod seed;
 
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
+pub use compaction::{Collapse, CompactionTotals, Declined};
 pub use document::{CarriedSpan, ClayDocument, RefillBudget};
 pub use live::LiveSurface;
 pub use reference::read_reference;
