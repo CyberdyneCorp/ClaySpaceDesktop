@@ -186,6 +186,7 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             total: 136 * 1024 * 1024,
             surfaces: 2,
             surface_bytes: 96 * 1024 * 1024,
+            ..Default::default()
         }),
         // A worked session, so the capture shows the section that says which
         // side of the engine boundary a stroke's milliseconds went to — and
@@ -377,7 +378,11 @@ fn state<'a>(
         materials,
         can_undo: true,
         can_redo: false,
-        memory: (1_331_439_861, 4 * 1024 * 1024 * 1024),
+        memory: clayspace_view::shell::MemoryFigures {
+            in_use: 1_331_439_861,
+            cache: 1_331_439_861 / 2,
+            budget: 4 * 1024 * 1024 * 1024,
+        },
         backend: "metal",
         units: clayspace_model::Units::default(),
         last_action: Some(("Padrão", true)),

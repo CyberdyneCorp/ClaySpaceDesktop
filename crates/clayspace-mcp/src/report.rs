@@ -542,41 +542,47 @@ pub fn exchange_state(
 
 /// The memory ledger, by the part of the document that holds it.
 ///
-/// The engine's own accounting, not an estimate kept here — the same figures
-/// the status area shows, so an agent and a person cannot disagree about them.
-pub fn memory_state(
-    diagnostics: &Diagnostics,
-    cache_bytes: u64,
-    budget: u64,
-) -> Option<MemoryState> {
+/// The engine's own accounting for the document and its surfaces, with what
+/// this application holds beside them folded in — the brick cache and the
+/// drawing — so `in_use_bytes` is what the document is costing the process
+/// rather than the part of it the engine can walk. It is the figure the status
+/// area shows, read through the same meter, so an agent and a person cannot
+/// disagree about it.
+///
+/// `footprint` is what the operating system charges the process, where it
+/// could be read. Beside the ledger rather than in it: it is the figure the
+/// ledger is checked against, and one that also counts the code, the driver
+/// and the interface.
+pub fn memory_state(diagnostics: &Diagnostics, footprint: Option<u64>) -> Option<MemoryState> {
     let memory = diagnostics.memory.as_ref()?;
+    let drawing = &memory.drawing;
+    let part = |part: &str, bytes: u64| MemoryPart {
+        part: part.into(),
+        bytes,
+    };
     Some(MemoryState {
-        in_use_bytes: memory.total,
-        budget_bytes: budget,
-        // The status area's own figure, sent beside the ledger rather than
-        // reconciled with it. They count different things — this is the brick
-        // cache the budget bounds, above is the whole document with its
-        // surfaces — and reporting one as though it were the other is how a
-        // status area reading 0.00 GB and a report of 359 MB came to look like
-        // a defect in one of them.
-        cache_bytes,
+        in_use_bytes: memory.in_use(),
+        budget_bytes: memory.cache_budget,
+        // The brick cache on its own, which is the part the budget bounds.
+        // Named beside the whole rather than instead of it, so the budget is
+        // compared against what it actually limits.
+        cache_bytes: memory.cache_bytes,
+        footprint_bytes: footprint,
+        // The engine's three first, which `superfícies` overlaps — the
+        // surfaces are classified into them — and then the parts this
+        // application holds, which overlap nothing. `desenho` is the sum of
+        // the four `desenho/` rows after it.
         parts: vec![
-            MemoryPart {
-                part: "essencial".into(),
-                bytes: memory.essential,
-            },
-            MemoryPart {
-                part: "reconstruível".into(),
-                bytes: memory.rebuildable,
-            },
-            MemoryPart {
-                part: "desfazível".into(),
-                bytes: memory.undoable,
-            },
-            MemoryPart {
-                part: "superfícies".into(),
-                bytes: memory.surface_bytes,
-            },
+            part("essencial", memory.essential),
+            part("reconstruível", memory.rebuildable),
+            part("desfazível", memory.undoable),
+            part("superfícies", memory.surface_bytes),
+            part("cache", memory.cache_bytes),
+            part("desenho", drawing.total()),
+            part("desenho/geometria", drawing.geometry),
+            part("desenho/buffers", drawing.buffers),
+            part("desenho/staging", drawing.staging),
+            part("desenho/alvos", drawing.targets),
         ],
     })
 }
@@ -964,24 +970,63 @@ mod tests {
                 total: 60,
                 surfaces: 2,
                 surface_bytes: 40,
+                cache_bytes: 7,
+                cache_budget: 1024,
+                drawing: clayspace_model::DrawingMemory::default(),
             }),
             ..Diagnostics::default()
         };
-        let state = memory_state(&diagnostics, 7, 1024).unwrap();
-        assert_eq!(state.in_use_bytes, 60);
+        let state = memory_state(&diagnostics, Some(5000)).unwrap();
         assert_eq!(state.budget_bytes, 1024);
         assert_eq!(
             state.cache_bytes, 7,
-            "the status area's own figure travels beside the ledger, because \
-             the two count different things and were read as one"
+            "the part the budget bounds travels beside the whole, so the \
+             budget is compared against what it limits"
         );
-        assert_eq!(state.parts.len(), 4);
+        assert_eq!(state.footprint_bytes, Some(5000));
         assert!(state.parts.iter().any(|part| part.bytes == 30));
+    }
+
+    /// The defect: `in_use` was the engine's figure alone, and the cache and
+    /// everything the viewport holds to draw were never in it — 13 MB reported
+    /// against a 26 GB process. It is now the whole, with the host-owned
+    /// drawing listed as a part of its own so a caller can see where it is.
+    #[test]
+    fn in_use_counts_the_cache_and_the_drawing() {
+        let diagnostics = Diagnostics {
+            memory: Some(clayspace_model::MemoryDiagnostics {
+                total: 60,
+                cache_bytes: 7,
+                drawing: clayspace_model::DrawingMemory {
+                    geometry: 100,
+                    buffers: 200,
+                    staging: 300,
+                    targets: 400,
+                },
+                ..Default::default()
+            }),
+            ..Diagnostics::default()
+        };
+        let state = memory_state(&diagnostics, None).unwrap();
+        assert_eq!(state.in_use_bytes, 60 + 7 + 1000);
+        let bytes = |name: &str| {
+            state
+                .parts
+                .iter()
+                .find(|part| part.part == name)
+                .map(|part| part.bytes)
+        };
+        assert_eq!(bytes("desenho"), Some(1000));
+        assert_eq!(bytes("desenho/geometria"), Some(100));
+        assert_eq!(bytes("desenho/buffers"), Some(200));
+        assert_eq!(bytes("desenho/staging"), Some(300));
+        assert_eq!(bytes("desenho/alvos"), Some(400));
+        assert_eq!(bytes("cache"), Some(7));
     }
 
     #[test]
     fn a_build_with_no_ledger_reports_none_rather_than_zero() {
-        assert!(memory_state(&Diagnostics::default(), 7, 1024).is_none());
+        assert!(memory_state(&Diagnostics::default(), Some(1)).is_none());
     }
 
     #[test]

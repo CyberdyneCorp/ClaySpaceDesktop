@@ -3578,6 +3578,18 @@ and nothing in the application derives anything from it. Read per frame, it was
 touching the window. Opening another document takes a fresh reading at once,
 rather than showing the closed one's bytes under the new one's name.
 
+**The meter's number is everything the document holds; its bar is the cache.**
+The number is the one figure in use — the engine's report with the surfaces
+folded in, the brick cache, and what this application holds to draw — and it is
+the same reading an agent gets as `state.memory.in_use_bytes` and the
+diagnostics window shows, so no two of them can disagree. The bar beside it is
+the brick cache against the budget the cache was made with, with the two named
+on hover, because that budget bounds the cache and nothing else: a bar that
+filled with the whole figure would read as the budget running out when what
+grew was the viewport's buffers, which no budget limits. The number used to be
+the cache's payload alone, which on a worked document read 0.00 GB against a
+process holding gigabytes.
+
 **The representations stand above the viewport, as equals.** One card each: an
 icon of a distinct shape, the representation's name, and a phrase saying what it
 is. The active one is raised and railed, in the same grammar the active layer
@@ -4098,11 +4110,31 @@ standing cage and the last rebuild's piece count were all things a command
 could change and nothing could read back. Twice in the audit, state the report
 did not expose corrupted a test without the tester noticing.
 
-Two figures that were reported as one are now named apart. The status area
-shows the brick cache and the ledger shows the whole document with its
-surfaces; they count different things, and an agent comparing 0.00 GB against
-359 MB without being told which is which reads the difference as a defect.
-Making one figure of them, with host-owned memory in it, is separate work.
+**`memory.in_use_bytes` is what the document is costing the process.** It
+used to be the engine's ledger alone — the document and the surfaces handed to
+it — and against a process footprint it read 10x to 2,000x low: 13 MB against
+26 GB in one audited session, 225–359 MB against up to 3.84 GB in another.
+Everything the application holds to *draw* the document was in no figure. It
+is now the engine's figure, the brick cache, and the drawing, and `parts` says
+where: the engine's `essencial`, `reconstruível`, `desfazível` and
+`superfícies` (which overlap — the surfaces are classified into the first
+three), then `cache`, and `desenho` with its own four after it —
+`desenho/geometria` for the per-key copy of the surface the viewport draws
+from, `desenho/buffers` for vertex and index buffers at capacity,
+`desenho/staging` for writes the device may not have finished with, and
+`desenho/alvos` for the window's framebuffer, the shadow map and any capture
+target alive at the moment. `cache_bytes` is the cache on its own beside it,
+because `budget_bytes` bounds that and not the whole, and `footprint_bytes` is
+what the operating system charges the process, where it can be read.
+
+The footprint is always the larger — code, the graphics driver and freed
+memory the allocator has kept are in it and in no ledger — but it is bounded:
+when it passes twice the figure in use plus half a gigabyte for the process at
+rest, the application logs it with the ledger's breakdown, once and again each
+time it doubles. The 26 GB session would have been flagged as it passed 1 GB.
+Measured on the ten-times reference scene drawn once, the footprint grows by
+about 1.5 times what the ledger reports for it; `memory_ledger.rs` holds it to
+two.
 
 `scene.layers[].objects` counts the forms placed in the layer, on every
 representation. It used to be the length of the grid's recorded pass stack —
@@ -4399,6 +4431,15 @@ which sessions belong to this document, which is why the engine merges none —
 and calls `clay_document_memory_with_surfaces`. The row says how many sessions
 were asked as well as what they came to, so a surface tier of zero reads as
 *there are none* rather than as *nobody asked*.
+
+Then what the application holds beside the document, which the engine cannot
+see at all: *cache*, the brick cache's payload and its per-key bookkeeping, and
+*desenho*, what it holds to draw — the geometry the viewport keeps per key, and
+the buffers, staging and render targets the graphics device holds for it.
+*Em uso* is the sum of all of it, and it is the figure the status area shows.
+The geometry is measured where it is stored and the rest by the device's own
+gauge, which every buffer and target reports to when it is made and gives back
+to when it is dropped, so neither is an estimate from the document's size.
 
 **Esforço da pincelada** is where a stroke's milliseconds went, and it exists
 because the line above it cannot be acted on. A stall reported as *re-malha

@@ -245,6 +245,7 @@ impl Session for FakeSession {
                 in_use_bytes: 128 * 1024 * 1024,
                 budget_bytes: 2 * 1024 * 1024 * 1024,
                 cache_bytes: 128 * 1024 * 1024,
+                footprint_bytes: None,
                 parts: vec![MemoryPart {
                     part: "cache de blocos".into(),
                     bytes: 128 * 1024 * 1024,

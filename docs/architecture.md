@@ -574,6 +574,21 @@ in use. Three habits made it, and all three are gone:
 settle's writes may cost, and that a merged write places the same bytes at the
 same destinations as the separate ones did.
 
+**And what it holds, counted where it is allocated.** Fixing the churn stopped
+the 26 GB; it did not make the 13 MB true. The figure in use was the engine's
+ledger, which walks the document and the surfaces handed to it and nothing
+else, so the whole of the viewport's memory was invisible to it. `Gpu` now
+carries a gauge beside its traffic counters: every mesh buffer, framebuffer,
+shadow map and capture target takes a `Resident` when it is created, which
+adds its bytes and takes them back when it is dropped — held beside the
+allocation, so the two cannot come apart. Staging is the bytes written in the
+frames the device may not have finished with: the frame in progress and the
+one the last poll followed, since a poll collects what has finished and the
+device runs a frame behind. `SurfaceGeometry::resident_bytes` is the CPU copy,
+at capacity. `clayspace_app::memory::ledger` folds both into the engine's
+report beside the brick cache, and it is the only place that figure is put
+together.
+
 ## MVVM, mechanically
 
 A View function is a pure function of ViewModel state that emits commands. It

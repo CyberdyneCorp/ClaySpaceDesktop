@@ -112,6 +112,11 @@ pub struct BrickStats {
     pub memory_usage: u64,
     /// What the cache was created with; `None` is unlimited.
     pub memory_budget: Option<u64>,
+    /// What the per-key bookkeeping costs, which `memory_usage` does not
+    /// count: that one bounds the fp16 payloads against the budget, and this
+    /// grows with every key the cache has tracked whether or not it holds a
+    /// surface.
+    pub bookkeeping_bytes: u64,
 }
 
 /// Which vertices and indices one key contributed to a subset mesh.
@@ -332,6 +337,7 @@ impl BrickCache {
             dirty_bricks: raw.dirty_bricks,
             memory_usage: raw.memory_usage,
             memory_budget: (raw.memory_budget != 0).then_some(raw.memory_budget),
+            bookkeeping_bytes: raw.bookkeeping_bytes,
         })
     }
 

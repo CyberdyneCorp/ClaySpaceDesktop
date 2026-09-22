@@ -13,6 +13,7 @@
 
 pub mod camera;
 pub mod design;
+pub mod device_memory;
 pub mod frustum;
 pub mod glyphs;
 pub mod gpu;
@@ -31,6 +32,7 @@ pub mod window;
 
 pub use camera::{Camera, ViewPreset};
 pub use design::{contrast, Tokens};
+pub use device_memory::DeviceMemory;
 pub use frustum::Frustum;
 pub use gpu::{Framebuffer, Gpu, GpuError, MsaaQuality};
 pub use icons::Icon;
@@ -47,7 +49,7 @@ pub use renderer::{
     MeshSpan, Overlays, Reference, Renderer, ScreenMetric, SymmetryAxis, Vertex, RING_REACH,
     SCALE_BOX_REACH, VIEW_RING_REACH,
 };
-pub use shell::{apply_theme, ArmatureState, ShellState};
+pub use shell::{apply_theme, ArmatureState, MemoryFigures, ShellState};
 pub use shortcuts::{Action, Chord, Conflict, Key, Shortcuts};
 pub use strings::{Locale, Strings};
 pub use window::{SurfaceLoss, WindowSurface};

@@ -266,6 +266,17 @@ fn memory(json: &mut Json, diagnostics: &Diagnostics) {
     json.integer("total", memory.total);
     json.integer("surfaces_asked", memory.surfaces as u64);
     json.integer("surface_bytes", memory.surface_bytes);
+    // What this application holds beside the document, and the whole with it
+    // folded in — the figure the status area shows. Appended, so a reader of
+    // the fields above reads what it always did.
+    json.integer("cache_bytes", memory.cache_bytes);
+    json.object("drawing");
+    json.integer("geometry", memory.drawing.geometry);
+    json.integer("buffers", memory.drawing.buffers);
+    json.integer("staging", memory.drawing.staging);
+    json.integer("targets", memory.drawing.targets);
+    json.end();
+    json.integer("in_use", memory.in_use());
     json.end();
 }
 
