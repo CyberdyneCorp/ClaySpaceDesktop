@@ -3391,6 +3391,15 @@ inspectors — and, while either is up, the shapes and boolean sections — a br
 shelf, and a status area with a memory meter, the active backend and the
 working unit.
 
+**The memory meter is read once a second, not once a frame.** Asking the engine
+what the brick cache holds is a walk of every stored brick — `stats` reads like
+a counter and is not one — so the figure is held between readings and refreshed
+on a clock. A meter a second behind reads the same to a person as an exact one,
+and nothing in the application derives anything from it. Read per frame, it was
+83% of the idle main thread and about 200% CPU on a worked document with nobody
+touching the window. Opening another document takes a fresh reading at once,
+rather than showing the closed one's bytes under the new one's name.
+
 **The representations stand above the viewport, as equals.** One card each: an
 icon of a distinct shape, the representation's name, and a phrase saying what it
 is. The active one is raised and railed, in the same grammar the active layer
