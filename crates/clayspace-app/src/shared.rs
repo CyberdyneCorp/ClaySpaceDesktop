@@ -136,6 +136,10 @@ impl SculptModel for SharedDocument {
         self.document.borrow().active_layer_visible()
     }
 
+    fn active_layer_is_caged(&self) -> bool {
+        self.document.borrow().active_layer_is_caged()
+    }
+
     fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
         self.document.borrow().active_layer_stroke_lands_in_a_pass()
     }

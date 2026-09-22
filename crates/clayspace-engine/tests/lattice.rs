@@ -103,6 +103,32 @@ fn a_cage_wraps_the_form_rather_than_a_fixed_box() {
     }
 }
 
+/// A raised cage is reported to the sculpting half of the model as well.
+///
+/// The cage's own state was only ever asked through `LatticeModel`, which the
+/// viewport reads to decide where a press goes. That made the rule "a cage
+/// owns the form" a rule about *the pointer*: a caller reaching the sculpting
+/// ViewModel another way sculpted the caged layer. The ViewModel asks this
+/// question on the way into every stroke now, so the document has to answer
+/// it — and answer it again once the cage comes down.
+#[test]
+fn a_raised_cage_is_reported_to_the_sculpt_model() {
+    let mut document = meshed();
+    assert!(
+        !SculptModel::active_layer_is_caged(&document),
+        "no cage has been raised yet"
+    );
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    assert!(SculptModel::active_layer_is_caged(&document));
+
+    document.cancel_lattice();
+    assert!(
+        !SculptModel::active_layer_is_caged(&document),
+        "a cage taken down must give the form back"
+    );
+}
+
 #[test]
 fn dragging_the_cage_bends_a_mesh() {
     let mut document = meshed();

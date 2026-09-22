@@ -691,6 +691,47 @@ fn removing_the_selected_object_takes_the_manipulator_with_it() {
     assert!(vm.objects().get().is_empty());
 }
 
+/// Raising a cage takes the whole-subtool manipulator's target with it.
+///
+/// Both ViewModels answer the manipulator's commands, and which of them acts
+/// is decided by which one has a target. The cage was written on the
+/// assumption that raising one takes the object's target away, and nothing
+/// did it — so a cage raised over a selected object left two targets standing,
+/// and one drag both bent the cage and moved the object, which was hidden
+/// behind the cage drawn over it. Measured twice: a translate and a rotate,
+/// each of which changed two things.
+#[test]
+fn raising_a_cage_clears_the_object_target() {
+    let (mut vm, calls) = viewmodel();
+    place(&mut vm);
+    let object = vm.objects().get()[0].id;
+    send(&mut vm, Command::SelectObject(Some(object)));
+    assert_eq!(*vm.target().get(), Some(GizmoTarget::Object(object)));
+
+    send(&mut vm, Command::ToggleLattice);
+    assert_eq!(
+        *vm.target().get(),
+        None,
+        "a cage owns the widget, so nothing else may still be holding one"
+    );
+
+    // And a drag with the cage up reaches nothing here, which is the property
+    // the target was standing in the way of.
+    let before = calls.borrow().transforms.len();
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Axis(0), [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([1.0, 0.0, 0.0], false));
+    send(&mut vm, Command::EndGizmoDrag);
+    assert_eq!(
+        calls.borrow().transforms.len(),
+        before,
+        "the cage's drag must move the cage and nothing else"
+    );
+    assert_eq!(calls.borrow().drags_begun, 0);
+}
+
 #[test]
 fn the_list_is_watchable() {
     let (mut vm, _) = viewmodel();

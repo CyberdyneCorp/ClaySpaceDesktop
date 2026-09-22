@@ -552,6 +552,16 @@ impl SculptViewModel {
                 pressure,
                 modifiers,
             } => {
+                // A cage owns the form it stands around, and it owns it for
+                // every caller and not only for the pointer. The viewport
+                // already routes a press away from the brush while one is up;
+                // this is the same rule where the command arrives, so a
+                // caller that never touched a pointer meets it too.
+                if self.model.active_layer_is_caged() {
+                    return Err(ModelError::Unavailable(
+                        clayspace_model::Unavailable::LayerCaged,
+                    ));
+                }
                 // Refuse before collecting anything, so an unavailable tool
                 // cannot accumulate a gesture it will never apply.
                 self.ensure_tool_available()?;
