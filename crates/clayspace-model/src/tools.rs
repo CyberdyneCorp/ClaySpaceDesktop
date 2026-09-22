@@ -1100,6 +1100,40 @@ impl ToolNote {
     ];
 }
 
+/// A tool the layer switched to does not carry, and the one standing in for it.
+///
+/// Held for as long as the stand-in is in hand, and not only for the moment it
+/// arrived: a sculptor who moved to a field with Raspar and back to a grid gets
+/// Raspar back, because they never chose Planar, and an agent reading `state`
+/// after the switch has to be able to tell a tool it chose from one it was
+/// given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Substitution {
+    /// The tool the sculptor chose.
+    pub chosen: ToolKind,
+    /// The tool in hand instead, from [`ToolKind::substitute_on`].
+    pub standing_in: ToolKind,
+    /// Where `chosen` has no verb.
+    pub representation: Representation,
+}
+
+impl Substitution {
+    /// The substitution as an agent is told it, by the tools' stable keys.
+    ///
+    /// English and keyed rather than labelled, for the reason
+    /// [`SemanticIntent::label`] is: the sentence crosses the agent door, where
+    /// a tool is named by its key, and a translated label would be a name the
+    /// caller cannot hand back.
+    pub fn describe(self) -> String {
+        format!(
+            "tool '{}' has no verb on {} layers; '{}' stands in for it until a tool is chosen",
+            self.chosen.key(),
+            self.representation.label(),
+            self.standing_in.key()
+        )
+    }
+}
+
 /// Why a tool cannot be used right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unavailable {
@@ -1886,6 +1920,80 @@ impl ToolKind {
             .collect()
     }
 
+    /// The act this tool is, wherever it is offered.
+    ///
+    /// Read off the first binding it has, which is enough because every
+    /// binding of one tool declares the same intent —
+    /// `a_tool_means_one_thing_wherever_it_is_offered` holds that. `None` only
+    /// for a tool bound nowhere, which the shelf would never show.
+    pub fn intent(self) -> Option<SemanticIntent> {
+        Representation::ALL
+            .into_iter()
+            .find_map(|representation| self.binding_on(representation))
+            .map(|binding| binding.intent)
+    }
+
+    /// The tool that stands in for this one on `representation`.
+    ///
+    /// Itself wherever it is offered: a tool the new layer carries is kept,
+    /// because the sculptor chose it and nothing about the switch unchose it.
+    ///
+    /// Where it is absent, the substitute is read off the capability table
+    /// rather than out of a list written beside it, so a tool added to a row
+    /// is a candidate the moment it is bound. In order:
+    ///
+    /// 1. a tool that means the **same act** here — the same
+    ///    [`SemanticIntent`] — and whose binding is the representation's own
+    ///    verb for it ([`Fidelity::Native`]). A grid has no topological drag,
+    ///    so Mover Topológico falls to Mover; a field has no Raspar, so it
+    ///    falls to Planar; a grid has no Polir, so it falls to Raspar, the
+    ///    grid's own flatten, ahead of its two-sided Planar;
+    /// 2. failing that, a tool meaning the same act in any fidelity — a
+    ///    stand-in the table already says is close enough to offer;
+    /// 3. failing both, the shelf's first tool on this representation, which
+    ///    is Padrão everywhere — the plainest deposit there is, and the one a
+    ///    sculptor told "your tool is not here" is least surprised to find in
+    ///    hand.
+    ///
+    /// Two kinds of candidate are never a substitute, whatever their intent:
+    ///
+    /// - one driven by a **different gesture**. Trim and Apagar both take
+    ///   material away, but Trim is a shape drawn on the frame and Apagar a
+    ///   stroke over the surface, and a stand-in the sculptor's hand does not
+    ///   already know how to use is not standing in for anything;
+    /// - one that **refuses the layer until a pass is selected**. The removal
+    ///   a hierarchy has is its eraser, which on the form row refuses and on a
+    ///   pass row takes that pass's detail to zero — a stand-in that either
+    ///   does nothing or does something else entirely.
+    ///
+    /// Deterministic: it depends on the tool and the representation alone,
+    /// never on what the layer happens to be set to, so the same switch always
+    /// lands on the same tool and the rule can be written down.
+    pub fn substitute_on(self, representation: Representation) -> ToolKind {
+        if self.exists_on(representation) {
+            return self;
+        }
+        let offered = Self::for_representation(representation);
+        let intent = self.intent();
+        let binding = |tool: ToolKind| tool.binding_on(representation);
+        let stands_in = |tool: &&ToolKind| {
+            tool.is_stroke_tool() == self.is_stroke_tool()
+                && !tool.needs_a_pass_on(representation)
+                && binding(**tool).is_some_and(|here| Some(here.intent) == intent)
+        };
+        let native = |tool: &&ToolKind| {
+            binding(**tool).is_some_and(|here| here.fidelity == Fidelity::Native)
+        };
+        offered
+            .iter()
+            .filter(stands_in)
+            .find(native)
+            .or_else(|| offered.iter().find(stands_in))
+            .or_else(|| offered.first())
+            .copied()
+            .unwrap_or(self)
+    }
+
     /// Whether this tool can be applied to a layer, and why not if it cannot.
     ///
     /// The absent case is still an error here, because a caller that asks
@@ -2049,8 +2157,10 @@ impl ViewPresetKind {
 
 /// What a brush is set to.
 ///
-/// Held per tool, so switching away and back returns the settings the user
-/// left rather than a default.
+/// Held per tool *and* per representation, so switching away and back returns
+/// the settings the user left there rather than a default, and a layer of one
+/// representation never starts out with a size set on another. What a slot
+/// holds before anything is set is [`BrushSettings::default_for`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrushSettings {
     /// Radius in **document units**, not pixels.
@@ -2398,6 +2508,38 @@ fn turn_of(radians: f32) -> f32 {
 }
 
 impl BrushSettings {
+    /// What a tool starts out set to on a layer of `representation`, before
+    /// the sculptor has set anything there.
+    ///
+    /// The value a brush has on a representation it has never been used on,
+    /// and the reason it is stated per representation rather than carried
+    /// over: the one thing a carried-over value is guaranteed to be is right
+    /// for somewhere else. That is how a grid layer came to be stroked at a
+    /// field's size of 100, a dab a metre across (#162, #217).
+    ///
+    /// The four agree today, and each arm says why the number suits it rather
+    /// than leaving the agreement to be assumed. A size is a radius in
+    /// document units on every representation — the grid's footprint is
+    /// converted from it, so the same number reaches as far everywhere — and
+    /// what differs is where each representation stops being able to show it:
+    pub fn default_for(representation: Representation) -> Self {
+        match representation {
+            // Above the floor a field can show at all. 0.10 is the measured
+            // smallest radius whose dab survives marching cubes on the brick
+            // cache's 0.02 voxel; 0.18 sits well clear of it. See `default`.
+            Representation::Sdf => Self::default(),
+            // Nine cells of radius on the default 0.02 grid, so a footprint of
+            // nineteen across — odd, as every span is, and a third of the way
+            // to the 63-cell ceiling past which a grid dab stops growing. A
+            // size that left room above it for the sculptor to go bigger.
+            Representation::Voxel => Self::default(),
+            // A mesh and a hierarchy stamp over the vertices in reach, with no
+            // floor of their own. They take the field's size so that a crossing
+            // from a field lands with a brush of the reach the sculptor had.
+            Representation::Mesh | Representation::Multires => Self::default(),
+        }
+    }
+
     /// Clamps to the ranges the engine accepts.
     ///
     /// A zero or negative radius is rejected by the engine, so it is clamped
@@ -2691,6 +2833,134 @@ mod tests {
                     ),
                 }
             }
+        }
+    }
+
+    /// A switch never leaves a tool in hand that the layer cannot run, and a
+    /// tool the layer can run is never swapped.
+    #[test]
+    fn every_substitute_is_a_tool_the_layer_carries() {
+        for tool in ToolKind::ALL {
+            for representation in Representation::ALL {
+                let substitute = tool.substitute_on(representation);
+                assert!(
+                    substitute.exists_on(representation),
+                    "{} on {} fell to {}, which is not on that shelf either",
+                    tool.label(),
+                    representation.label(),
+                    substitute.label()
+                );
+                if tool.exists_on(representation) {
+                    assert_eq!(
+                        substitute,
+                        tool,
+                        "{} was swapped out of a layer that has it",
+                        tool.label()
+                    );
+                }
+                assert!(
+                    !substitute.needs_a_pass_on(representation) || substitute == tool,
+                    "{} on {} fell to {}, which refuses the form row",
+                    tool.label(),
+                    representation.label(),
+                    substitute.label()
+                );
+            }
+        }
+    }
+
+    /// The substitute is read off the table: the same act where the layer has
+    /// one, and the plainest deposit where it has none.
+    ///
+    /// The rows named here are the ones a sculptor meets; a table edit that
+    /// moves one of them fails here, and the documentation that lists them is
+    /// what has to follow.
+    #[test]
+    fn a_substitute_means_the_same_act_where_the_layer_has_one() {
+        use Representation::*;
+        let cases = [
+            (ToolKind::Raspar, Sdf, ToolKind::Planar),
+            (ToolKind::MoverTopologico, Voxel, ToolKind::Mover),
+            (ToolKind::Puxar, Voxel, ToolKind::Mover),
+            (ToolKind::Relaxar, Voxel, ToolKind::Suavizar),
+            (ToolKind::Polir, Voxel, ToolKind::Raspar),
+            (ToolKind::Nudge, Sdf, ToolKind::Mover),
+            (ToolKind::Borrar, Voxel, ToolKind::Pintar),
+            // Both remove material, but one is a frame gesture and the other a
+            // stroke, so neither stands in for the other.
+            (ToolKind::Trim, Voxel, ToolKind::Padrao),
+            (ToolKind::Apagar, Sdf, ToolKind::Padrao),
+            // A mesh removes nothing, since its topology does not change.
+            (ToolKind::Apagar, Mesh, ToolKind::Padrao),
+            (ToolKind::Preencher, Sdf, ToolKind::Padrao),
+            (ToolKind::Pintar, Sdf, ToolKind::Padrao),
+        ];
+        for (tool, representation, expected) in cases {
+            assert_eq!(
+                tool.substitute_on(representation),
+                expected,
+                "{} on {}",
+                tool.label(),
+                representation.label()
+            );
+        }
+        for tool in ToolKind::ALL {
+            for representation in Representation::ALL {
+                let substitute = tool.substitute_on(representation);
+                let same_act = ToolKind::for_representation(representation)
+                    .into_iter()
+                    .any(|other| {
+                        other.intent() == tool.intent()
+                            && other.is_stroke_tool() == tool.is_stroke_tool()
+                            && !other.needs_a_pass_on(representation)
+                    });
+                if same_act {
+                    assert_eq!(
+                        substitute.intent(),
+                        tool.intent(),
+                        "{} on {} fell to {} although the layer has a tool for the same act",
+                        tool.label(),
+                        representation.label(),
+                        substitute.label()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every representation's first tool is the one the fallback lands on,
+    /// and it is the same one everywhere — so "no tool for that act here"
+    /// always means the same thing to a sculptor.
+    #[test]
+    fn the_fallback_is_the_same_tool_on_every_representation() {
+        for representation in Representation::ALL {
+            assert_eq!(
+                ToolKind::for_representation(representation).first(),
+                Some(&ToolKind::Padrao),
+                "{}",
+                representation.label()
+            );
+        }
+    }
+
+    /// A default a representation cannot show is a first dab that does nothing
+    /// visible, and one past its ceiling is a dab that does not grow with the
+    /// control. Each representation's default sits inside both.
+    #[test]
+    fn every_default_brush_fits_its_representation() {
+        const FIELD_FLOOR: f32 = 0.10;
+        // 31 cells of radius on the default 0.02 grid: the 63-cell ceiling.
+        const GRID_CEILING: f32 = 0.62;
+        for representation in Representation::ALL {
+            let brush = BrushSettings::default_for(representation);
+            assert_eq!(brush, brush.sanitized(), "{}", representation.label());
+            assert!(
+                brush.size > FIELD_FLOOR && brush.size < GRID_CEILING,
+                "{} starts at {}",
+                representation.label(),
+                brush.size
+            );
+            assert!(!brush.invert, "a brush does not start out inverted");
         }
     }
 
