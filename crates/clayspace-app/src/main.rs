@@ -250,6 +250,68 @@ enum CurvePress {
     Append,
 }
 
+/// What the status area shows for memory, and when it was read.
+///
+/// `BrickCache::stats` is not the counter read its name suggests. The engine's
+/// C binding fills `surface_bricks` by building a vector of every stored key
+/// and taking its length, so one call is one allocation and one walk of the
+/// whole cache — a cost proportional to the sculpture, paid whether or not
+/// anything changed. The status bar asked for it on every redraw, which on a
+/// worked document put 83% of main-thread samples inside that walk and left an
+/// application with nobody touching it burning about 200% CPU (#167).
+///
+/// So it is read on a clock instead. The figure is a meter beside a progress
+/// bar: a second behind reads the same to a person as exact, nothing else in
+/// the application derives anything from it, and one walk a second is a cost
+/// no sculpture can make matter.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct MemoryMeter {
+    /// Bytes in use and the budget, as last read.
+    figures: (u64, u64),
+    /// When they were read. `None` before the first reading, and again
+    /// whenever the document they describe has been replaced.
+    taken: Option<Instant>,
+}
+
+impl MemoryMeter {
+    /// How stale the figure may be before it is read again.
+    const INTERVAL: Duration = Duration::from_secs(1);
+
+    /// The figures to show, taking a fresh reading only when the last has aged
+    /// out.
+    ///
+    /// `now` is passed in rather than read here so the frame's own clock is
+    /// what decides — the redraw already has one — and so this can be driven
+    /// through an hour of frames in a test without sleeping through them.
+    ///
+    /// A reading that fails keeps the previous figures rather than showing
+    /// zeroes: a cache that cannot answer has not thereby freed its memory.
+    /// The stamp still moves, so a cache that answers no longer is asked once
+    /// a second rather than once a frame.
+    fn figures(&mut self, now: Instant, read: impl FnOnce() -> Option<(u64, u64)>) -> (u64, u64) {
+        if self
+            .taken
+            .is_some_and(|taken| now.duration_since(taken) < Self::INTERVAL)
+        {
+            return self.figures;
+        }
+        self.taken = Some(now);
+        if let Some(figures) = read() {
+            self.figures = figures;
+        }
+        self.figures
+    }
+
+    /// Forgets the reading, so the next frame takes a fresh one.
+    ///
+    /// For the paths that replace the document outright — opening a file,
+    /// resetting — where what is on screen is another document's memory and
+    /// waiting out the interval would show it against the new one's name.
+    fn forget(&mut self) {
+        self.taken = None;
+    }
+}
+
 struct App {
     document: SharedDocument,
     sculpt: SculptViewModel,
@@ -389,6 +451,12 @@ struct App {
     /// happened in it was a copy.
     show_diagnostics: bool,
     diagnostics_copied: bool,
+    /// The status area's memory figure, read on a clock rather than per frame.
+    ///
+    /// Here rather than at the call site because the figure has to outlive the
+    /// frame that read it — that is the whole point of it — and because the
+    /// document-swap path is what tells it to forget.
+    memory_meter: MemoryMeter,
 
     /// Where session state lives, when this machine has somewhere to put it.
     store: Option<SessionStore>,
@@ -728,6 +796,7 @@ impl App {
             skin_preview: true,
             show_diagnostics: false,
             diagnostics_copied: false,
+            memory_meter: MemoryMeter::default(),
             store,
             recent,
             autosave: AutosavePolicy::default(),
@@ -1719,6 +1788,10 @@ impl App {
         self.mesh_revision = None;
         self.mask_revision = None;
         self.cage_revision = None;
+        // For the same reason, and with the same word for it: the figure in
+        // the status area is the closed document's memory, and its clock would
+        // hold it there for up to a second beside the new document's name.
+        self.memory_meter.forget();
         self.sync_mesh_layers();
         self.frame_all();
     }
@@ -4699,6 +4772,22 @@ impl App {
         self.rigging = self.rigging && self.armature.is_rigging();
     }
 
+    /// Bytes in use and the budget, for the status area's meter.
+    ///
+    /// The engine is asked at most once a second, because asking it walks the
+    /// whole brick cache — see [`MemoryMeter`], which is where that story is
+    /// told. The document handle is cloned out first so the closure borrows
+    /// the document rather than all of `self`; it is two reference counts, not
+    /// a document.
+    fn memory_figures(&mut self, now: Instant) -> (u64, u64) {
+        let document = self.document.clone();
+        self.memory_meter.figures(now, || {
+            document
+                .with(|document| document.cache().stats().ok())
+                .map(|stats| (stats.memory_usage, stats.memory_budget.unwrap_or(0)))
+        })
+    }
+
     fn redraw(&mut self) {
         let frame_started = Instant::now();
         let Some(window) = self.window.clone() else {
@@ -4741,11 +4830,7 @@ impl App {
             .map(|g| g.renderer.matcap().label())
             .unwrap_or("");
         let backend = self.policy.active().to_string();
-        let memory = self
-            .document
-            .with(|document| document.cache().stats().ok())
-            .map(|stats| (stats.memory_usage, stats.memory_budget.unwrap_or(0)))
-            .unwrap_or((0, 0));
+        let memory = self.memory_figures(frame_started);
         let document_name = self.document_vm.name().get().clone();
         let last = self.sculpt.last_action().get().clone();
         let history = *self.sculpt.history().get();
@@ -6212,13 +6297,11 @@ impl Session for App {
                 StrokeSection::Skipped
             });
             if query.memory {
-                // The engine's own accounting, read the way the status area
-                // reads it, so an agent and a person cannot disagree.
-                let budget = self
-                    .document
-                    .with(|document| document.cache().stats().ok())
-                    .and_then(|stats| stats.memory_budget)
-                    .unwrap_or(0);
+                // The engine's own accounting, read through the same meter the
+                // status area reads, so an agent and a person cannot disagree
+                // — and so an agent polling this does not put back the
+                // per-call walk of the brick cache that the meter took out.
+                let budget = self.memory_figures(Instant::now()).1;
                 state.memory = report::memory_state(&diagnostics, budget);
             }
             if query.timing {
@@ -6445,6 +6528,111 @@ impl Session for App {
 /// that gesture ends pays it.
 fn settle_is_due(owed: bool, gesture_open: bool) -> bool {
     owed && !gesture_open
+}
+
+#[cfg(test)]
+mod memory_meter {
+    use super::MemoryMeter;
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    /// A meter and a counted reading, so a test can say how many walks of the
+    /// brick cache a run of frames paid for.
+    fn frame(meter: &mut MemoryMeter, at: Instant, reads: &Cell<usize>) -> (u64, u64) {
+        meter.figures(at, || {
+            reads.set(reads.get() + 1);
+            Some((7, 11))
+        })
+    }
+
+    /// The defect: the status bar asked the engine for this on every redraw,
+    /// and answering means walking the whole brick cache. Sixty frames of an
+    /// application nobody is touching bought sixty identical answers, at about
+    /// 200% CPU on a worked document (#167).
+    #[test]
+    fn brick_stats_are_not_recomputed_without_a_change() {
+        let reads = Cell::new(0);
+        let mut meter = MemoryMeter::default();
+        let started = Instant::now();
+
+        assert_eq!(frame(&mut meter, started, &reads), (7, 11));
+        assert_eq!(
+            frame(&mut meter, started + Duration::from_millis(16), &reads),
+            (7, 11),
+            "the second frame must show the first frame's figure"
+        );
+        assert_eq!(
+            reads.get(),
+            1,
+            "two frames inside the interval walked the cache {} times",
+            reads.get()
+        );
+    }
+
+    /// A whole second of frames is still one walk, whatever the frame rate.
+    #[test]
+    fn a_second_of_frames_is_one_reading() {
+        let reads = Cell::new(0);
+        let mut meter = MemoryMeter::default();
+        let started = Instant::now();
+        for frames in 0..60 {
+            frame(
+                &mut meter,
+                started + Duration::from_millis(frames * 16),
+                &reads,
+            );
+        }
+        assert_eq!(reads.get(), 1);
+    }
+
+    /// And the figure is not frozen: a change is on screen within a second of
+    /// happening, which is what makes the meter honest.
+    #[test]
+    fn the_figure_is_read_again_once_it_has_aged_out() {
+        let reads = Cell::new(0);
+        let mut meter = MemoryMeter::default();
+        let started = Instant::now();
+        frame(&mut meter, started, &reads);
+        frame(&mut meter, started + MemoryMeter::INTERVAL, &reads);
+        assert_eq!(reads.get(), 2);
+    }
+
+    /// Opening another document does not wait out the clock: the figure on
+    /// screen belongs to the document that was just closed.
+    #[test]
+    fn a_replaced_document_is_read_at_once() {
+        let reads = Cell::new(0);
+        let mut meter = MemoryMeter::default();
+        let started = Instant::now();
+        frame(&mut meter, started, &reads);
+        meter.forget();
+        frame(&mut meter, started + Duration::from_millis(16), &reads);
+        assert_eq!(reads.get(), 2);
+    }
+
+    /// A cache that cannot answer has not thereby freed its memory, so the
+    /// last figure stands rather than the meter dropping to zero — and the
+    /// failed call still costs one reading rather than one per frame.
+    #[test]
+    fn a_reading_that_fails_keeps_the_last_figure() {
+        let mut meter = MemoryMeter::default();
+        let started = Instant::now();
+        assert_eq!(meter.figures(started, || Some((3, 9))), (3, 9));
+        let refusals = Cell::new(0);
+        let mut refused = |at: Instant| {
+            meter.figures(at, || {
+                refusals.set(refusals.get() + 1);
+                None
+            })
+        };
+        assert_eq!(refused(started + MemoryMeter::INTERVAL), (3, 9));
+        assert_eq!(refused(started + MemoryMeter::INTERVAL), (3, 9));
+        assert_eq!(
+            refusals.get(),
+            1,
+            "a cache that stopped answering must not be asked once a frame"
+        );
+    }
 }
 
 #[cfg(test)]
