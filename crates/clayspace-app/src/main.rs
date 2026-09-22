@@ -968,7 +968,15 @@ impl App {
     /// Every channel a remark arrives on — something that *did* happen, said
     /// beside the answer rather than in place of it.
     fn remark_channels(&self) -> [&Observable<Option<String>>; NOTICE_REMARK_CHANNELS] {
-        [self.sculpt.tool_status(), self.mask.remark()]
+        [
+            self.sculpt.tool_status(),
+            self.mask.remark(),
+            // A shape parameter the field brought back inside its bounds. A
+            // remark and not a refusal: the number was taken, at a value the
+            // sculptor did not type, and a door that answered this as an error
+            // would report a placement that happened as one that did not.
+            self.objects.remark(),
+        ]
     }
 
     /// How many times each channel a refusal or a notice arrives on has been
@@ -5928,7 +5936,7 @@ const NOTICE_REFUSAL_CHANNELS: usize = 15;
 
 /// How many channels carry a remark — something that did happen, said beside
 /// the answer rather than in place of it.
-const NOTICE_REMARK_CHANNELS: usize = 2;
+const NOTICE_REMARK_CHANNELS: usize = 3;
 
 /// How many channels a refusal or a remark can arrive on.
 const NOTICE_CHANNELS: usize = NOTICE_REFUSAL_CHANNELS + NOTICE_REMARK_CHANNELS;
@@ -6964,18 +6972,23 @@ mod tests {
     fn a_substituted_tool_is_a_remark_and_not_a_refusal() {
         let (refused, notices) = notices_written(
             [(false, None); NOTICE_REFUSAL_CHANNELS],
-            [(true, Some("Padrão no lugar de Raspar")), (false, None)],
+            [
+                (true, Some("Padrão no lugar de Raspar")),
+                (false, None),
+                (false, None),
+            ],
         );
         assert_eq!(refused, None);
         assert_eq!(notices, vec!["Padrão no lugar de Raspar".to_string()]);
     }
 
-    /// Two remarks written by one command are two sentences, not one.
+    /// Every remark written by one command is its own sentence.
     ///
     /// The remark channels do not compete the way the refusal channels do: a
-    /// substituted tool and a mask that froze nothing are separate things that
-    /// both happened, and dropping either leaves the caller looking in the
-    /// history for something nobody mentioned.
+    /// substituted tool, a mask that froze nothing and a size the field
+    /// brought back inside its bounds are separate things that all happened,
+    /// and dropping any of them leaves the caller looking in the history for
+    /// something nobody mentioned.
     #[test]
     fn every_remark_written_is_carried_beside_the_answer() {
         let (refused, notices) = notices_written(
@@ -6983,6 +6996,10 @@ mod tests {
             [
                 (true, Some("Padrão no lugar de Raspar")),
                 (true, Some("a máscara não congelou nada")),
+                (
+                    true,
+                    Some("radius reaches 4.08 here, not the 400 asked for"),
+                ),
             ],
         );
         assert_eq!(refused, None);
@@ -6991,6 +7008,7 @@ mod tests {
             vec![
                 "Padrão no lugar de Raspar".to_string(),
                 "a máscara não congelou nada".to_string(),
+                "radius reaches 4.08 here, not the 400 asked for".to_string(),
             ]
         );
     }

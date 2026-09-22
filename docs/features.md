@@ -2075,6 +2075,36 @@ combo boxes take the panel's width rather than the fixed width the window gave
 them, and the selected object's three combine chips wrap where Interseção does
 not fit the panel's row.
 
+**Every size is bounded by what the document can hold.** The largest a
+half-extent or a radius may be is **4.08** — and that number is the brick
+cache's, not a preference. A brick spans 0.16 world units and its padded
+lattice costs 4 KB to fill, so a 512 MB cache covers about 134,000 of them,
+which is fifty-one bricks along each side of a cube. A form at the bound fills
+the cache; one past it cannot be drawn at all.
+
+It was a flat `10.0` before, chosen for "room to place something large beside
+the reference form" and measured against nothing. A sphere at radius 4 was
+comfortably inside it and added 4.5M triangles in a single insert; the session
+that did it reached 26 GB and never came back. A size past the bound now comes
+back at the bound, and the panel says which number it used rather than quietly
+answering a different one.
+
+**The form is priced as well as the numbers**, because clamping each number is
+not a bound on the form: a torus with both radii at the bound has a box four
+times as wide as one of them. Before anything is placed, the box the form fills
+is measured against the same cache and refused over it, naming both figures —
+and refused *before*, so a refusal leaves no item, no undo entry and no region
+to recover from. Inserting as a subtool, inserting into the active layer and
+re-measuring a form already placed all pay the same price, so none of the three
+is the way round the other two. The region is measured per axis rather than as
+a cube of the longest side, which is what keeps a long thin cylinder placeable.
+
+A curve's **Espessura** is priced the same way, against the box its tube would
+fill. That number had no upper bound at all — it was clamped to a minimum and
+to nothing above — so `curve/set_radius 5` was taken, and took thirty seconds
+and 4.5 GB with it. A thickness over the bound is now refused before a single
+control point is written, so the guide keeps the thickness it had.
+
 **The three booleans are chips, with the two discs on them.** Unir, Subtrair
 and Interseção are what a placed shape is for, so they stand as a row above the
 full list of operations — the outline of both discs, the crescent one leaves,

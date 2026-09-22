@@ -382,6 +382,13 @@ pub enum ModelError {
     /// has to be able to say *which* of the two subtools is the problem and a
     /// sentence the adapter formatted cannot be asked that afterwards.
     Boolean(crate::boolean::BooleanRefusal),
+    /// The edit would fill more of the field than this document can hold.
+    ///
+    /// Its own variant for the reason `Conversion` is one: a sculptor told
+    /// "that form is larger than the document" reaches for the size control,
+    /// and an agent reading a sentence the adapter formatted cannot be asked
+    /// afterwards which figure it was.
+    Field(crate::field::FieldRefusal),
 }
 
 impl std::fmt::Display for ModelError {
@@ -391,6 +398,7 @@ impl std::fmt::Display for ModelError {
             Self::Engine(why) => f.write_str(why),
             Self::Conversion(why) => write!(f, "{why}"),
             Self::Boolean(why) => write!(f, "{why}"),
+            Self::Field(why) => write!(f, "{why}"),
         }
     }
 }

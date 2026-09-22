@@ -7,8 +7,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    Combine, CombineSettings, DocumentModel, ObjectModel, Representation, SceneModel, SculptModel,
-    Shape,
+    Combine, CombineSettings, DocumentModel, FieldRefusal, ModelError, ObjectModel, Representation,
+    SceneModel, SculptModel, Shape,
 };
 
 fn document() -> ClayDocument {
@@ -1294,4 +1294,108 @@ fn moving_a_squashed_subtool_leaves_it_squashed() {
         "the narrow route takes one factor and says so; it writes a whole \
          transform and the squash goes with it"
     );
+}
+
+/// A form larger than the field can hold is refused, and refused *first*.
+///
+/// The parameters are each inside their own bound — they are clamped to it on
+/// the way in — and the form they describe is not: a torus is a ring, so its
+/// box is twice the major radius plus the tube either side, which at the bound
+/// is four times what one parameter allows. Clamping each number is therefore
+/// not a bound on the placement, and this is the price that is.
+///
+/// Refused before anything is placed, so there is no item, no history entry
+/// and no dirty region to recover from. That last part is what the measured
+/// defect was: the insert was accepted and the application spent the session
+/// finding out what it had agreed to.
+#[test]
+fn an_oversized_insert_is_refused_and_changes_nothing() {
+    let mut document = document();
+    let before = document.objects().len();
+    let history = SculptModel::history(&document).depth;
+
+    // Both radii at the largest a parameter allows, taken from the table
+    // rather than written down, so the test says what it means and survives
+    // the cache being re-tuned.
+    let huge = Shape::Torus.sanitised(&[f32::MAX, f32::MAX]);
+    let refused = document
+        .place_object(
+            Shape::Torus,
+            &huge,
+            [0.0, 0.0, 0.0],
+            CombineSettings::default(),
+        )
+        .expect_err("a torus larger than the document was placed");
+    assert!(
+        matches!(
+            refused,
+            ModelError::Field(FieldRefusal::RegionOverBudget { .. })
+        ),
+        "refused for the wrong reason: {refused}"
+    );
+    // The sentence names both figures, because a refusal a sculptor cannot
+    // act on is a refusal that will be repeated.
+    let said = refused.to_string();
+    assert!(said.contains("past the"), "the refusal said {said:?}");
+
+    assert_eq!(
+        document.objects().len(),
+        before,
+        "an object was left behind"
+    );
+    assert_eq!(
+        SculptModel::history(&document).depth,
+        history,
+        "a refused placement cost the history an entry"
+    );
+
+    // A subtool of its own is the same bricks, so it cannot be the way round.
+    let refused = document
+        .insert_shape_subtool(
+            Shape::Torus,
+            &huge,
+            [0.0, 0.0, 0.0],
+            CombineSettings::default(),
+        )
+        .expect_err("a torus larger than the document arrived as a subtool");
+    assert!(matches!(
+        refused,
+        ModelError::Field(FieldRefusal::RegionOverBudget { .. })
+    ));
+
+    // And neither is re-measuring one that is already placed.
+    let id = document
+        .place_object(
+            Shape::Torus,
+            &Shape::Torus.defaults(),
+            [0.0, 0.0, 0.0],
+            CombineSettings::default(),
+        )
+        .expect("a torus at its default size was refused");
+    let refused = document
+        .set_object_shape(id, Shape::Torus, &huge)
+        .expect_err("a placed torus was grown past the document");
+    assert!(matches!(
+        refused,
+        ModelError::Field(FieldRefusal::RegionOverBudget { .. })
+    ));
+}
+
+/// The bound is on the region and not on the longest side, so a long thin form
+/// is still placeable.
+///
+/// The cheap bound — a cube of the largest parameter — would have refused
+/// this, and a sculptor who cannot place a tall thin cylinder has been given a
+/// worse tool to fix a bug they never hit.
+#[test]
+fn a_long_thin_form_is_still_placed() {
+    let mut document = document();
+    document
+        .place_object(
+            Shape::Cylinder,
+            &[0.1, 4.0],
+            [0.0, 0.0, 0.0],
+            CombineSettings::default(),
+        )
+        .expect("a tall thin cylinder was refused");
 }

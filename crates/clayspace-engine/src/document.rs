@@ -13,7 +13,7 @@ use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BooleanOp, BooleanRefusal, BooleanSettings,
     BrushSettings, Combine, CombineSettings, ConversionSettings, Cost, CurveJoin, CurveModel,
     CurvePoint, CurveProfile, CurveState, CutGesture, Direction, DocumentModel, DrawnCut,
-    EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format,
+    EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, FieldBudget, Format,
     GestureSample, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, HistoryState, ImportAs,
     ImportSettings, Inserted, ItemKind, LatticeModel, LatticeState, LayerKey, LayerSummary,
     MaskModel, MaskOp, MaskOutline, MaskState, ModelError, NodeIndex, ObjectId, ObjectModel,
@@ -22,7 +22,7 @@ use clayspace_model::{
 };
 
 use crate::backend::{BackendPolicy, Operation};
-use crate::objects::{kind_of, primitive_of, union, PlacedObject};
+use crate::objects::{extent_of, kind_of, primitive_of, union, PlacedObject};
 
 /// The engine's op for a combine operation.
 ///
@@ -2069,6 +2069,41 @@ impl ClayDocument {
     /// A palette index and the bookkeeping around it. Approximate on purpose:
     /// it decides whether to refuse a resolution, not what to allocate.
     const BYTES_PER_CELL: u64 = 4;
+
+    /// What the brick cache can hold, as the domain prices a region against
+    /// it.
+    ///
+    /// Read from the cache this document actually created rather than from
+    /// [`FieldBudget::DEFAULT`], which is what the static parameter tables
+    /// have to assume before any document exists. A document opened with a
+    /// different budget is priced against the budget it has.
+    fn field_budget(&self) -> FieldBudget {
+        let config = self.cache.config();
+        FieldBudget {
+            voxel_size: config.voxel_size,
+            brick_dim: config.dim.max(1) as u32,
+            budget_bytes: self
+                .cache
+                .stats()
+                .ok()
+                .and_then(|stats| stats.memory_budget)
+                .unwrap_or(u64::MAX),
+        }
+    }
+
+    /// Refuses a region this document's cache could not hold.
+    ///
+    /// Asked *before* the edit runs, which is the whole of the point: a
+    /// crossing is priced before it rasterizes and a hierarchy's level before
+    /// it subdivides, and the two commands that can multiply a document's size
+    /// in one go — placing a form, thickening a curve — were the two with no
+    /// price attached. Finding out afterwards costs the session, because
+    /// afterwards is tens of seconds of refilling and gigabytes of bricks.
+    fn afford_region(&self, extent: [f32; 3]) -> Result<(), ModelError> {
+        self.field_budget()
+            .within(extent)
+            .map_err(ModelError::Field)
+    }
 
     /// The region a conversion would cover, and what it would cost there.
     ///
@@ -11584,23 +11619,38 @@ impl CurveModel for ClayDocument {
     }
 
     fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
-        let Some(curve) = self.curve.as_mut() else {
+        let Some(curve) = self.curve.as_ref() else {
             return Ok(());
         };
         let radius = radius.max(1e-3);
         // The selection where there is one, and the whole curve where there is
         // not: setting a thickness with nothing picked means the tube, not
         // nothing.
-        if curve.selection.is_empty() {
-            for point in curve.points.iter_mut() {
-                point.radius = radius;
-            }
-        } else {
-            for index in curve.selection.clone() {
-                if let Some(point) = curve.points.get_mut(index) {
-                    point.radius = radius;
-                }
-            }
+        let widened: Vec<CurvePoint> = curve
+            .points
+            .iter()
+            .enumerate()
+            .map(|(index, point)| CurvePoint {
+                radius: if curve.selection.is_empty()
+                    || curve.selection.binary_search(&index).is_ok()
+                {
+                    radius
+                } else {
+                    point.radius
+                },
+                ..*point
+            })
+            .collect();
+        // Worked out first and priced before a single radius is written, so a
+        // refusal leaves the curve at the thickness it had. **This is the one
+        // number in the application that had no upper bound at all** — it was
+        // clamped to a minimum and nothing else — and a radius of 5 on a
+        // three-point guide held the application for over thirty seconds and
+        // took it to four and a half gigabytes, which is not a thickness
+        // anybody asked for.
+        self.afford_region(Self::curve_extent(&widened))?;
+        if let Some(curve) = self.curve.as_mut() {
+            curve.points = widened;
         }
         self.reshape_curve()
     }
@@ -11745,6 +11795,29 @@ impl ClayDocument {
             curve.sent = sent;
         }
         self.refill(layer, &[node])
+    }
+
+    /// How far a curve's tube reaches along each axis, as the size of a box
+    /// around it.
+    ///
+    /// Every point's ball, unioned. A swept tube stays inside the balls of the
+    /// points it passes through wherever the guide is a Catmull-Rom through
+    /// them, and where a bend overshoots slightly the answer is a brick or two
+    /// short of the truth — which is the right direction for a bound compared
+    /// against a cache that holds a hundred thousand of them.
+    ///
+    /// The *size* rather than the corners, because what it feeds is a price
+    /// and a price is paid on the size. A curve with no points fills nothing.
+    fn curve_extent(points: &[CurvePoint]) -> [f32; 3] {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for point in points {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point.position[axis] - point.radius);
+                max[axis] = max[axis].max(point.position[axis] + point.radius);
+            }
+        }
+        std::array::from_fn(|axis| (max[axis] - min[axis]).max(0.0))
     }
 
     /// The item-space boxes a set of control points and their neighbours
@@ -14763,6 +14836,11 @@ impl ObjectModel for ClayDocument {
     ) -> Result<ObjectId, ModelError> {
         let (key, layer) = self.layer_for_objects()?;
         let parameters = shape.sanitised(parameters);
+        // Priced before anything is placed, so a refusal leaves the document
+        // exactly as it stood — no item, no undo entry, no dirty region. The
+        // clamp on each parameter is not enough on its own: a torus with both
+        // radii at the bound reaches four times it.
+        self.afford_region(extent_of(shape, &parameters))?;
 
         self.remember_objects_before();
         // Bracketed, because placing is two engine edits — the item, then
@@ -14804,6 +14882,10 @@ impl ObjectModel for ClayDocument {
         combine: CombineSettings,
     ) -> Result<Inserted, ModelError> {
         let parameters = shape.sanitised(parameters);
+        // The same price as placing into a layer. A subtool of its own is a
+        // layer of its own and the same bricks either way, so the two paths
+        // cannot be allowed to disagree about what fits.
+        self.afford_region(extent_of(shape, &parameters))?;
         // The shape's own word for itself, made unique against the stack. Not
         // "Camada 4": a sculptor looking for the cylinder they inserted looks
         // for a cylinder.
@@ -15122,6 +15204,11 @@ impl ObjectModel for ClayDocument {
         let layer = self.layer_id(id.layer)?;
         let node = self.objects[at].node;
         let parameters = shape.sanitised(parameters);
+        // Re-measuring a placed form is placing one, as far as the cache is
+        // concerned, so it is priced the same way. Without this the insert
+        // path would be bounded and `shape/set_parameters` would be the way
+        // round it.
+        self.afford_region(extent_of(shape, &parameters))?;
 
         let before = self.node_bound(layer, node);
         self.remember_objects_before();
@@ -15855,5 +15942,53 @@ mod history_order {
             "an eviction from the engine's history threw away a gesture the \
              engine was never holding"
         );
+    }
+}
+
+#[cfg(test)]
+mod field_pricing {
+    use super::*;
+
+    /// The domain's default budget describes the cache this crate builds.
+    ///
+    /// `FieldBudget::DEFAULT` is what bounds a shape parameter before any
+    /// document exists, and `BRICK_CONFIG` is what every document is actually
+    /// given. Nothing but this holds the two together: re-tuning the cache and
+    /// leaving the parameter table at the old bound would offer a sculptor a
+    /// form the cache cannot carry, which is the defect this whole path exists
+    /// to close.
+    #[test]
+    fn a_budget_describes_the_cache_it_prices() {
+        let default = FieldBudget::DEFAULT;
+        let config = ClayDocument::BRICK_CONFIG;
+        assert_eq!(default.voxel_size, config.voxel_size);
+        assert_eq!(default.brick_dim, config.dim as u32);
+        assert_eq!(Some(default.budget_bytes), config.memory_budget);
+    }
+
+    /// A tube is priced on the balls its points carry, not on the points.
+    #[test]
+    fn a_curves_extent_carries_the_radius_at_each_end() {
+        let points = [
+            CurvePoint {
+                position: [-1.0, 0.0, 0.0],
+                radius: 0.5,
+            },
+            CurvePoint {
+                position: [1.0, 0.0, 0.0],
+                radius: 0.25,
+            },
+        ];
+        let extent = ClayDocument::curve_extent(&points);
+        assert!((extent[0] - 2.75).abs() < 1e-5, "reached {}", extent[0]);
+        assert!((extent[1] - 1.0).abs() < 1e-5, "reached {}", extent[1]);
+    }
+
+    /// A guide with nothing on it fills nothing, rather than the infinity an
+    /// unguarded union of no boxes answers — which would be priced as the
+    /// largest region there is and refuse the first point of every curve.
+    #[test]
+    fn an_empty_curve_fills_nothing() {
+        assert_eq!(ClayDocument::curve_extent(&[]), [0.0; 3]);
     }
 }
