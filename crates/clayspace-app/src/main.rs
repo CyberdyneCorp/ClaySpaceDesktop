@@ -1486,26 +1486,41 @@ impl App {
     /// Failure is reported to the log and nowhere else. An autosave that could
     /// not be written is worth knowing about; interrupting a sculptor to say
     /// so, mid-stroke, is not.
+    ///
+    /// Whether one is due — and whether the clock starts again — is
+    /// [`autosave_when_due`]'s, so that the ordering that made this stall can
+    /// be held by a test. All this owes it is the two facts only the
+    /// application knows: whether the document has unsaved work, and whether a
+    /// hand is on it.
     fn maybe_autosave(&mut self) {
         let Some(store) = self.store.clone() else {
             return;
         };
-        if !self
-            .autosave
-            .is_due(self.saved_at.elapsed(), *self.document_vm.modified().get())
-        {
-            return;
-        }
-        // Stamped before the attempt, not after: a save that keeps failing
-        // must not retry on every wake-up.
-        self.saved_at = Instant::now();
-        if let Err(e) = self.document_vm.autosave_to(&store.autosave_path()) {
+        let path = store.autosave_path();
+        let modified = *self.document_vm.modified().get();
+        let gesture_open = self.a_gesture_is_open();
+        let written = autosave_when_due(
+            self.autosave,
+            &mut self.saved_at,
+            modified,
+            gesture_open,
+            || self.document_vm.autosave_to(&path),
+        );
+        if let Some(Err(e)) = written {
             eprintln!("a recuperação automática falhou: {e}");
         }
     }
 
     /// How long the event loop may sleep before an autosave could be due.
     fn autosave_deadline(&self) -> Option<Instant> {
+        // Nothing is scheduled while a gesture is open. `maybe_autosave` would
+        // skip the tick, and a deadline already in the past would then spin the
+        // loop rather than let it sleep — for as long as a sculptor holds the
+        // pointer still. The end of the gesture is an event of its own, and the
+        // wait is worked out again then.
+        if self.a_gesture_is_open() {
+            return None;
+        }
         self.autosave
             .next_in(self.saved_at.elapsed(), *self.document_vm.modified().get())
             .map(|wait| Instant::now() + wait)
@@ -6791,6 +6806,39 @@ fn settle_is_due(owed: bool, gesture_open: bool) -> bool {
     owed && !gesture_open
 }
 
+/// Writes the recovery file if one is due, and starts the interval again from
+/// the moment the write finished.
+///
+/// Pulled out of `App::maybe_autosave` for the reason [`settle_is_due`] is:
+/// `App` lives in the binary and no integration test can reach it, and the
+/// ordering here is the whole of the fix.
+///
+/// **The clock is stamped after the write rather than before it.** Stamped
+/// before, the interval ran *during* the save, so a document whose save took
+/// longer than the interval was due again the instant it finished — measured,
+/// a save of 146 s and the next one already due, with the window unusable in
+/// between and no idle gap anywhere in the log. Afterwards, the interval is
+/// what it reads as: time the application was not saving.
+///
+/// It is stamped whether the write succeeded or failed, and that is what keeps
+/// the concern the early stamp was there for: a save that keeps failing waits
+/// out a full interval like any other, instead of being retried on every
+/// wake-up.
+fn autosave_when_due<E>(
+    policy: AutosavePolicy,
+    clock: &mut Instant,
+    modified: bool,
+    gesture_open: bool,
+    write: impl FnOnce() -> Result<(), E>,
+) -> Option<Result<(), E>> {
+    if !policy.is_due(clock.elapsed(), modified, gesture_open) {
+        return None;
+    }
+    let outcome = write();
+    *clock = Instant::now();
+    Some(outcome)
+}
+
 #[cfg(test)]
 mod memory_meter {
     use super::MemoryMeter;
@@ -6919,6 +6967,81 @@ mod settle_deferral {
         assert!(
             !settle_is_due(true, true),
             "a settle owed by the last stroke must not run inside the next one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod autosave_clock {
+    use super::autosave_when_due;
+    use clayspace_model::AutosavePolicy;
+    use std::time::{Duration, Instant};
+
+    /// Short enough that a test can sleep through it twice.
+    const EVERY: Duration = Duration::from_millis(20);
+
+    fn policy() -> AutosavePolicy {
+        AutosavePolicy { every: EVERY }
+    }
+
+    /// A clock that says an autosave is long overdue.
+    fn overdue() -> Instant {
+        Instant::now() - EVERY * 50
+    }
+
+    #[test]
+    fn the_autosave_clock_starts_after_the_save() {
+        // The defect. The clock was stamped before the write, so the interval
+        // ran while the save did: a document whose save took longer than the
+        // interval was due again the moment it finished, and the application
+        // spent its time saving instead of being usable between saves.
+        let mut clock = overdue();
+
+        let written = autosave_when_due(policy(), &mut clock, true, false, || {
+            std::thread::sleep(EVERY * 3);
+            Ok::<(), ()>(())
+        });
+
+        assert_eq!(written, Some(Ok(())), "an overdue autosave did not run");
+        assert!(
+            !policy().is_due(clock.elapsed(), true, false),
+            "a save that took longer than the interval was due again the \
+             moment it finished"
+        );
+    }
+
+    #[test]
+    fn a_failed_autosave_waits_out_the_interval_like_any_other() {
+        // What the early stamp was protecting, kept: a save that cannot be
+        // written fails quickly, and must not then be retried on every wake-up
+        // of the event loop.
+        let mut clock = overdue();
+
+        let written = autosave_when_due(policy(), &mut clock, true, false, || {
+            Err::<(), &str>("o disco recusou")
+        });
+
+        assert_eq!(written, Some(Err("o disco recusou")));
+        assert!(
+            !policy().is_due(clock.elapsed(), true, false),
+            "a failing autosave was due again immediately"
+        );
+    }
+
+    #[test]
+    fn autosave_is_skipped_during_a_gesture() {
+        let mut clock = overdue();
+        let before = clock;
+
+        let written = autosave_when_due(policy(), &mut clock, true, true, || -> Result<(), ()> {
+            panic!("the document was written under an open gesture")
+        });
+
+        assert!(written.is_none());
+        assert_eq!(
+            clock, before,
+            "a skipped tick restarted the clock, so the autosave the gesture \
+             held off was put off by another interval"
         );
     }
 }

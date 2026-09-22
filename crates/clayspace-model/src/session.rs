@@ -13,6 +13,12 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutosavePolicy {
     /// How long between autosaves of a document that keeps changing.
+    ///
+    /// Idle time, counted from the end of one autosave to the start of the
+    /// next. Counted from one start to the next instead, a document whose save
+    /// takes longer than this is due again the instant it finishes, and the
+    /// application spends its time saving — measured at 146 s a save, back to
+    /// back, on a worked document.
     pub every: Duration,
 }
 
@@ -34,8 +40,17 @@ impl AutosavePolicy {
     /// work that is not on disk; rewriting a file that already matches costs
     /// I/O and, worse, keeps the recovery file looking fresh when there is
     /// nothing to recover.
-    pub fn is_due(&self, since_last: Duration, modified: bool) -> bool {
-        modified && since_last >= self.every
+    ///
+    /// Nor is one written under an open gesture. A save reads the whole
+    /// document, and a stroke, a drag or an outline is a sculptor's hand still
+    /// moving — the write would land in the middle of it, stall the frames the
+    /// gesture is drawn in, and preserve a half-finished edit at that. It waits
+    /// for the hand to come off, which is at most one gesture away.
+    ///
+    /// `since_last` is measured from the moment the last autosave *finished*,
+    /// not from the moment it started. See [`Self::every`].
+    pub fn is_due(&self, since_last: Duration, modified: bool, gesture_open: bool) -> bool {
+        modified && !gesture_open && since_last >= self.every
     }
 
     /// How long until the next autosave could be due.
@@ -163,15 +178,25 @@ mod tests {
         // However long it has been. Rewriting a file that already matches
         // keeps the recovery file looking fresh when there is nothing to
         // recover.
-        assert!(!policy().is_due(Duration::from_secs(600), false));
+        assert!(!policy().is_due(Duration::from_secs(600), false, false));
         assert_eq!(policy().next_in(Duration::from_secs(600), false), None);
     }
 
     #[test]
     fn a_modified_document_is_autosaved_once_the_interval_has_passed() {
-        assert!(!policy().is_due(Duration::from_secs(59), true));
-        assert!(policy().is_due(Duration::from_secs(60), true));
-        assert!(policy().is_due(Duration::from_secs(600), true));
+        assert!(!policy().is_due(Duration::from_secs(59), true, false));
+        assert!(policy().is_due(Duration::from_secs(60), true, false));
+        assert!(policy().is_due(Duration::from_secs(600), true, false));
+    }
+
+    #[test]
+    fn an_open_gesture_holds_the_autosave_off() {
+        // However overdue it is: the sculptor's hand is still on the document,
+        // and a save reads the whole of it. It waits for the gesture to end,
+        // which is at most one gesture away — and it is still due then, since
+        // nothing about a skipped tick restarts the clock.
+        assert!(!policy().is_due(Duration::from_secs(600), true, true));
+        assert!(policy().is_due(Duration::from_secs(600), true, false));
     }
 
     #[test]

@@ -139,18 +139,18 @@ fn an_autosave_is_only_written_where_there_is_work_to_lose() {
 
     let mut vm = DocumentViewModel::new(Box::new(document.clone()), UNTITLED);
     assert!(
-        !policy.is_due(policy.every, *vm.modified().get()),
+        !policy.is_due(policy.every, *vm.modified().get(), false),
         "a fresh document was autosaved"
     );
 
     sculpt(&mut document);
     vm.touched();
-    assert!(policy.is_due(policy.every, *vm.modified().get()));
+    assert!(policy.is_due(policy.every, *vm.modified().get(), false));
 
     vm.save_as(&store.root().join("meu.clayspace"))
         .expect("save");
     assert!(
-        !policy.is_due(policy.every, *vm.modified().get()),
+        !policy.is_due(policy.every, *vm.modified().get(), false),
         "a saved document was still being autosaved"
     );
 }

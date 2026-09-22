@@ -66,6 +66,19 @@ fn visibility(doc: &ClayDocument) -> Vec<bool> {
         .collect()
 }
 
+/// Where the **cache** says the surface is over one subtool, which is where
+/// the viewport would draw it.
+///
+/// Asked of the cache and never of the document: a flag written and taken back
+/// leaves the two agreeing, and the document's answer would then be right for
+/// the wrong reason.
+fn surface_over(doc: &ClayDocument, x: f32) -> Option<f32> {
+    doc.cache()
+        .raycast([x, 0.0, 4.0], [0.0, 0.0, -1.0])
+        .expect("the cache was asked")
+        .map(|hit| hit.position[2])
+}
+
 /// How many items a layer holds — what says whether a dab is still there.
 fn items(doc: &ClayDocument, key: LayerKey) -> usize {
     let id = doc.layer_id(key).expect("a layer");
@@ -437,6 +450,98 @@ fn saving_while_soloed_writes_the_real_visibility() {
         None,
         "a reopened document is not soloed; nobody asked it to be"
     );
+}
+
+/// And it records it without re-drawing the scene to do so.
+///
+/// The defect: the save borrowed the flags through `with_visibility`, which
+/// marks every field layer whose eye moves and drains the cache before it
+/// returns — so one autosave of a soloed document refilled the whole scene
+/// twice, on the interface thread. Measured as one continuous episode: 146 s
+/// inside `save`, with the next autosave due the moment it finished and the
+/// window unusable throughout.
+///
+/// Nothing about the file changes here. The test above holds what is written;
+/// this one holds what it costs.
+#[test]
+fn saving_a_soloed_document_does_not_refill() {
+    let (mut doc, keys) = four_subtools();
+    doc.set_solo(Some(keys[1])).expect("solo the second");
+    let shown = visibility(&doc);
+    let depth = doc.history().depth;
+    // Where the cache says the surface is over a subtool the solo hid, which
+    // is what the viewport would draw. Asked of the cache and not of the
+    // document: a scene the save moved and put back would agree with the
+    // document either way.
+    let hidden_surface = surface_over(&doc, 0.0);
+    assert_eq!(
+        hidden_surface, None,
+        "the solo did not take the first subtool off the surface to begin with"
+    );
+    // The viewport's pending set, emptied so what follows is the save's own
+    // work and not the solo's.
+    doc.take_dirty_keys();
+
+    doc.save(&scratch("soloed-sem-refill.clay"))
+        .expect("save while soloed");
+
+    assert!(
+        doc.dirty_keys().is_empty(),
+        "the save refilled {} bricks of a scene nobody asked it to change",
+        doc.dirty_keys().len()
+    );
+    assert_eq!(
+        surface_over(&doc, 0.0),
+        None,
+        "the save brought a subtool the solo hides back into the cache"
+    );
+    assert_eq!(
+        visibility(&doc),
+        shown,
+        "the save left the scene showing something other than the solo"
+    );
+    assert_eq!(doc.scene().soloed, Some(keys[1]));
+    assert_eq!(
+        doc.history().depth,
+        depth,
+        "the flags the file borrowed were left for the sculptor to undo"
+    );
+}
+
+/// The borrowed flags are hopped like any other visibility gesture.
+///
+/// The engine records a command per flag whatever the host wants — there is no
+/// journal pause — so a save while soloed leaves entries behind however the
+/// scene is treated. A ⌘Z after one must still reach the sculptor's own edit
+/// rather than land on a pair of writes the file made and took back in the
+/// same breath: the save costs no step of its own, exactly as the solo above it
+/// costs none.
+#[test]
+fn one_undo_after_a_save_reverts_the_sculpt() {
+    let (mut doc, keys) = four_subtools();
+    doc.set_active_layer(keys[0]).expect("the first subtool");
+    dab(&mut doc, [0.0, 0.0, 1.0]);
+    let before = items(&doc, keys[0]);
+    doc.set_solo(Some(keys[1])).expect("solo another");
+
+    doc.save(&scratch("soloed-desfazer.clay"))
+        .expect("save while soloed");
+    assert!(
+        doc.undo().expect("undo"),
+        "there was something to take back"
+    );
+
+    assert_eq!(
+        items(&doc, keys[0]),
+        before - 1,
+        "the undo landed on the flags the save borrowed instead of the sculpt"
+    );
+    // The same place one undo leaves a soloed document with no save in it: the
+    // solo sits on top of the history and is hopped with the edit, so the
+    // scene comes back whole. What matters here is that the save added nothing
+    // to hop past.
+    assert_eq!(visibility(&doc), vec![true; 4]);
+    assert_eq!(doc.scene().soloed, None);
 }
 
 // -- what history does around a solo ----------------------------------------
