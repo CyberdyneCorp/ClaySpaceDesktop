@@ -177,9 +177,13 @@ impl Session for FakeSession {
                     rotation: [0.0, 0.0, 0.0, 1.0],
                     scale: [1.0; 3],
                     objects: 0,
+                    passes: Vec::new(),
+                    grid: None,
+                    hierarchy: None,
                 }],
                 active_layer: Some(1),
                 selected_object: None,
+                soloed: None,
             });
         }
         if query.tool {
@@ -194,6 +198,7 @@ impl Session for FakeSession {
                 // frequency is a hierarchy's alone.
                 smooth_mode: (self.representation == "hierarchy")
                     .then(|| "form_with_detail".to_string()),
+                rig_mirror: None,
             });
         }
         if query.camera {
@@ -208,6 +213,7 @@ impl Session for FakeSession {
         if query.history {
             report.history = Some(HistoryState {
                 depth: self.history_depth,
+                redo_depth: 0,
                 undoes: (self.history_depth > 0).then(|| "argila".to_string()),
                 redoes: None,
                 from_agent: self.applied.len(),
@@ -218,6 +224,9 @@ impl Session for FakeSession {
                 present: false,
                 coverage: None,
                 inverted: false,
+                painted_cells: 0,
+                steps: 1,
+                gesture: "brush".into(),
             });
         }
         if query.jobs {
@@ -235,6 +244,7 @@ impl Session for FakeSession {
             report.memory = Some(MemoryState {
                 in_use_bytes: 128 * 1024 * 1024,
                 budget_bytes: 2 * 1024 * 1024 * 1024,
+                cache_bytes: 128 * 1024 * 1024,
                 parts: vec![MemoryPart {
                     part: "cache de blocos".into(),
                     bytes: 128 * 1024 * 1024,

@@ -45,14 +45,14 @@ impl Rigging {
         }
         self.armature.release();
         let entries = self.depth().saturating_sub(before);
-        self.sculpt.record_external_action(entries);
+        self.sculpt.record_external_action("move zsphere", entries);
     }
 
     fn begin(&mut self, at: [f32; 3]) {
         let before = self.depth();
         self.armature.begin(at);
         let entries = self.depth().saturating_sub(before);
-        self.sculpt.record_external_action(entries);
+        self.sculpt.record_external_action("new armature", entries);
     }
 
     fn undo(&mut self) {
@@ -90,7 +90,8 @@ impl Rigging {
         let before = self.depth();
         self.armature.set_skin(SkinSettings { thickness });
         let entries = self.depth().saturating_sub(before);
-        self.sculpt.record_external_action(entries);
+        self.sculpt
+            .record_external_action("skin thickness", entries);
     }
 }
 

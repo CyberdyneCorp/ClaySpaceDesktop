@@ -72,7 +72,7 @@ impl Structural {
             .chain(self.boolean.take_unbanked_actions())
             .collect::<Vec<_>>();
         for entries in counts {
-            self.sculpt.record_external_action(entries);
+            self.sculpt.record_external_action(command.label(), entries);
         }
         self.settle();
     }

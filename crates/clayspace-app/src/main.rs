@@ -553,6 +553,14 @@ struct App {
     /// for, so there is no model state for them to be a view of.
     remesh: clayspace_model::RemeshSettings,
     remesh_outcome: Option<clayspace_model::RemeshOutcome>,
+    /// Which way the last crossing went, and what it produced.
+    ///
+    /// Held for the same reason `remesh_outcome` is: the crossing leaves a
+    /// layer and no record of having done so, and "which of these two layers
+    /// did the conversion make" is a question the scene tree cannot answer on
+    /// its own. Replaced by the next crossing, so it always describes the most
+    /// recent one.
+    crossing_outcome: Option<(clayspace_model::Direction, clayspace_model::LayerKey)>,
     import: ImportSettings,
     export: ExportSettings,
     /// What a dragging verb took hold of, and where the pointer was then.
@@ -843,6 +851,7 @@ impl App {
             conversion: clayspace_model::ConversionSettings::default(),
             remesh: clayspace_model::RemeshSettings::default(),
             remesh_outcome: None,
+            crossing_outcome: None,
             import: ImportSettings::default(),
             export: ExportSettings::default(),
             renaming: None,
@@ -1586,6 +1595,7 @@ impl App {
     /// and brought back strokes that had already been taken back.
     fn run_sculpt_layer_op(&mut self, op: clayspace_model::SculptLayerOp) {
         let changes_the_surface = op.changes_the_surface();
+        let label = op.label();
         let outcome = self.scene.apply_grid_pass_op(op);
         // Banked here rather than in `dispatch_to_models`, because a pass
         // operation does not pass through it: the composition root has to know
@@ -1593,7 +1603,7 @@ impl App {
         // branch below so that no count can be stranded by an outcome this
         // file decided not to act on; a refused operation wrote nothing and
         // therefore banks nothing on its own.
-        self.bank_edits();
+        self.bank_edits(label);
         if self.stated(outcome).is_some() {
             self.scene.refresh();
             if changes_the_surface {
@@ -1892,7 +1902,13 @@ impl App {
     /// the few operations the composition root runs directly — a rename, a
     /// rebuild, a reorder, a change of protection — which never pass through
     /// `dispatch_to_models`.
-    fn bank_edits(&mut self) {
+    ///
+    /// `label` names what the sculptor did, in the interface's own words, and
+    /// travels with the count onto the history. Without it the history could
+    /// count the actions and not name any of them, so everything banked this
+    /// way reported the *last thing that happened* as what the next undo would
+    /// take back — which after an undo is "undo".
+    fn bank_edits(&mut self, label: &str) {
         let counts = self
             .scene
             .take_unbanked_actions()
@@ -1903,7 +1919,7 @@ impl App {
             .chain(self.boolean.take_unbanked_actions())
             .collect::<Vec<_>>();
         for entries in counts {
-            self.sculpt.record_external_action(entries);
+            self.sculpt.record_external_action(label, entries);
         }
     }
 
@@ -1917,12 +1933,12 @@ impl App {
     ///
     /// `before` is the undo depth from before the edit, so this banks exactly
     /// what the edit did rather than assuming it was one entry.
-    fn after_armature_edit(&mut self, before: usize) {
+    fn after_armature_edit(&mut self, label: &str, before: usize) {
         // The sculpting ViewModel owns the history Cmd+Z reads — a sculptor
         // has one undo and does not care which part of the application
         // produced the thing they want back.
         let entries = self.engine_undo_depth().saturating_sub(before);
-        self.sculpt.record_external_action(entries);
+        self.sculpt.record_external_action(label, entries);
         self.settle_geometry();
         self.scene.refresh();
         self.armature.refresh();
@@ -3860,7 +3876,7 @@ impl App {
                     let entries = self
                         .engine_undo_depth()
                         .saturating_sub(self.rig_depth_at_press);
-                    self.sculpt.record_external_action(entries);
+                    self.sculpt.record_external_action("rig", entries);
                     // Rigging rewrites the armature node outright and refills
                     // the box it vacated, so unlike a stroke it can leave slots
                     // for bricks the surface has moved out of. Compaction, not
@@ -4351,6 +4367,7 @@ impl App {
     /// what a brush reached.
     fn run_operation(&mut self, operation: LayerOperation) {
         let before = self.engine_undo_depth();
+        let label = operation.label();
         let outcome = self.busy(|app| {
             app.timed(operation.label(), |app| {
                 app.document
@@ -4367,7 +4384,7 @@ impl App {
             // the next Cmd+Z popped the PREVIOUS stroke's count and took the
             // repair back along with part of that stroke.
             self.sculpt
-                .record_external_action(self.engine_undo_depth().saturating_sub(before));
+                .record_external_action(label, self.engine_undo_depth().saturating_sub(before));
             self.scene.refresh();
             self.document_vm.touched();
             self.sync_geometry();
@@ -4409,7 +4426,7 @@ impl App {
             // count and spent it here: measured in the audit, the undo after a
             // rebuild removed two subtools the rebuild had never touched, and
             // the redo restored none of them.
-            self.bank_edits();
+            self.bank_edits(Command::RemeshLayer(key).label());
             self.remesh_outcome = Some(outcome);
             self.document_vm.touched();
             // The layer's triangles are new ones. The carried-geometry path
@@ -4450,7 +4467,7 @@ impl App {
             Ok(()) => {
                 // As for a rebuild: the rename is run from here rather than
                 // dispatched, so the count is collected from here too.
-                self.bank_edits();
+                self.bank_edits(Command::CommitRenameLayer.label());
                 self.renaming = None;
                 self.document_vm.touched();
             }
@@ -4485,15 +4502,18 @@ impl App {
         // is a sentence a caller acts on by choosing a coarser cell. Printed
         // alone, the panel stayed open with nothing said and the agent that
         // asked was told the crossing had happened.
-        if self.stated(outcome).is_some() {
+        if let Some(crossed) = self.stated(outcome) {
             // One undo for the whole crossing. The reported depth folds a
             // crossing's removal and reorder entries into one step, and one
             // `undo()` takes a whole crossing back, so this banks exactly one.
             // Measured before the fix: depth 1 after a stroke, still 1 after
             // the crossing, 0 after one Cmd+Z — which took the crossing and
             // most of the stroke with it.
-            self.sculpt
-                .record_external_action(self.engine_undo_depth().saturating_sub(before));
+            self.sculpt.record_external_action(
+                Command::RunConversion.label(),
+                self.engine_undo_depth().saturating_sub(before),
+            );
+            self.crossing_outcome = Some((settings.direction, crossed));
             self.show_convert = false;
             self.scene.refresh();
             self.sculpt.refresh_for_active_layer();
@@ -4684,7 +4704,7 @@ impl App {
         // Once, here, rather than beside each dispatch: a command reaches one
         // of them, and the counts are taken in dispatch order so that one which
         // somehow reached two is still banked in the order it happened.
-        self.bank_edits();
+        self.bank_edits(command.label());
         // The whole-subtool manipulator lands on what a boolean left, exactly
         // as it lands on an inserted form: what arrived is a form to stand
         // somewhere, and the sculptor's next gesture is aiming it.
@@ -5581,6 +5601,10 @@ impl App {
 
     /// Applies a command, plus the view-side effects no ViewModel owns.
     fn handle(&mut self, command: Command) {
+        // Taken before the match, which moves the command: the arms that bank
+        // an edit of their own need a name to bank it under, and the history
+        // is what reads it back.
+        let named = command.label();
         match command {
             Command::ToggleAgentDoor => {
                 if self.agent.is_listening() {
@@ -5755,7 +5779,7 @@ impl App {
                 // second arm off the first.
                 self.sculpt.refresh_for_active_layer();
                 self.rigging = self.armature.is_rigging();
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::ToggleArmatureEditing => {
                 self.rigging = !self.rigging && self.armature.is_rigging();
@@ -5764,7 +5788,7 @@ impl App {
             Command::RemoveZsphere => {
                 let before = self.engine_undo_depth();
                 self.armature.remove_selected();
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::ToggleSkinPreview => {
                 self.skin_preview = !self.skin_preview;
@@ -5774,7 +5798,7 @@ impl App {
                 let before = self.engine_undo_depth();
                 let negative = !self.armature.selected_is_negative();
                 self.armature.set_selected_negative(negative);
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             // Choosing changes nothing in the document, so it takes none of
             // the undo bookkeeping the rest of these do.
@@ -5785,32 +5809,32 @@ impl App {
             Command::AddZsphere { parent, at, radius } => {
                 let before = self.engine_undo_depth();
                 self.armature.add(parent, at, radius);
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::InsertZsphere(child) => {
                 let before = self.engine_undo_depth();
                 self.armature.insert(child);
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::MoveZsphere { index, to } => {
                 let before = self.engine_undo_depth();
                 self.armature.move_to(index, to);
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::ResizeZsphere { index, radius } => {
                 let before = self.engine_undo_depth();
                 self.armature.resize(index, radius);
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::ReparentZsphere { index, parent } => {
                 let before = self.engine_undo_depth();
                 self.armature.reparent(index, parent);
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             Command::SetSkinThickness(thickness) => {
                 let before = self.engine_undo_depth();
                 self.armature.set_skin(SkinSettings { thickness });
-                self.after_armature_edit(before);
+                self.after_armature_edit(named, before);
             }
             // The cage settles before the switch rather than after it: the
             // sculptor may say to stay, and a switch already made cannot be
@@ -6269,6 +6293,215 @@ fn refusal_for(refused: &ModelError) -> Refusal {
 /// Every method here runs on the interface thread, between frames, because
 /// that is the only thread that may touch a ViewModel or the document. The
 /// door's own threads never reach past [`clayspace_mcp::JobQueue`].
+/// The four passes [`Session::read`] is assembled from.
+///
+/// Inherent rather than part of the trait, because they are this application's
+/// own decomposition of one trait method and nothing outside calls them. Each
+/// is a run of independent `if`s: a section asked for is a section answered,
+/// and no section's answer depends on another's.
+impl App {
+    /// What the document holds: its name, its tree and the forms in it.
+    fn read_document(&mut self, query: &StateQuery, state: &mut StateReport) {
+        if query.document {
+            state.document = Some(report::document_state(
+                self.document_vm.name().get(),
+                *self.document_vm.modified().get(),
+                self.document_vm.path().get().as_deref(),
+                self.units.display.label(),
+                &self.policy.diagnostics().document_format,
+            ));
+        }
+        if query.scene {
+            let scene = self.scene.scene().get().clone();
+            let selected = self
+                .objects
+                .selected()
+                .get()
+                .map(|id| (id.layer.0, id.node));
+            // Counted here because the object ViewModel is the only party that
+            // can be asked: a layer summary carries its grid's passes and not
+            // the forms placed in it.
+            let placed = self.objects.objects().get().clone();
+            state.scene = Some(report::scene_state(
+                &scene,
+                selected,
+                |key| self.objects.layer_placement(key),
+                |key| placed.iter().filter(|form| form.id.layer == key).count(),
+            ));
+        }
+        if query.objects {
+            state.objects = Some(report::object_state(
+                self.objects.objects().get(),
+                *self.objects.selected().get(),
+            ));
+        }
+        if query.history {
+            state.history = Some(report::history_state(
+                self.sculpt.history().get(),
+                // What the next step would take back, in each direction — not
+                // the last thing that happened, which is what this used to
+                // send and which after an undo is the undo.
+                self.sculpt.next_undo().map(str::to_string),
+                self.sculpt.next_redo().map(str::to_string),
+                self.agent.from_agent() as usize,
+            ));
+        }
+    }
+
+    /// What the next stroke would be: the tool, the brush and how it combines.
+    fn read_shelf(&mut self, query: &StateQuery, state: &mut StateReport) {
+        if query.tool {
+            state.tool = Some(report::tool_state(
+                *self.sculpt.tool().get(),
+                self.sculpt.brush().get(),
+                *self.sculpt.symmetry().get(),
+                self.sculpt.active_representation(),
+                *self.sculpt.smooth_mode().get(),
+                // The rig's mirror, and only while one is being edited: a
+                // switch reported where it decides nothing is a switch an
+                // agent will act on.
+                self.rigging.then(|| *self.armature.symmetric().get()),
+            ));
+        }
+        if query.brush {
+            state.brush = Some(report::brush_state(self.sculpt.brush().get()));
+        }
+        if query.combine {
+            state.combine = Some(report::combine_state(
+                self.sculpt.combine().get(),
+                self.objects.combine().get(),
+            ));
+        }
+        if query.camera {
+            let viewport = self
+                .graphics
+                .as_ref()
+                .map(|graphics| {
+                    let frame = graphics.surface.framebuffer();
+                    [frame.width, frame.height]
+                })
+                .unwrap_or([0, 0]);
+            state.camera = Some(report::camera_state(
+                self.camera.eye().into(),
+                self.camera.target.into(),
+                self.camera.up().into(),
+                self.camera.fov_y,
+                viewport,
+            ));
+        }
+    }
+
+    /// What the panels hold, and what the last long operation came to.
+    fn read_panels(&mut self, query: &StateQuery, state: &mut StateReport) {
+        if query.mask {
+            state.mask = Some(report::mask_state(
+                self.mask.state().get(),
+                None,
+                *self.mask.steps().get(),
+                *self.mask.gesture().get(),
+            ));
+        }
+        if query.cage {
+            state.cage = Some(report::cage_state(
+                self.lattice.state().get(),
+                *self.lattice.divisions().get(),
+            ));
+        }
+        if query.deform {
+            state.deform = Some(report::deform_state(&self.deform));
+        }
+        if query.outcomes {
+            state.outcomes = Some(report::outcome_state(
+                self.remesh_outcome.as_ref(),
+                self.retopo.last().get().as_ref(),
+                self.crossing_outcome,
+            ));
+        }
+        if query.presentation {
+            state.presentation = Some(report::presentation_state(
+                self.focus,
+                *self.sculpt.grid().get(),
+                *self.sculpt.polyframe().get(),
+                *self.sculpt.view_preset().get(),
+                self.surface_opacity,
+                self.rigging,
+                self.skin_preview,
+            ));
+        }
+        if query.references {
+            state.references = Some(report::reference_state(|plane| {
+                (
+                    self.references.settings_for(plane),
+                    self.references.path(plane).map(|path| path.to_path_buf()),
+                )
+            }));
+        }
+        if query.exchange {
+            state.exchange = Some(report::exchange_state(
+                &self.import,
+                &self.export,
+                &self.export_findings,
+            ));
+        }
+        if query.jobs {
+            state.jobs = Some(
+                self.outstanding_work()
+                    .into_iter()
+                    .map(|item| clayspace_mcp::session::JobState {
+                        label: item.what,
+                        fraction: item.fraction,
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    /// What the session is costing. The one group that costs something to ask.
+    fn read_diagnostics(&mut self, query: &StateQuery, state: &mut StateReport) {
+        if !(query.memory || query.timing || query.backends || query.strokes) {
+            return;
+        }
+        // The stroke section is the one part of this report that costs
+        // something to assemble, so it is assembled only where the agent asked
+        // for it.
+        let diagnostics = self.diagnostics(if query.strokes {
+            StrokeSection::Summarised
+        } else {
+            StrokeSection::Skipped
+        });
+        if query.memory {
+            // The engine's own accounting, read through the same meter the
+            // status area reads, so an agent and a person cannot disagree —
+            // and so an agent polling this does not put back the per-call walk
+            // of the brick cache that the meter took out.
+            let (in_cache, budget) = self.memory_figures(Instant::now());
+            state.memory = report::memory_state(&diagnostics, in_cache, budget);
+        }
+        if query.timing {
+            // The GPU passes the renderer timed, summed. Zero where the
+            // adapter does not offer timestamps, which is a stated absence
+            // rather than a figure invented here.
+            let frame = diagnostics
+                .render
+                .as_ref()
+                .filter(|render| render.gpu_timing)
+                .map(|render| render.gpu_passes.iter().map(|(_, ms)| ms).sum())
+                .unwrap_or(0.0);
+            state.timing = Some(report::timing_state(&self.stalls, frame));
+        }
+        if query.backends {
+            state.backends = Some(report::backend_state(&diagnostics));
+        }
+        if query.strokes {
+            // Where the last strokes spent their milliseconds, split across
+            // the engine boundary. An agent that drives forty strokes and
+            // reads this can say *which call* was slow, which is the one thing
+            // a total cannot say.
+            state.strokes = report::stroke_state(&diagnostics);
+        }
+    }
+}
+
 impl Session for App {
     /// One command, down the path a menu item's click takes.
     ///
@@ -6314,12 +6547,18 @@ impl Session for App {
         }
 
         let history = *self.sculpt.history().get();
-        let last = self.sculpt.last_action().get().clone();
         Ok(Applied {
             label,
             touched_document: touched,
             history_depth: history.depth,
-            undoes: (history.can_undo && !last.label.is_empty()).then(|| last.label.clone()),
+            // What the next undo would take back, which after a command that
+            // banked nothing is the command *before* it — not the label of the
+            // one just applied, which is what the last action carries and what
+            // this used to answer with.
+            undoes: history
+                .can_undo
+                .then(|| self.sculpt.next_undo().map(str::to_string))
+                .flatten(),
             notices,
         })
     }
@@ -6328,119 +6567,16 @@ impl Session for App {
         // Every read below goes through `Observable::get`, which does not mark
         // anything changed. An agent polling the session must not be the
         // reason an idle application never sleeps.
+        //
+        // Gathered in four passes rather than one long run of `if`s. There are
+        // twenty sections now, and the grouping says where each answer comes
+        // from: the document, the shelf, the panels, and the diagnostics —
+        // which is also the only group that costs anything to ask for.
         let mut state = StateReport::default();
-
-        if query.document {
-            state.document = Some(report::document_state(
-                self.document_vm.name().get(),
-                *self.document_vm.modified().get(),
-                self.document_vm.path().get().as_deref(),
-                self.units.display.label(),
-                &self.policy.diagnostics().document_format,
-            ));
-        }
-        if query.scene {
-            let scene = self.scene.scene().get().clone();
-            let selected = self
-                .objects
-                .selected()
-                .get()
-                .map(|id| (id.layer.0, id.node));
-            state.scene = Some(report::scene_state(&scene, selected, |key| {
-                self.objects.layer_placement(key)
-            }));
-        }
-        if query.tool {
-            state.tool = Some(report::tool_state(
-                *self.sculpt.tool().get(),
-                self.sculpt.brush().get(),
-                *self.sculpt.symmetry().get(),
-                self.sculpt.active_representation(),
-                *self.sculpt.smooth_mode().get(),
-            ));
-        }
-        if query.camera {
-            let viewport = self
-                .graphics
-                .as_ref()
-                .map(|graphics| {
-                    let frame = graphics.surface.framebuffer();
-                    [frame.width, frame.height]
-                })
-                .unwrap_or([0, 0]);
-            state.camera = Some(report::camera_state(
-                self.camera.eye().into(),
-                self.camera.target.into(),
-                self.camera.up().into(),
-                self.camera.fov_y,
-                viewport,
-            ));
-        }
-        if query.history {
-            let last = self.sculpt.last_action().get().clone();
-            let label = (!last.label.is_empty()).then(|| last.label.clone());
-            state.history = Some(report::history_state(
-                self.sculpt.history().get(),
-                label.clone(),
-                label,
-                self.agent.from_agent() as usize,
-            ));
-        }
-        if query.mask {
-            state.mask = Some(report::mask_state(self.mask.state().get(), None));
-        }
-        if query.jobs {
-            state.jobs = Some(
-                self.outstanding_work()
-                    .into_iter()
-                    .map(|item| clayspace_mcp::session::JobState {
-                        label: item.what,
-                        fraction: item.fraction,
-                    })
-                    .collect(),
-            );
-        }
-        if query.memory || query.timing || query.backends || query.strokes {
-            // The stroke section is the one part of this report that costs
-            // something to assemble, so it is assembled only where the agent
-            // asked for it.
-            let diagnostics = self.diagnostics(if query.strokes {
-                StrokeSection::Summarised
-            } else {
-                StrokeSection::Skipped
-            });
-            if query.memory {
-                // The engine's own accounting, read through the same meter the
-                // status area reads, so an agent and a person cannot disagree
-                // — and so an agent polling this does not put back the
-                // per-call walk of the brick cache that the meter took out.
-                let budget = self.memory_figures(Instant::now()).1;
-                state.memory = report::memory_state(&diagnostics, budget);
-            }
-            if query.timing {
-                // The GPU passes the renderer timed, summed. Zero where the
-                // adapter does not offer timestamps, which is a stated absence
-                // rather than a figure invented here.
-                let frame = diagnostics
-                    .render
-                    .as_ref()
-                    .filter(|render| render.gpu_timing)
-                    .map(|render| render.gpu_passes.iter().map(|(_, ms)| ms).sum())
-                    .unwrap_or(0.0);
-                state.timing = Some(report::timing_state(&self.stalls, frame));
-            }
-            if query.backends {
-                state.backends = Some(report::backend_state(&diagnostics));
-            }
-            if query.strokes {
-                // Where the last strokes spent their milliseconds, split
-                // across the engine boundary. An agent that drives forty
-                // strokes and reads this can say *which call* was slow, which
-                // is the one thing a total cannot say.
-                state.strokes = report::stroke_state(&diagnostics);
-            }
-        }
-
+        self.read_document(&query, &mut state);
+        self.read_shelf(&query, &mut state);
+        self.read_panels(&query, &mut state);
+        self.read_diagnostics(&query, &mut state);
         state
     }
 

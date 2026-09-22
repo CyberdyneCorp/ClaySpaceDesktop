@@ -411,6 +411,84 @@ fn a_stroke_undoes_as_one_action_however_many_segments_it_took() {
     );
 }
 
+/// The history names the *next step in each direction*, not the last thing
+/// that happened.
+///
+/// They differ exactly where it matters. The status area used to be the only
+/// reader and could live with the difference, because a person watched the
+/// undo happen; an agent reading state could not, and was told that its next
+/// undo would undo an "undo".
+#[test]
+fn history_labels_name_the_next_step() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(Command::SelectTool(ToolKind::Argila))
+        .expect("a tool");
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("a stroke");
+
+    assert_eq!(
+        vm.next_undo(),
+        Some(ToolKind::Argila.label()),
+        "the next undo takes the clay stroke back, and says so"
+    );
+    assert_eq!(vm.next_redo(), None, "nothing has been undone yet");
+
+    vm.dispatch(Command::Undo).expect("undo");
+    assert_eq!(
+        vm.last_action().get().label,
+        "undo",
+        "the last thing that happened is the undo — which is what the report \
+         used to send as what the next undo would take back"
+    );
+    assert_eq!(
+        vm.next_undo(),
+        None,
+        "there is nothing left to take back, rather than an \"undo\" to undo"
+    );
+    assert_eq!(
+        vm.next_redo(),
+        Some(ToolKind::Argila.label()),
+        "and the redo names the stroke it would put back"
+    );
+
+    vm.dispatch(Command::Redo).expect("redo");
+    assert_eq!(vm.next_undo(), Some(ToolKind::Argila.label()));
+    assert_eq!(vm.next_redo(), None);
+}
+
+/// A cancelled stroke banked nothing, so what the next undo would take back is
+/// whatever came before it — and the report named the cancelled tool instead.
+#[test]
+fn a_cancelled_stroke_does_not_name_the_next_undo() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+        .expect("a tool");
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("a stroke");
+    vm.dispatch(Command::SelectTool(ToolKind::Argila))
+        .expect("a second tool");
+
+    open_a_gesture(&mut vm, &[[0.5, 0.0, 0.0], [0.6, 0.0, 0.0]]);
+    vm.dispatch(Command::CancelStroke).expect("cancel");
+
+    assert_eq!(
+        vm.next_undo(),
+        Some(ToolKind::Suavizar.label()),
+        "the cancelled clay stroke is gone, so the next undo is the smooth \
+         under it — not the tool the cancel was holding"
+    );
+}
+
+/// An edit banked by another ViewModel carries its own name onto the shared
+/// history, rather than borrowing whatever happened last.
+#[test]
+fn an_edit_banked_from_outside_names_itself() {
+    let (mut vm, _) = fixture();
+    vm.record_external_action("insert shape", 2);
+    assert_eq!(vm.next_undo(), Some("insert shape"));
+
+    vm.dispatch(Command::Undo).expect("undo");
+    assert_eq!(vm.next_redo(), Some("insert shape"));
+}
+
 #[test]
 fn samples_carry_increasing_time_and_clamped_pressure() {
     let (mut vm, recorded) = fixture();

@@ -52,7 +52,7 @@ impl Masking {
     fn apply(&mut self, command: Command) {
         self.mask.dispatch(&command);
         for entries in self.mask.take_unbanked_actions() {
-            self.sculpt.record_external_action(entries);
+            self.sculpt.record_external_action(command.label(), entries);
         }
     }
 

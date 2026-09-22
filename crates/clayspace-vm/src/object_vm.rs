@@ -433,17 +433,36 @@ impl ObjectViewModel {
             .cloned()
     }
 
+    /// Whether the document still holds the form this id names.
+    fn holds(&self, id: ObjectId) -> bool {
+        self.objects.get().iter().any(|object| object.id == id)
+    }
+
     /// Refreshes from the model, for when something else changed the layer.
     pub fn refresh(&mut self) {
         let objects = self.model.objects();
         self.objects.set_if_changed(objects);
         let selected = self.model.selected_object();
         self.selected.set_if_changed(selected);
+        // A selection whose node is gone. The document answers with the id it
+        // was last told about, so an undo that removed the form left the
+        // selection naming a node that is no longer in the list — and every
+        // reader of it, the options bar and the agent-facing report alike,
+        // went on describing a shape the sculptor could no longer see.
+        //
+        // Cleared against the objects rather than trusted, for the same reason
+        // the manipulator's target is below: the list is what the document
+        // actually holds.
+        if let Some(id) = *self.selected.get() {
+            if !self.holds(id) {
+                self.selected.set(None);
+            }
+        }
         // A selection that history took away leaves the manipulator with
         // nothing to sit on — "a selection outlives the nodes in it", but not
         // the objects.
         if let Some(GizmoTarget::Object(id)) = *self.target.get() {
-            if !self.objects.get().iter().any(|object| object.id == id) {
+            if !self.holds(id) {
                 self.target.set(None);
             }
         }
