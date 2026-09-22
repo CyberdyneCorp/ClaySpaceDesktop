@@ -3437,6 +3437,14 @@ impl App {
         // is what keeps the figure from being the document's memory with the
         // largest thing in it left out — see `ClayDocument::memory`.
         report.memory = self.document.with(|document| document.memory_diagnostics());
+        // What is in hand, against the layer it would land on. Read out of the
+        // capability table by the report itself rather than described here, so
+        // that the line and the shelf cannot say different things about the
+        // same tool.
+        report.tool = Some(clayspace_model::ToolDiagnostics {
+            tool: *self.sculpt.tool().get(),
+            representation: self.sculpt.active_representation(),
+        });
         // Whether a second party could have been driving this session. The
         // address and never the secret: a report is pasted into issues.
         report.agent = Some(clayspace_model::AgentDiagnostics {

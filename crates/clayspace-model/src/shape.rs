@@ -444,7 +444,16 @@ impl SceneObject {
 /// has the call — but a rasterized copy is not live, and everything an object
 /// is for here depends on its being live.
 pub const OBJECT_VERBS: crate::Verbs = crate::Verbs {
-    sdf: Some("clay_layer_add_item"),
+    // `VolumeAdd` for the common case and not for all of them: an item in the
+    // list can be subtracting, and what this row is stating is where an object
+    // can *live* rather than what any one of them does to the form. The
+    // subtraction is the item's own mode, which is a property of the item and
+    // not of the binding that puts it there.
+    sdf: crate::tools::field_item(
+        "clay_layer_add_item",
+        crate::SemanticIntent::VolumeAdd,
+        crate::Fidelity::Native,
+    ),
     voxel: None,
     mesh: None,
     // Nor a hierarchy, and for the same reason as the mesh: an object is an

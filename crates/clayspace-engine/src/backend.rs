@@ -407,6 +407,11 @@ impl BackendPolicy {
             mesh: None,
             hierarchies: None,
             memory: None,
+            // Which tool is in hand is the interface's answer and not this
+            // layer's: the backend knows what the engine can do and not what
+            // anyone has picked up. The composition root fills it, as it does
+            // the renderer and the stalls.
+            tool: None,
             // The session's own, filled by the composition root from the
             // handle every stroke passes through.
             stroke: None,

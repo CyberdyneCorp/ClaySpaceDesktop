@@ -120,6 +120,13 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             connected: 1,
             commands: 40,
         }),
+        // The tool in hand, on the representation whose binding is the one
+        // worth capturing: a field's Padrão is the row that does not do the
+        // plain reading of its label.
+        tool: Some(clayspace_model::ToolDiagnostics {
+            tool: clayspace_model::ToolKind::Padrao,
+            representation: clayspace_model::Representation::Sdf,
+        }),
         app_version: "ClaySpaceDesktop 0.1.0".into(),
         engine_version: "claycore 0.27.3".into(),
         engine_revision: "v0.27.3-0-g804fc9d".into(),

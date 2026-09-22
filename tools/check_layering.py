@@ -174,6 +174,36 @@ FORBIDDEN: list[tuple[str, str, str]] = [
 # and the wrapper is where the ownership rules live.
 UNSAFE_ALLOWED = {"claycore-sys", "claycore", "cyberremesh-sys", "cyberremesh"}
 
+# Where a tool is paired with a representation, which is the shape a decision
+# about *where a tool applies* takes. One crate owns that question — the
+# capability table in `clayspace-model/src/tools.rs` — and the whole point of
+# having one table is that the shelf, the availability rule, the tool notes and
+# the diagnostics line are all lookups into it rather than four opinions.
+#
+# The rule this replaced was written in a comment, and the drift it was meant
+# to prevent is what the audit kept finding: a view that knew which tools a
+# mesh layer offers, an adapter that decided a pair was unavailable, a
+# catalogue that answered for itself. None of those exists now, and this is
+# what keeps it that way.
+#
+# What it looks for is the tuple pattern — `(ToolKind::Padrao,
+# Representation::Sdf)` — because that is how such a decision is spelled in
+# Rust and how the model itself spells it. A crate that wanted one badly enough
+# could write it as nested `match`es and get past this, which is the honest
+# limit of a text check; what it catches is the ordinary way it happens.
+ONE_CAPABILITY_TABLE = {
+    "clayspace-view",
+    "clayspace-vm",
+    "clayspace-engine",
+    "clayspace-mcp",
+    "clayspace-app",
+}
+
+TOOL_REPRESENTATION_PAIR = re.compile(
+    r"\(\s*(?:Self|ToolKind|clayspace_model::ToolKind)::\w+\s*,"
+    r"\s*(?:Representation|clayspace_model::Representation)::\w+"
+)
+
 
 def workspace_metadata() -> dict:
     out = subprocess.run(
@@ -267,10 +297,32 @@ def check_unsafe(failures: list[str]) -> None:
                 failures.append(f"{relative} contains unsafe, which only the bridge may")
 
 
+def check_one_capability_table(failures: list[str]) -> None:
+    meta = workspace_metadata()
+    for package in meta["packages"]:
+        if package["name"] not in ONE_CAPABILITY_TABLE:
+            continue
+        src = Path(package["manifest_path"]).parent / "src"
+        if not src.is_dir():
+            continue
+        for path in src.rglob("*.rs"):
+            text = path.read_text(encoding="utf-8")
+            stripped = re.sub(r"//.*", "", text)
+            stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.S)
+            if TOOL_REPRESENTATION_PAIR.search(stripped):
+                relative = path.relative_to(ROOT)
+                failures.append(
+                    f"{relative} decides something per (tool, representation); "
+                    "that question is the capability table's, in "
+                    "clayspace-model/src/tools.rs"
+                )
+
+
 def main() -> int:
     failures: list[str] = []
     check_dependencies(failures)
     check_unsafe(failures)
+    check_one_capability_table(failures)
 
     if failures:
         print("Layering check failed:\n", file=sys.stderr)
@@ -286,6 +338,7 @@ def main() -> int:
     print("Layering check passed:")
     print(f"  {len(FORBIDDEN)} forbidden dependency edges absent")
     print(f"  unsafe confined to {', '.join(sorted(UNSAFE_ALLOWED))}")
+    print("  one capability table, in clayspace-model")
     return 0
 
 

@@ -51,6 +51,32 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Borrar | `clay_mesh_sculptor_apply_stroke` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
 | Apagar | `clay_voxel_erase_brush` / `clay_multires_sculpt_layer_stroke_erase` | voxel, multires | Removes cells. **On a hierarchy it is a different operation under the same name**: there are no cells to clear, so it takes the *selected pass*'s detail toward zero and leaves the form and every other pass exactly where they are. Refused where the form's row is selected rather than a pass |
 
+**A row says what the call *is*, not only what it is called.** Each column of
+`ToolKind::verbs` is a `Binding`: the entry point, plus three things that were
+until recently written in the prose around it — the **intent** the tool means
+by this call, the engine **family** the call belongs to, and how faithfully it
+keeps the promise the label makes. That last one, `Fidelity`, is the column the
+table most needed. A binding is `Native` where the representation's own verb
+does what the label says; `Specialized` where it does *more* because of what
+the representation stores, which is the grid's two-sided flatten and the
+hierarchy's frequency-picking smooth; `Approximation` where it is a stand-in
+close enough to offer and different enough to say so, which is the field's
+Padrão and the grid's deposit; and `Recipe` where several verbs stand in for
+one the engine has not.
+
+Written down, those become claims tests can hold rather than comments.
+A tool means one thing wherever it is offered — so a column quietly borrowed
+from a neighbouring verb fails. A caveat never hangs off a row that claims to
+do exactly what its label says, which ties every `ToolNote` to the fidelity it
+is the sentence for. Two tools that are the *same binding in every part* on one
+representation are one verb offered under two words, and the two that really
+are — Padrão and Camada on a grid, Suavizar and Relaxar on a field — are named
+with their reason instead of passing unremarked. And the diagnostics report
+carries the line, so "Padrão did something I did not expect" arrives as
+`tool: Padrão on SDF — clay_layer_apply_stroke (CLAY_OP_RELIEF) (surface
+displace, field combine op, approximation)` rather than as a tool name whose
+meaning depends on which layer was active.
+
 **The Engine verb column is checked rather than maintained.** It is written
 out in `ToolKind::verbs`, and two tests in
 `crates/clayspace-engine/tests/table_truth.rs` hold it to the engine that is

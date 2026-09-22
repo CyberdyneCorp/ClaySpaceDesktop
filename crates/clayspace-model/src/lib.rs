@@ -57,7 +57,7 @@ pub use detail::DetailPolicy;
 pub use diagnostics::{
     AgentDiagnostics, AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, MemoryDiagnostics,
     MeshDiagnostics, MultiresDiagnostics, PhaseCost, RefillDiagnostics, RenderDiagnostics,
-    StrokeDiagnostics,
+    StrokeDiagnostics, ToolDiagnostics,
 };
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
@@ -111,9 +111,9 @@ pub use shape::{
 };
 pub use surface::SurfaceOpacity;
 pub use tools::{
-    entry_points, every_entry_point, BrushSettings, Drag, DragFalloff, Dynamics, Falloff,
-    LayerOperation, LayerState, Representation, Shaping, ToolKind, ToolNote, Unavailable, Verbs,
-    ViewPresetKind,
+    entry_points, every_entry_point, Binding, BrushSettings, Drag, DragFalloff, Dynamics,
+    ExecutionFamily, Falloff, Fidelity, LayerOperation, LayerState, Representation, SemanticIntent,
+    Shaping, ToolKind, ToolNote, Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
 pub use voxel_display::{SmoothBlur, VoxelDisplay};

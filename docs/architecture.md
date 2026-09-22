@@ -132,6 +132,15 @@ graph TD
 declares `#![forbid(unsafe_code)]`, and `tools/check_layering.py` fails if one
 drops the declaration or if any forbidden dependency edge appears.
 
+The same tool holds one more rule, and it is about a table rather than a
+dependency: **where a tool applies is decided in one place**, the capability
+table in `clayspace-model/src/tools.rs`. The shelf, the availability refusal,
+the tool notes and the diagnostics line are lookups into it, so a View, a
+ViewModel, the engine adapter or the agent-facing door that decided something
+per (tool, representation) of its own would be a second opinion that could
+drift from the first. The check looks for that pairing spelled as a pattern,
+which is how such a decision is written and how the model itself writes it.
+
 ### Why the door sits beside the View and not under it
 
 `clayspace-mcp` is a second reader of ViewModel state and a second emitter of
