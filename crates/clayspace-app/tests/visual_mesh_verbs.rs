@@ -24,7 +24,8 @@ mod support;
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, Direction, GestureSample, Representation, SculptModel, ToolKind,
+    BrushSettings, Direction, GestureSample, Representation, RetopoModel, SceneModel, SculptModel,
+    ToolKind,
 };
 use clayspace_view::Camera;
 use support::Harness;
@@ -224,4 +225,83 @@ fn every_geometry_verb_moves_something() {
         dead.is_empty(),
         "these verbs are on the shelf and move nothing: {dead:?}"
     );
+}
+
+/// How much the lighting varies across what was drawn: the standard deviation
+/// of luminance over every pixel the form covers.
+///
+/// A property rather than a golden, and the one a flat render cannot fake. A
+/// form lit by its own shape runs from a highlight to a terminator; one drawn
+/// with a single normal everywhere is one colour, broken only by occlusion at
+/// its creases.
+fn shading_variation(image: &clayspace_view::Image, background: [u8; 4]) -> f64 {
+    let luminance: Vec<f64> = image
+        .pixels
+        .chunks_exact(4)
+        .filter(|p| (0..3).any(|i| p[i].abs_diff(background[i]) > support::RENDER_NOISE))
+        .map(|p| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64)
+        .collect();
+    assert!(luminance.len() > 1_000, "the form was not drawn");
+    let mean = luminance.iter().sum::<f64>() / luminance.len() as f64;
+    let variance =
+        luminance.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / luminance.len() as f64;
+    variance.sqrt()
+}
+
+/// A retopology, and a hierarchy built over it, are drawn lit under the same
+/// light as the sculpt they came from.
+///
+/// Both came back flat: the retopology crosses back into the document as bare
+/// triangles, with no normals, and a hierarchy exports its levels' normals only
+/// where its cage had them. What the viewport stood in for them was one normal
+/// for every vertex. So the property is stated against the sculpt the
+/// retopology was made from, which carries its own normals: the result has to
+/// vary about as much as that does, rather than collapse to one colour.
+#[test]
+fn a_retopology_and_its_hierarchy_are_shaded_like_the_sculpt() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let background = harness.background();
+    let render = |document: &mut ClayDocument, name: &str| {
+        let (vertices, indices) = support::viewport_geometry(document);
+        let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+        mesh.upload(&harness.gpu, &vertices, &indices);
+        let mut camera = Camera::default();
+        camera.frame_bounds([-1.5f32; 3].into(), [1.5f32; 3].into());
+        harness.capture(&mesh, &camera, false, name)
+    };
+
+    let sculpt = shading_variation(&render(&mut document, "184-sculpt"), background);
+    document
+        .retopologise(clayspace_model::RetopoSettings {
+            target_quads: 600,
+            ..clayspace_model::RetopoSettings::default()
+        })
+        .expect("the retopology runs");
+    let retopology = shading_variation(&render(&mut document, "184-retopology"), background);
+
+    let settings = clayspace_model::ConversionSettings::default();
+    document
+        .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
+        .expect("a quad retopology of a closed form is a cage");
+    document
+        .apply_multires_level_op(clayspace_model::MultiresLevelOp::AddLevel)
+        .expect("one level over it");
+    let hierarchy = shading_variation(&render(&mut document, "184-hierarchy"), background);
+
+    println!(
+        "luminance spread: sculpt {sculpt:.1}, retopology {retopology:.1}, hierarchy {hierarchy:.1}"
+    );
+    for (what, spread) in [("retopology", retopology), ("hierarchy", hierarchy)] {
+        assert!(
+            spread > sculpt * 0.6,
+            "the {what} varies by {spread:.1} levels of luminance where the \
+             sculpt it came from varies by {sculpt:.1} — drawn flat, as though \
+             unlit. See target/visual/184-*.png"
+        );
+    }
 }

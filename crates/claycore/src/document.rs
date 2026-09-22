@@ -1363,10 +1363,10 @@ impl Document {
             std::mem::ManuallyDrop::new(Mesh::from_raw(mesh, "clay_document_mesh_layer")?);
         let positions = borrowed.positions().to_vec();
         let count = positions.len();
-        let normals = borrowed
-            .normals()
-            .map(<[[f32; 3]]>::to_vec)
-            .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; count]);
+        // Derived where the layer holds none, which a layer filled through
+        // `clay_mesh_from_triangles` — a retopology — always does. One constant
+        // normal here drew such a layer as a flat silhouette.
+        let normals = borrowed.normals_or_derived();
         let colors = borrowed
             .colors()
             .map(<[[f32; 3]]>::to_vec)
