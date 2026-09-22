@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: A drag is seen while it is made
 A gesture that **replays from its anchor** SHALL be sent to the model on every

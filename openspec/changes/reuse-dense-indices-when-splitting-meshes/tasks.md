@@ -4,3 +4,5 @@
 - [x] Measure scratch memory and isolated/live performance.
 - [x] Complete format, Clippy/complexity, OpenSpec and native/rendered verification; update PR evidence.
 - [ ] Finish platform CI and investigate any recurrence of the fixture-reset timeout.
+      — **superseded**: the code shipped in #137, later work builds on it, and every
+      platform row has been green on main since

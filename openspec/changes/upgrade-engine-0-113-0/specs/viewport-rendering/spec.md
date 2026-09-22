@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: A released stroke settles from the brick cache
 The viewport SHALL rebuild the settled surface from the document's bricks rather
@@ -23,8 +23,6 @@ rather than keeping it beside the cheaper one.
 - **WHEN** the last field content is removed
 - **THEN** the drawn surface goes with it, rather than the old surface standing
   in the buffers because a whole-field mesh refused an empty document
-
-## ADDED Requirements
 
 ### Requirement: The coarse surface is shaded from the field
 Where the engine can answer gradient normals at a level, the viewport SHALL ask

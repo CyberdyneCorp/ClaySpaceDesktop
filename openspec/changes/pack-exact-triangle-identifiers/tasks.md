@@ -4,3 +4,5 @@
 - [x] Complete native/rendered tests, lint, complexity and strict OpenSpec checks.
 - [x] Measure production memory and application latency; update PR evidence and preserve the full 16 ms goal.
 - [ ] Complete platform CI and retain the full 16 ms goal for further work.
+      — **superseded**: the code shipped in #137, later work builds on it, and every
+      platform row has been green on main since

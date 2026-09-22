@@ -105,6 +105,13 @@ Where a tool applies SHALL be declared once, per tool and per representation,
 in the table the shelf, the availability check, the diagnostics report and the
 tests all read. Nothing else may decide where a tool applies.
 
+A row SHALL name the entry point that executes for that pair, spelled in full.
+A family abbreviated to one name plus suffixes — `begin/update/commit` — is a
+name that cannot be looked up, and a row that names the kind of call rather than
+the call is a row nothing can check. Where the same verb reaches the engine
+through a resolved stroke for one tool and a single stamp for another, the rows
+SHALL differ accordingly.
+
 Beyond the vocabulary already bound, the declared table SHALL include:
 
 - **Mover** on voxel layers, through the grid's grab verb.
@@ -141,6 +148,12 @@ call rather than falling through to a neighbouring one.
 - **WHEN** each tool is applied on each representation its row declares
 - **THEN** the edit lands, and no two tools on one representation resolve to the
   same engine call unless the table says they do
+
+#### Scenario: A row names the call that runs
+- **WHEN** a row names an entry point and the dispatch for that pair calls
+  another
+- **THEN** the row is wrong, whether or not the name it carries is a symbol the
+  engine has
 
 #### Scenario: Crease cuts a trough on a field
 - **WHEN** Vinco is stroked across an SDF surface

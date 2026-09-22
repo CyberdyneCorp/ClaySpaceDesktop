@@ -107,11 +107,14 @@ defect was fixed. Both fired on the pin and both name the workaround to delete.
       bound: two meshers of one field render 0.0157 apart on an undisturbed
       sphere and 0.0333 on the two-sphere fixture, with zero dark specks in any
       of them
-- [ ] 7.3 Resolve the four Linux CI failures, which do not reproduce on macOS.
+- [x] 7.3 Resolve the four Linux CI failures, which do not reproduce on macOS.
       The likeliest candidate is the export test asserting that ratio 0.5 is
       non-manifold — a coordinate that ClayCore have shown is chaotic under tiny
       input perturbations, and therefore not a property a platform-independent
       test may assert
+      — **done**: 98111e5 made the export test assert that the export agrees with
+      the mesh rather than that ratio 0.5 is unsound, and the Linux rows have been
+      green on main since
 
 ## 8. Documentation
 
@@ -129,6 +132,8 @@ defect was fixed. Both fired on the pin and both name the workaround to delete.
       that it rebuilds from bricks
 - [ ] 8.5 Record in `docs/roadmap.md` that coarse-during-drag is unblocked
       rather than refused, and why it is not therefore scheduled
+      — **still open**, and carried into the roadmap rather than kept here: this
+      change is archived because three later pins have superseded it
 
 ## 9. Name every Move gesture (#122)
 
@@ -148,7 +153,10 @@ defect was fixed. Both fired on the pin and both name the workaround to delete.
       mirrored held drag leaves both sides where the unnamed one does
 - [x] 9.5 Keep a tripwire on the live door, which cannot carry the name on this
       pin because `clay_sdf_move_begin` drops `gesture_id`
-- [ ] 9.6 Report the dropped `gesture_id` to ClayCore, and turn the tripwire into
+- [x] 9.6 Report the dropped `gesture_id` to ClayCore, and turn the tripwire into
       the held door's assertion on the pin that fixes it
+      — **done**: reported as ClayCore #604, fixed in v0.116.0, and the tripwire
+      turned into the assertion when the pin moved (#140);
+      see `crates/clayspace-engine/tests/move_gesture_identity.rs`
 - [x] 9.4 Correct the proposal's reason for leaving the id unset, and describe
       the naming in `docs/features.md`

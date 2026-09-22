@@ -197,6 +197,8 @@
         mask's *layer*, which is a redesign of `claycore`'s masking surface
         rather than the thin wrapper this change allows. Recorded in
         docs/features.md and measured in `claycore_mask_persistence.rs`
+      — **not done, deliberately**: the reason is recorded above, and the mask
+      stays layer-local on purpose
 - [x] 6.3 Regression tests: two subtools keep independent masks; a mask gates
       only its own subtool's edits; the existing mask suites still pass
 - [x] 6.4 Confirm per-layer masks ride the document's save path; if the engine

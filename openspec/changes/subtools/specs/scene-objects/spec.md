@@ -17,6 +17,16 @@ placed onto; the section SHALL open from the tool rail's shapes button or its
 menu entry and SHALL close from a control on its own heading, each dispatching
 the same command.
 
+The sizes offered SHALL be bounded by what the field can hold — derived from
+the brick cache's own layout and budget — rather than by a fixed number. A size
+the cache cannot carry SHALL NOT be offered.
+
+The shapes SHALL be offered in a section of the right region rather than in a
+window over the viewport, because the viewport holds the surface the shape is
+placed onto; the section SHALL open from the tool rail's shapes button or its
+menu entry and SHALL close from a control on its own heading, each dispatching
+the same command.
+
 An unbounded primitive SHALL NOT be offered. The engine names two — a plane and
 an infinite cylinder — and neither has an extent to draw a manipulator around
 or bounds for the brick cache to work from, so offering one would be offering a
@@ -39,6 +49,11 @@ control whose result cannot be shown.
 #### Scenario: The list is what the engine can bound
 - **WHEN** the primitive list is presented
 - **THEN** it holds only primitives with a finite extent
+
+#### Scenario: The sizes offered are what the field holds
+- **WHEN** a size control is offered for any of the shapes
+- **THEN** its largest value is one the field can carry, taken from the cache's
+  layout and budget rather than fixed
 
 #### Scenario: Placing into a layer that cannot take one
 - **WHEN** the active layer is a voxel grid or a mesh and the sculptor places

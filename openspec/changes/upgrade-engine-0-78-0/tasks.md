@@ -165,10 +165,12 @@
 
 ## 10. Say what moved
 
-- [ ] 10.1 Run the A/B: the pre-built v0.73.0 binary against this tree, several
+- [x] 10.1 Run the A/B: the pre-built v0.73.0 binary against this tree, several
       whole runs per pin on a quiet machine, medians read against each other, with
       the pre-flight that every reference member still builds the size it says.
       A filtered run measures a different shape and is not evidence
+      — **done** in `benchmarks/ab-v0.73.0-vs-v0.78.0.md`, landed with #87: whole
+      runs on the Linux reference machine, medians read against each other
 - [x] 10.2 Update the documentation that states the engine version, and the
       roadmap's account of what the engine gets wrong — two of its entries are
       closed by this pin and two new limits are held as tripwires

@@ -22,6 +22,11 @@ so the control SHALL be offered without being gated on an alpha being present:
 gating it would make a setting appear and disappear as the sculptor changes
 stamps, and the setting is held per tool.
 
+The edge falloff SHALL be sent under the name the sculptor chose. Where the
+engine's own reading of that name changes, the application SHALL follow the
+engine rather than compensating for it behind the control, so that the name on
+the dial and the curve on the surface stay the same thing.
+
 #### Scenario: Buildup versus clamped differ observably
 - **WHEN** the same stroke is applied twice over itself with accumulation enabled
   and again with it disabled
@@ -42,3 +47,9 @@ stamps, and the setting is held per tool.
 - **WHEN** the stamp angle is set to a whole turn, or to a value that is not a
   representable angle
 - **THEN** the setting reads as no rotation
+
+#### Scenario: The name on the dial is the curve on the surface
+- **WHEN** the engine's reading of a falloff name changes, and the user selects
+  that falloff
+- **THEN** the value sent is still the one that name stands for, rather than a
+  neighbouring one chosen to reproduce the old curve

@@ -43,3 +43,4 @@
 ## 6. Verification
 
 - [ ] 6.1 `just check`
+      — **superseded**: the change merged with CI running the same gates

@@ -28,6 +28,8 @@
 
 - [x] 3.1 Re-record the Linux baseline against v0.52.2, on a quiet machine (0.13 load per core, stamped in the file)
 - [ ] 3.2 Re-record the macOS baseline, on a macOS machine
+      — **still open**; the same macOS baseline is task 1.5 of
+      `gates-that-can-fail`, which stays active and owns it
 - [x] 3.3 Report the `brush.sdf.mover` regression upstream with the measured
       localisation (CyberdyneCorp/ClayCore#335)
 - [x] 3.4 Report the half-undo across a crossing upstream (CyberdyneCorp/ClayCore#341)

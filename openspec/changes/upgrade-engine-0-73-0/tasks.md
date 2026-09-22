@@ -66,6 +66,8 @@
 
 - [ ] 5.1 Compare the benchmark suite against the recorded baseline, in full
       runs rather than filtered ones
+      — **superseded**: a comparison for a pin three moves back. Each later pin
+      carried its own A/B, starting with `benchmarks/ab-v0.73.0-vs-v0.78.0.md`
 - [x] 5.2 Update the documentation that states the engine version, and the
       roadmap's account of what the engine gets wrong — two of its entries are
       closed by this pin

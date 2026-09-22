@@ -136,6 +136,7 @@
       generator.** Measured comfortable at load ~10 and blown at load 52, same
       commit, same binary. Not this change's to fix, and raised here so it is
       not rediscovered
+      — a note rather than a task, archived as recorded
 
 ## 9. The corrected brush test, checked against its own justification
 
