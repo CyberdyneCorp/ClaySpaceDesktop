@@ -120,6 +120,19 @@ pub struct Diagnostics {
     /// The agent-facing door, where this build has one.
     pub agent: Option<AgentDiagnostics>,
 
+    /// Which tool is in hand, and what it binds to on the active layer.
+    ///
+    /// In the report for the same reason the engine revision is: "the brush
+    /// did something I did not expect" is the most common thing a sculptor
+    /// says, and without the binding behind it the report cannot be acted on
+    /// at all. A field's Padrão is a relief stroke and relief is an Inflate;
+    /// a grid's Padrão is the deposit. Those are two different complaints
+    /// wearing one tool's name, and until this line the only way to tell them
+    /// apart was to ask which layer had been active.
+    ///
+    /// Optional because a report is readable with no document open.
+    pub tool: Option<ToolDiagnostics>,
+
     /// Where a stroke's milliseconds went, phase by phase.
     ///
     /// In the report because the line above it — an operation and a total —
@@ -142,6 +155,42 @@ pub struct Diagnostics {
     /// fact about the engine which only a host that measures both is in a
     /// position to report.
     pub refill: Option<RefillDiagnostics>,
+}
+
+/// The tool in hand, against the layer it would land on.
+///
+/// The two halves of the capability table's lookup and nothing else: the
+/// report asks [`crate::ToolKind::binding_on`] itself rather than being handed
+/// a rendered sentence, so there is no second place where a tool's binding is
+/// described and no way for this line to say something the shelf does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolDiagnostics {
+    pub tool: crate::ToolKind,
+    pub representation: crate::Representation,
+}
+
+impl ToolDiagnostics {
+    /// The report line: the tool, the layer under it, and the binding.
+    ///
+    /// A tool with no binding here is reported as such rather than omitted.
+    /// The shelf does not offer one, so meeting it in a report means something
+    /// upstream of the shelf put it in hand — which is the kind of thing a
+    /// report exists to surface.
+    pub fn describe(self) -> String {
+        match self.tool.binding_on(self.representation) {
+            Some(binding) => format!(
+                "{} on {} — {}",
+                self.tool.label(),
+                self.representation.label(),
+                binding.describe()
+            ),
+            None => format!(
+                "{} on {} — no binding here",
+                self.tool.label(),
+                self.representation.label()
+            ),
+        }
+    }
 }
 
 /// What a refill costs per brick on each backend the routing considered.
@@ -545,6 +594,9 @@ impl Diagnostics {
                 ),
             );
         }
+        if let Some(tool) = &self.tool {
+            line("tool", &tool.describe());
+        }
         if let Some(stroke) = &self.stroke {
             self.report_stroke(stroke, &mut line);
         }
@@ -654,6 +706,7 @@ mod tests {
             hierarchies: None,
             memory: None,
             agent: None,
+            tool: None,
             stroke: None,
             refill: None,
         }
@@ -719,6 +772,64 @@ mod tests {
     #[test]
     fn a_smooth_session_says_so_rather_than_staying_silent() {
         assert!(sample().to_report().contains("none over one frame"));
+    }
+
+    /// The tool line carries the binding and not only the tool's name.
+    ///
+    /// "Padrão did something I did not expect" is the same sentence on a field
+    /// and on a grid and is two different reports: on a field the call is a
+    /// relief stroke, which the engine measured to be an Inflate, and on a
+    /// grid it is the deposit. The line says which, in the words the
+    /// capability table uses, so nobody has to ask which layer was active.
+    #[test]
+    fn the_tool_line_names_the_binding_its_intent_family_and_fidelity() {
+        let mut diagnostics = sample();
+        diagnostics.tool = Some(ToolDiagnostics {
+            tool: crate::ToolKind::Padrao,
+            representation: crate::Representation::Sdf,
+        });
+        let text = diagnostics.to_report();
+        assert!(text.contains("tool: Padrão on SDF"), "{text}");
+        assert!(
+            text.contains("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("surface displace, field combine op, approximation"),
+            "the line has to carry all three, since the call alone is the \
+             thing two tools can share: {text}"
+        );
+
+        // And the same tool on a grid, which is a different call and a
+        // different claim under one word.
+        diagnostics.tool = Some(ToolDiagnostics {
+            tool: crate::ToolKind::Padrao,
+            representation: crate::Representation::Voxel,
+        });
+        let grid = diagnostics.to_report();
+        assert!(grid.contains("tool: Padrão on voxel"), "{grid}");
+        assert!(grid.contains("clay_voxel_set_brush"), "{grid}");
+    }
+
+    /// A tool the shelf would not offer is reported rather than dropped.
+    ///
+    /// Reaching this line means something upstream of the shelf put a tool in
+    /// hand that the active layer has no verb for, which is exactly the state
+    /// a report should surface instead of rendering as a missing section.
+    #[test]
+    fn a_tool_with_no_binding_on_the_active_layer_says_so() {
+        let mut diagnostics = sample();
+        diagnostics.tool = Some(ToolDiagnostics {
+            tool: crate::ToolKind::Raspar,
+            representation: crate::Representation::Sdf,
+        });
+        assert!(
+            diagnostics
+                .to_report()
+                .contains("Raspar on SDF — no binding here"),
+            "{}",
+            diagnostics.to_report()
+        );
     }
 
     /// The figure is silent-by-construction, so it is reported even at zero:

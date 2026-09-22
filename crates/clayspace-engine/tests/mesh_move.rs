@@ -107,7 +107,7 @@ fn furthest(before: &[[f32; 3]], after: &[[f32; 3]], which: &[usize]) -> f32 {
 fn the_capability_table_binds_move_to_a_mesh_verb() {
     let verbs: Verbs = ToolKind::Mover.verbs();
     assert_eq!(
-        verbs.on(Representation::Mesh),
+        verbs.entry_point_on(Representation::Mesh),
         Some("clay_mesh_sculptor_stamp (GRAB)"),
         "Move claims no mesh binding, so the shelf would not offer it"
     );

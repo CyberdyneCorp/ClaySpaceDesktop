@@ -10011,7 +10011,12 @@ impl SceneModel for ClayDocument {
                     active: layer.representation,
                     verbs: clayspace_model::Verbs {
                         sdf: None,
-                        voxel: Some("clay_voxel_begin_sculpt_layer"),
+                        voxel: Some(clayspace_model::Binding::new(
+                            "clay_voxel_begin_sculpt_layer",
+                            clayspace_model::SemanticIntent::Structure,
+                            clayspace_model::ExecutionFamily::VoxelVerb,
+                            clayspace_model::Fidelity::Native,
+                        )),
                         mesh: None,
                         // A hierarchy has a pass stack too, and it is NOT this
                         // one: `SculptLayerOp` addresses a pass by its position
@@ -10081,7 +10086,12 @@ impl SceneModel for ClayDocument {
                         sdf: None,
                         voxel: None,
                         mesh: None,
-                        multires: Some("clay_multires_add_level"),
+                        multires: Some(clayspace_model::Binding::new(
+                            "clay_multires_add_level",
+                            clayspace_model::SemanticIntent::TopologyRebuild,
+                            clayspace_model::ExecutionFamily::MultiresVerb,
+                            clayspace_model::Fidelity::Native,
+                        )),
                     },
                     note: None,
                 },
@@ -10145,7 +10155,12 @@ impl SceneModel for ClayDocument {
                         sdf: None,
                         voxel: None,
                         mesh: None,
-                        multires: Some("clay_multires_add_sculpt_layer"),
+                        multires: Some(clayspace_model::Binding::new(
+                            "clay_multires_add_sculpt_layer",
+                            clayspace_model::SemanticIntent::Structure,
+                            clayspace_model::ExecutionFamily::MultiresVerb,
+                            clayspace_model::Fidelity::Native,
+                        )),
                     },
                     note: None,
                 },

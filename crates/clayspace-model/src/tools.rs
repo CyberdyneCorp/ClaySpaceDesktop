@@ -81,16 +81,415 @@ impl Representation {
     }
 }
 
+/// What a binding *means* to a sculptor, independent of how it runs.
+///
+/// A tool is one word on the shelf and up to four calls under it, and the
+/// thing that makes those four one tool is this: they are the same act. Until
+/// now that was asserted only by the shelf showing one button, which is not an
+/// assertion at all — two rows could name two unrelated verbs and the
+/// interface would present them as one tool with a single tooltip. Stated per
+/// binding, it becomes a claim a test can hold: see
+/// `a_tool_means_one_thing_wherever_it_is_offered`.
+///
+/// Deliberately coarse. It is not a second label — the label is the label —
+/// and a vocabulary fine enough to tell Padrão from Camada would be a
+/// vocabulary with one word per tool, which says nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SemanticIntent {
+    /// Moves the surface along its normal, by a deposit.
+    SurfaceDisplace,
+    /// Drags the surface sideways: what is there goes somewhere else.
+    SurfaceMove,
+    /// Averages the surface against itself.
+    SurfaceSmooth,
+    /// Takes the surface toward a plane.
+    SurfaceFlatten,
+    /// Cuts a narrow line into the surface, or raises one.
+    SurfaceCrease,
+    /// Gathers the surface toward the dab's centre.
+    SurfacePinch,
+    /// Puts material where there was none.
+    VolumeAdd,
+    /// Takes material away.
+    VolumeRemove,
+    /// Offsets the whole surface outward, each point along its own normal.
+    VolumeInflate,
+    /// Changes how finely the form is stored, rather than what it holds.
+    TopologyRebuild,
+    /// Writes colour and moves nothing.
+    Paint,
+    /// Freezes a region against every other verb.
+    Mask,
+    /// Changes how the layer is organised: a pass, a level, a stack.
+    ///
+    /// Not a sculpting act at all, and the one intent no tool on the shelf
+    /// carries. It is here because [`Verbs`] is also how a refusal says where
+    /// a *structural* operation applies — a grid's pass stack, a hierarchy's
+    /// levels — and a row that could not name its intent would be a row back
+    /// in prose.
+    Structure,
+}
+
+impl SemanticIntent {
+    /// For the diagnostics line. Not interface text: the report is read by
+    /// this project's own maintainers and is pasted into issues in English.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SurfaceDisplace => "surface displace",
+            Self::SurfaceMove => "surface move",
+            Self::SurfaceSmooth => "surface smooth",
+            Self::SurfaceFlatten => "surface flatten",
+            Self::SurfaceCrease => "surface crease",
+            Self::SurfacePinch => "surface pinch",
+            Self::VolumeAdd => "volume add",
+            Self::VolumeRemove => "volume remove",
+            Self::VolumeInflate => "volume inflate",
+            Self::TopologyRebuild => "topology rebuild",
+            Self::Paint => "paint",
+            Self::Mask => "mask",
+            Self::Structure => "structure",
+        }
+    }
+}
+
+/// How a binding reaches the engine.
+///
+/// Which of the engine's families the call belongs to, which is a fact about
+/// the ABI rather than about the tool: two bindings in one family take the
+/// same kind of descriptor, cost the same kind of time and fail the same way.
+/// A reader asking why the field's smooth costs what the mesh's does not is
+/// asking this question, and until now the answer was in a comment.
+///
+/// The engine's dynamic-topology family has no variant here, and that is the
+/// rule this enum is held to: a family nothing binds is a claim nothing
+/// checks. It arrives with the first binding that needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExecutionFamily {
+    /// An operation applied to the accumulated field: `clay_layer_apply_stroke`
+    /// carrying one of the engine's `CLAY_OP_*` operations.
+    FieldCombineOp,
+    /// A deformer over the accumulated field — a transaction, or a signed
+    /// radial scale — which moves what is there rather than contributing to it.
+    FieldDeformer,
+    /// An item in the layer's ordered list: added, or its own geometry edited.
+    FieldItemEdit,
+    /// Sample the document into a volume, act on the samples, write back.
+    ///
+    /// The `_from` family, and its own rather than folded in with the rest of
+    /// the field's vocabulary because the sampling is where both its accuracy
+    /// and its cost come from: the engine says the bake-then-act pair differs
+    /// from this "by accuracy, and it is not small".
+    BakedFieldOperation,
+    /// A verb on the voxel grid.
+    VoxelVerb,
+    /// A verb on the fixed-topology mesh sculptor.
+    MeshVerb,
+    /// A verb on the subdivision hierarchy.
+    MultiresVerb,
+    /// The world-addressed mask, which belongs to no representation.
+    ///
+    /// Its own family rather than the field's, because belonging to no
+    /// representation is exactly what a mask is: it is consulted by every verb
+    /// on every representation, and filing it under the field would make the
+    /// one row that is the same call on all four read as three borrowings of
+    /// an SDF call.
+    MaskField,
+    /// Several engine verbs in a fixed order, standing in for one the engine
+    /// has not.
+    ///
+    /// Nothing on the shelf is one today, and the family exists so that the
+    /// first one does not have to arrive as an absence. The engine documents
+    /// DamStandard on a grid as a recipe rather than a verb, and a composed
+    /// tool that cannot be *described* is a tool that can only be left out —
+    /// which is how the voxel Crease column came to be empty with the reason
+    /// in a comment.
+    Recipe,
+}
+
+impl ExecutionFamily {
+    /// The prefix every entry point in this family carries, where the family
+    /// is one the engine spells as a prefix.
+    ///
+    /// `None` for the four that are not: the field's vocabulary is spread
+    /// across `clay_layer_*`, `clay_sdf_*`, `clay_item_*` and `clay_cut_*`, and
+    /// a recipe names whatever its steps name. What this is for is
+    /// `every_binding_is_filed_under_the_family_it_calls` — a mesh verb
+    /// declared as a grid's is a row that reads plausibly and misleads every
+    /// reader after it.
+    pub fn prefix(self) -> Option<&'static str> {
+        match self {
+            Self::VoxelVerb => Some("clay_voxel_"),
+            Self::MeshVerb => Some("clay_mesh_"),
+            Self::MultiresVerb => Some("clay_multires_"),
+            Self::MaskField => Some("clay_mask_"),
+            Self::BakedFieldOperation => Some("clay_item_volume_"),
+            Self::FieldCombineOp | Self::FieldDeformer | Self::FieldItemEdit | Self::Recipe => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FieldCombineOp => "field combine op",
+            Self::FieldDeformer => "field deformer",
+            Self::FieldItemEdit => "field item edit",
+            Self::BakedFieldOperation => "baked field operation",
+            Self::VoxelVerb => "voxel verb",
+            Self::MeshVerb => "mesh verb",
+            Self::MultiresVerb => "multires verb",
+            Self::MaskField => "mask field",
+            Self::Recipe => "recipe",
+        }
+    }
+}
+
+/// How well the call keeps the promise the tool's label makes.
+///
+/// The column this table most needed and least had. Every row was written as
+/// though a binding either exists or does not, and several are neither: a
+/// grid's Padrão deposits cells because occupancy is binary, a field's Padrão
+/// is measurably an Inflate, a grid's Planar fills as well as cuts, a
+/// hierarchy's eraser acts on one pass. Each of those was recorded in a
+/// comment, where it could not reach the interface, the diagnostics or a test
+/// — and the ones an artist hears about reached them only because somebody
+/// separately wrote a [`ToolNote`].
+///
+/// Stated here, the relation between the two becomes checkable: a note is the
+/// *sentence* for a binding that is not the native one, and a note on a
+/// binding that is native would be a sentence about nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Fidelity {
+    /// The representation's own verb for the intent, doing what the label says.
+    Native,
+    /// The representation's verb does *more* than the intent, because of what
+    /// it stores.
+    ///
+    /// Not a shortfall and not a defect: a grid's flatten is two-sided because
+    /// a grid can fill, and a hierarchy's smooth picks a frequency because a
+    /// hierarchy has frequencies. These are the rows where the representation
+    /// is the reason to reach for it.
+    Specialized,
+    /// A useful stand-in: close enough to offer, different enough to say so.
+    Approximation,
+    /// Several verbs composed, where the engine has no single one.
+    Recipe,
+}
+
+impl Fidelity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Specialized => "specialized",
+            Self::Approximation => "approximation",
+            Self::Recipe => "recipe",
+        }
+    }
+
+    /// Whether this row does the plain reading of the tool's label and nothing
+    /// else.
+    ///
+    /// What the note rule is asked in terms of: a row that is not the plain
+    /// reading is a row a sculptor can be surprised by mid-stroke.
+    pub fn is_the_plain_reading(self) -> bool {
+        self == Self::Native
+    }
+}
+
+/// One column of one row: what a tool calls on one representation, and what
+/// kind of call it is.
+///
+/// The entry point was here all along; the other three were in the prose
+/// around it. Moving them into the value is this type's whole point — prose
+/// cannot drive the shelf, cannot reach the diagnostics line, and cannot fail
+/// a test when the code stops matching it. Three separate defects came out of
+/// that gap: two tools sharing a verb while claiming to differ, a note
+/// describing a mode nothing selected, and a row naming a call nobody made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Binding {
+    /// The engine entry point, spelled for a reader — the call, and the
+    /// operation or brush kind it carries, in brackets.
+    ///
+    /// [`entry_points`] is what picks the names back out of it, and
+    /// `table_truth.rs` is what asks the linked engine whether each one is a
+    /// symbol it has and whether the stroke reaches it.
+    pub entry_point: &'static str,
+    pub intent: SemanticIntent,
+    pub family: ExecutionFamily,
+    pub fidelity: Fidelity,
+}
+
+impl Binding {
+    pub const fn new(
+        entry_point: &'static str,
+        intent: SemanticIntent,
+        family: ExecutionFamily,
+        fidelity: Fidelity,
+    ) -> Self {
+        Self {
+            entry_point,
+            intent,
+            family,
+            fidelity,
+        }
+    }
+
+    /// The binding as the diagnostics report states one.
+    pub fn describe(self) -> String {
+        format!(
+            "{} ({}, {}, {})",
+            self.entry_point,
+            self.intent.label(),
+            self.family.label(),
+            self.fidelity.label()
+        )
+    }
+
+    /// Whether this is several verbs standing in for one.
+    pub fn is_a_recipe(self) -> bool {
+        self.fidelity == Fidelity::Recipe || self.family == ExecutionFamily::Recipe
+    }
+}
+
+// The row shorthands. A column is written as the family it belongs to, so that
+// a mesh verb filed under the grid is something a reader sees rather than an
+// argument three deep — and `every_binding_is_filed_under_the_family_it_calls`
+// is what holds the spelling to the symbol.
+//
+// `pub(crate)` rather than private: the object table in `shape.rs` is a row of
+// the same kind and is written the same way. A crate that is not this one
+// builds a [`Binding`] with [`Binding::new`].
+
+pub(crate) const fn field_op(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::FieldCombineOp,
+        fidelity,
+    ))
+}
+
+pub(crate) const fn field_deformer(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::FieldDeformer,
+        fidelity,
+    ))
+}
+
+pub(crate) const fn field_item(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::FieldItemEdit,
+        fidelity,
+    ))
+}
+
+pub(crate) const fn baked_field(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::BakedFieldOperation,
+        fidelity,
+    ))
+}
+
+pub(crate) const fn voxel_verb(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::VoxelVerb,
+        fidelity,
+    ))
+}
+
+pub(crate) const fn mesh_verb(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::MeshVerb,
+        fidelity,
+    ))
+}
+
+pub(crate) const fn multires_verb(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::MultiresVerb,
+        fidelity,
+    ))
+}
+
+/// The mask's own column, which needs no arguments but the call.
+///
+/// One intent, one family and one fidelity wherever it is painted: a mask is
+/// the same act on all four representations, which is the fact
+/// `the_mask_is_the_same_call_wherever_it_is_painted` holds.
+pub(crate) const fn mask_field(entry_point: &'static str) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        SemanticIntent::Mask,
+        ExecutionFamily::MaskField,
+        Fidelity::Native,
+    ))
+}
+
+/// Several verbs in a fixed order, standing in for one the engine has not.
+///
+/// Nothing on the shelf is one today. It is exercised by
+/// `a_recipe_is_expressible_and_is_marked_as_one`, which is what keeps it
+/// compiling and honest until the first composed tool lands.
+#[allow(dead_code)]
+pub(crate) const fn recipe(entry_point: &'static str, intent: SemanticIntent) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::Recipe,
+        Fidelity::Recipe,
+    ))
+}
+
 /// What one tool invokes on each of the four representations.
 ///
-/// A field is `None` where that representation has no verb for the tool. The
-/// engine's name is carried rather than a boolean so that "does this apply
-/// here" and "what does it call" cannot disagree — they are one row.
+/// A field is `None` where that representation has no verb for the tool. A
+/// [`Binding`] is carried rather than a boolean so that "does this apply here"
+/// and "what does it call" cannot disagree — they are one row — and rather
+/// than the bare name it used to hold, so that *how* the call answers the
+/// tool's label is in the value too instead of in the prose beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Verbs {
-    pub sdf: Option<&'static str>,
-    pub voxel: Option<&'static str>,
-    pub mesh: Option<&'static str>,
+    pub sdf: Option<Binding>,
+    pub voxel: Option<Binding>,
+    pub mesh: Option<Binding>,
     /// The hierarchy's column.
     ///
     /// Almost the mesh column, and that is the engine's doing rather than a
@@ -106,17 +505,25 @@ pub struct Verbs {
     /// brushes are absent, because a hierarchy stores where a vertex went and
     /// not what colour it is, and the smooth names a different entry point,
     /// because a smooth here picks which frequency it acts on.
-    pub multires: Option<&'static str>,
+    pub multires: Option<Binding>,
 }
 
 impl Verbs {
-    pub fn on(self, representation: Representation) -> Option<&'static str> {
+    /// The whole binding for a representation, or nothing where the tool has
+    /// none there.
+    pub fn on(self, representation: Representation) -> Option<Binding> {
         match representation {
             Representation::Sdf => self.sdf,
             Representation::Voxel => self.voxel,
             Representation::Mesh => self.mesh,
             Representation::Multires => self.multires,
         }
+    }
+
+    /// Just the name, for the callers checking a string against the engine
+    /// rather than reading the row.
+    pub fn entry_point_on(self, representation: Representation) -> Option<&'static str> {
+        self.on(representation).map(|binding| binding.entry_point)
     }
 
     /// How many representations this tool reaches.
@@ -186,7 +593,7 @@ pub fn every_entry_point() -> std::collections::BTreeSet<&'static str> {
     }
     for row in rows {
         for representation in Representation::ALL {
-            let Some(verb) = row.on(representation) else {
+            let Some(verb) = row.entry_point_on(representation) else {
                 continue;
             };
             named.extend(entry_points(verb));
@@ -323,33 +730,67 @@ impl LayerOperation {
         // [`crate::multires::SubdivisionCost`] rather than by a `Cost` in
         // cells.
         match self {
+            // The three forward point maps are `SurfaceMove` and not a
+            // deformation intent of their own: what a taper, a twist and a
+            // dragged cage all do is decide where each vertex goes, which is
+            // the drag's intent applied to the whole form rather than under a
+            // brush. A separate intent would be a word for "by an operation
+            // rather than by a gesture", which is the distinction
+            // [`LayerOperation`] already *is*.
             Self::Taper { .. } | Self::Twist { .. } => Verbs {
                 sdf: None,
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_deform"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_deform",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
                 multires: None,
             },
             Self::LatticeDrag { .. } => Verbs {
                 sdf: None,
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_lattice"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_lattice",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
                 multires: None,
             },
+            // Both repairs put material where there was none — the hole's
+            // wall, the void's interior — which is why they are `VolumeAdd`
+            // and not a repair intent. A verb that only ever closed what is
+            // already closed would have nothing to do.
             Self::CloseHoles { .. } => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_repair_close_holes"),
+                voxel: voxel_verb(
+                    "clay_voxel_repair_close_holes",
+                    SemanticIntent::VolumeAdd,
+                    Fidelity::Native,
+                ),
                 mesh: None,
                 multires: None,
             },
             Self::FillVoids => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_repair_fill_voids"),
+                voxel: voxel_verb(
+                    "clay_voxel_repair_fill_voids",
+                    SemanticIntent::VolumeAdd,
+                    Fidelity::Native,
+                ),
                 mesh: None,
                 multires: None,
             },
+            // `TopologyRebuild` for the reason the doc sentence above gives
+            // for it not being the hierarchy's: it changes how finely the form
+            // is stored over a region and not what the form is.
             Self::RefineRegion { .. } => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_add_level_region"),
+                voxel: voxel_verb(
+                    "clay_voxel_add_level_region",
+                    SemanticIntent::TopologyRebuild,
+                    Fidelity::Native,
+                ),
                 mesh: None,
                 multires: None,
             },
@@ -845,12 +1286,12 @@ impl ToolKind {
     pub fn engine_verbs(self) -> String {
         let verbs = self.verbs();
         let mut named: Vec<&'static str> = Vec::new();
-        for verb in [verbs.sdf, verbs.voxel, verbs.mesh, verbs.multires]
+        for binding in [verbs.sdf, verbs.voxel, verbs.mesh, verbs.multires]
             .into_iter()
             .flatten()
         {
-            if !named.contains(&verb) {
-                named.push(verb);
+            if !named.contains(&binding.entry_point) {
+                named.push(binding.entry_point);
             }
         }
         named.join(" / ")
@@ -861,6 +1302,13 @@ impl ToolKind {
     /// `None` where the representation has no verb for it. This is the table
     /// the shelf, the availability rules and the tests all read; nothing else
     /// may decide where a tool applies, or they can drift apart again.
+    ///
+    /// Each column is a [`Binding`] rather than a name, which is where the
+    /// comments around these rows have been going: what a row says about
+    /// itself in prose can be read by a person and by nothing else. The intent
+    /// and the fidelity are the two that earn their place here immediately —
+    /// they are what tell two rows naming one call apart, and what tie a
+    /// [`ToolNote`] to the row it is the sentence for.
     pub fn verbs(self) -> Verbs {
         // Written out per tool rather than grouped, so that adding a verb on a
         // representation is an edit to one line and reading what a tool does
@@ -872,11 +1320,32 @@ impl ToolKind {
             // "set the cells the brush covers". The row said
             // `clay_voxel_sculpt_inflate` and was reading the *shape* of the
             // tool off its field counterpart rather than off the call.
+            //
+            // Two of the four are approximations and say so. The grid's is the
+            // deposit standing in for a displacement; the field's is relief,
+            // which the engine measured to be an Inflate rather than a
+            // Standard — see Inflar's row, and the caveat this one carries.
             Self::Padrao => Verbs {
-                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
-                voxel: Some("clay_voxel_set_brush"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (DRAW)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (DRAW)"),
+                sdf: field_op(
+                    "clay_layer_apply_stroke (CLAY_OP_RELIEF)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Approximation,
+                ),
+                voxel: voxel_verb(
+                    "clay_voxel_set_brush",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Approximation,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (DRAW)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (DRAW)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
             },
             // The field's column is relief, which it shares with Padrão, and
             // that sharing is the right way round rather than a gap: relief
@@ -887,14 +1356,33 @@ impl ToolKind {
             // frame-isolated inflate reference relief sits 0.000 of the
             // amplitude on a sphere, a saddle and a bowl. **Relief is the SDF
             // Inflate.** It is Padrão that is the approximation here, which is
-            // what `ToolNote::SdfStandardIsAnInflate` tells a sculptor, and
-            // the two rows differ in the footprint because that is the only
-            // thing left for them to differ in.
+            // what `ToolNote::SdfStandardIsAnInflate` tells a sculptor and
+            // what the two fidelities now say in the table itself: this row is
+            // `Native` and Padrão's is an `Approximation` of a Standard the
+            // engine can spell and does not ship. The mark the two leave still
+            // differs only in the footprint, which is the last thing left for
+            // one call under two labels to differ in.
             Self::Inflar => Verbs {
-                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
-                voxel: Some("clay_voxel_sculpt_inflate"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (INFLATE)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (INFLATE)"),
+                sdf: field_op(
+                    "clay_layer_apply_stroke (CLAY_OP_RELIEF)",
+                    SemanticIntent::VolumeInflate,
+                    Fidelity::Native,
+                ),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_inflate",
+                    SemanticIntent::VolumeInflate,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (INFLATE)",
+                    SemanticIntent::VolumeInflate,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (INFLATE)",
+                    SemanticIntent::VolumeInflate,
+                    Fidelity::Native,
+                ),
             },
             // `_from` on the field's column, on this row and on the three
             // planing ones, and it is the engine's own distinction rather
@@ -914,11 +1402,35 @@ impl ToolKind {
             // is the frequency it can pick. It is left standing, and
             // `table_truth.rs` pins the gap so the day #199 lands is the day a
             // test says so rather than a day nobody notices.
+            //
+            // The hierarchy's column is `Specialized` for exactly that reason,
+            // and it is the same fact
+            // `ToolNote::MultiresSmoothChoosesAFrequency` tells a sculptor: a
+            // representation that stores the form and the detail in different
+            // arrays has three smooths where a flat surface has one. The field
+            // and the grid are `Native` — one smooth each, doing what the
+            // label says.
             Self::Suavizar => Verbs {
-                sdf: Some("clay_item_volume_relax_from"),
-                voxel: Some("clay_voxel_sculpt_smooth"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (SMOOTH)"),
-                multires: Some("clay_multires_sculpt_layer_stroke_smooth"),
+                sdf: baked_field(
+                    "clay_item_volume_relax_from",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_smooth",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (SMOOTH)",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculpt_layer_stroke_smooth",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Specialized,
+                ),
             },
             // The one tool that is the same call on all four, because a
             // mask is not part of any of them: it is a world-addressed field
@@ -927,21 +1439,47 @@ impl ToolKind {
             // same way — the layer transform is used only to find each vertex
             // on the mask's own lattice.
             Self::Mascara => Verbs {
-                sdf: Some("clay_mask_apply_stroke"),
-                voxel: Some("clay_mask_apply_stroke"),
-                mesh: Some("clay_mask_apply_stroke"),
-                multires: Some("clay_mask_apply_stroke"),
+                sdf: mask_field("clay_mask_apply_stroke"),
+                voxel: mask_field("clay_mask_apply_stroke"),
+                mesh: mask_field("clay_mask_apply_stroke"),
+                multires: mask_field("clay_mask_apply_stroke"),
             },
             // The grid's column is Padrão's, and the clamp has nowhere to
             // land: a clamped accumulation is a ceiling on how much a stroke
             // may deposit *over itself*, and a cell is set or it is not. So
             // the row names the deposit rather than repeating the field's
-            // sentence about a ceiling a grid cannot have.
+            // sentence about a ceiling a grid cannot have. Which makes it
+            // Padrão's binding in every part, an approximation included — one
+            // verb offered on the grid's shelf under two words, recorded as
+            // such by
+            // `no_two_tools_on_one_representation_share_an_entry_point_without_differing_parameters`
+            // rather than passing unremarked as it did before.
+            //
+            // The field's column is `Native`: the clamp is what this tool
+            // claims and the engine has it. Where the deposit *lands* is the
+            // question Padrão's caveat answers, and it is asked of the tool
+            // whose whole claim is the shape of the mark.
             Self::Camada => Verbs {
-                sdf: Some("clay_layer_apply_stroke (clamped accumulation)"),
-                voxel: Some("clay_voxel_set_brush"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (LAYER)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (LAYER)"),
+                sdf: field_op(
+                    "clay_layer_apply_stroke (clamped accumulation)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
+                voxel: voxel_verb(
+                    "clay_voxel_set_brush",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Approximation,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (LAYER)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (LAYER)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
             },
             // Two verbs on a field, and the row names the one that runs.
             // A drag on an editable field layer is a transaction —
@@ -958,13 +1496,27 @@ impl ToolKind {
             // `clay_sdf_move_begin/update/commit`: a name that is not written
             // in full is a name nothing can look up — see [`entry_points`].
             Self::Mover => Verbs {
-                sdf: Some(
+                sdf: field_deformer(
                     "clay_sdf_move_begin / clay_sdf_move_update / clay_sdf_move_commit \
                      (clay_layer_move_surface_regions when held)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
                 ),
-                voxel: Some("clay_voxel_sculpt_grab"),
-                mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
-                multires: Some("clay_multires_sculptor_stamp (GRAB)"),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_grab",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_stamp (GRAB)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_stamp (GRAB)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
             },
             // SDF only, and that is the engine's answer rather than a
             // shortcut. The verb bakes a re-sampled *volume*, which a grid has
@@ -972,19 +1524,48 @@ impl ToolKind {
             // geodesic Grab is a different thing wearing a similar
             // description: it walks the surface to weight a stamp, where this
             // re-samples a field with the move applied.
+            //
+            // `Specialized` rather than `Native`, and the distinction is the
+            // one a sculptor reaches for this tool over Mover for: measuring
+            // the falloff along the material is something only a
+            // representation that can be re-sampled as a volume can do, and it
+            // is why the row exists at all.
             Self::MoverTopologico => Verbs {
-                sdf: Some("clay_item_volume_move_topological"),
+                sdf: baked_field(
+                    "clay_item_volume_move_topological",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Specialized,
+                ),
                 voxel: None,
                 mesh: None,
                 // A hierarchy has no volume to bake either, and the geodesic
                 // Grab it does have is `Mover`'s verb rather than this one.
                 multires: None,
             },
+            // The field's column is an approximation, and the row can finally
+            // say so. A snakehook on a mesh drags vertices and adds material
+            // as it goes; a field has no such verb, so this grows a curve item
+            // — a swept sphere chain — which reads as a tendril and is not the
+            // same act at the surface. Close enough to offer and different
+            // enough that a reader of this table should not take it for the
+            // mesh's.
             Self::Puxar => Verbs {
-                sdf: Some("clay_item_set_curve_points (snakehook)"),
+                sdf: field_item(
+                    "clay_item_set_curve_points (snakehook)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Approximation,
+                ),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_apply_stroke (SNAKEHOOK)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (SNAKEHOOK)"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (SNAKEHOOK)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (SNAKEHOOK)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
             },
             // Two-sided on a grid, cut-only on the other two, and the
             // difference is the engine's rather than a compromise: the voxel
@@ -993,38 +1574,98 @@ impl ToolKind {
             // back and reapplying it — voxel math this application does not
             // do. The tooltip says which one a sculptor is holding.
             Self::Planar => Verbs {
-                sdf: Some("clay_item_volume_flatten_from (cut-only)"),
-                voxel: Some("clay_voxel_sculpt_flatten (two-sided)"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (FLATTEN)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (FLATTEN)"),
+                sdf: baked_field(
+                    "clay_item_volume_flatten_from (cut-only)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_flatten (two-sided)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Specialized,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (FLATTEN)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (FLATTEN)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
             },
             Self::Polir => Verbs {
-                sdf: Some("clay_item_volume_flatten_from (cut-only, hPolish)"),
+                sdf: baked_field(
+                    "clay_item_volume_flatten_from (cut-only, hPolish)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_apply_stroke (POLISH)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (POLISH)"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (POLISH)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (POLISH)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
             },
             Self::Relaxar => Verbs {
-                sdf: Some("clay_item_volume_relax_from"),
+                sdf: baked_field(
+                    "clay_item_volume_relax_from",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_apply_stroke (RELAX)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (RELAX)"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (RELAX)",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (RELAX)",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
             },
             Self::Trim => Verbs {
-                sdf: Some("clay_cut_create"),
+                sdf: field_item(
+                    "clay_cut_create",
+                    SemanticIntent::VolumeRemove,
+                    Fidelity::Native,
+                ),
                 voxel: None,
                 mesh: None,
                 multires: None,
             },
             Self::Raspar => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_sculpt_scrape"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (SCRAPE)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (SCRAPE)"),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_scrape",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (SCRAPE)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (SCRAPE)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
             },
             Self::Preencher => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_sculpt_fill_cavities"),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_fill_cavities",
+                    SemanticIntent::VolumeAdd,
+                    Fidelity::Native,
+                ),
                 mesh: None,
                 multires: None,
             },
@@ -1044,20 +1685,48 @@ impl ToolKind {
             // (see that row), and a radial scale about a centre is a different
             // mark rather than a better one.
             Self::Pincar => Verbs {
-                sdf: Some("clay_layer_magnify_surface (negative strength)"),
-                voxel: Some("clay_voxel_sculpt_pinch"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (PINCH)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (PINCH)"),
+                sdf: field_deformer(
+                    "clay_layer_magnify_surface (negative strength)",
+                    SemanticIntent::SurfacePinch,
+                    Fidelity::Native,
+                ),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_pinch",
+                    SemanticIntent::SurfacePinch,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (PINCH)",
+                    SemanticIntent::SurfacePinch,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (PINCH)",
+                    SemanticIntent::SurfacePinch,
+                    Fidelity::Native,
+                ),
             },
             // Relief with buildup, which is what ClayBuildup *is*: the
             // engine's equivalence table maps Clay to relief along the stroke
             // plus buildup accumulation, and the difference from Padrão is the
             // accumulation and the spacing rather than another verb.
             Self::Argila => Verbs {
-                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF, buildup)"),
+                sdf: field_op(
+                    "clay_layer_apply_stroke (CLAY_OP_RELIEF, buildup)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_apply_stroke (CLAY)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (CLAY)"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (CLAY)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (CLAY)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
             },
             // Incise, which the engine describes in the same sentence as the
             // tool: "a thin region gives the line — Crease and DamStandard".
@@ -1070,10 +1739,22 @@ impl ToolKind {
             // a *recipe* rather than a verb, and a preset that borrows a name
             // is not worth a shelf entry until somebody has looked at it.
             Self::Vinco => Verbs {
-                sdf: Some("clay_layer_apply_stroke (CLAY_OP_INCISE)"),
+                sdf: field_op(
+                    "clay_layer_apply_stroke (CLAY_OP_INCISE)",
+                    SemanticIntent::SurfaceCrease,
+                    Fidelity::Native,
+                ),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_apply_stroke (CREASE)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (CREASE)"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (CREASE)",
+                    SemanticIntent::SurfaceCrease,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (CREASE)",
+                    SemanticIntent::SurfaceCrease,
+                    Fidelity::Native,
+                ),
             },
             // One tool, two bindings: "put colour here" is the same intent
             // whether the colour lands on a vertex or in a cell.
@@ -1095,8 +1776,16 @@ impl ToolKind {
             // is where that is said to a sculptor.
             Self::Pintar => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_paint_brush"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (PAINT)"),
+                voxel: voxel_verb(
+                    "clay_voxel_paint_brush",
+                    SemanticIntent::Paint,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (PAINT)",
+                    SemanticIntent::Paint,
+                    Fidelity::Native,
+                ),
                 multires: None,
             },
             // The one row whose two bindings are not two spellings of one
@@ -1119,30 +1808,66 @@ impl ToolKind {
             // are told when the form is selected rather than a pass.
             Self::Apagar => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_erase_brush"),
+                voxel: voxel_verb(
+                    "clay_voxel_erase_brush",
+                    SemanticIntent::VolumeRemove,
+                    Fidelity::Native,
+                ),
                 mesh: None,
-                multires: Some("clay_multires_sculpt_layer_stroke_erase"),
+                multires: multires_verb(
+                    "clay_multires_sculpt_layer_stroke_erase",
+                    SemanticIntent::VolumeRemove,
+                    Fidelity::Specialized,
+                ),
             },
             // And the other half of the colour absence Pintar's comment
             // explains, two rows up.
             Self::Borrar => Verbs {
                 sdf: None,
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_apply_stroke (SMEAR)"),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (SMEAR)",
+                    SemanticIntent::Paint,
+                    Fidelity::Native,
+                ),
                 multires: None,
             },
             Self::Nudge => Verbs {
                 sdf: None,
-                voxel: Some("clay_voxel_sculpt_smudge"),
-                mesh: Some("clay_mesh_sculptor_apply_stroke (NUDGE)"),
-                multires: Some("clay_multires_sculptor_apply_stroke (NUDGE)"),
+                voxel: voxel_verb(
+                    "clay_voxel_sculpt_smudge",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                mesh: mesh_verb(
+                    "clay_mesh_sculptor_apply_stroke (NUDGE)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                multires: multires_verb(
+                    "clay_multires_sculptor_apply_stroke (NUDGE)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
             },
         }
     }
 
+    /// What this tool binds to on `representation`, if it binds there at all.
+    ///
+    /// The lookup everything else in this file is written in terms of. A
+    /// caller that wants only the engine's name asks [`ToolKind::verb_on`];
+    /// one that wants to *say something about* the binding — the shelf's
+    /// tooltip, the diagnostics line, the advanced help — reads the whole of
+    /// it here rather than inferring it from the name, which is what the
+    /// prose around the table used to be for.
+    pub fn binding_on(self, representation: Representation) -> Option<Binding> {
+        self.verbs().on(representation)
+    }
+
     /// The verb this tool invokes on `representation`, if it has one there.
     pub fn verb_on(self, representation: Representation) -> Option<&'static str> {
-        self.verbs().on(representation)
+        self.verbs().entry_point_on(representation)
     }
 
     /// Whether this tool exists at all on `representation`.
@@ -1150,7 +1875,7 @@ impl ToolKind {
     /// What the shelf filters on. A tool that answers `false` is not shown for
     /// that layer, rather than shown disabled.
     pub fn exists_on(self, representation: Representation) -> bool {
-        self.verb_on(representation).is_some()
+        self.binding_on(representation).is_some()
     }
 
     /// The tools a representation can offer, in the shelf's own order.
@@ -1784,7 +2509,7 @@ mod tests {
         }
         for operation in LayerOperation::all() {
             for representation in Representation::ALL {
-                let Some(verb) = operation.verbs().on(representation) else {
+                let Some(verb) = operation.verbs().entry_point_on(representation) else {
                     continue;
                 };
                 assert!(
@@ -1865,6 +2590,337 @@ mod tests {
             named.iter().all(|name| name.starts_with("clay_")),
             "something that is not an entry point was gathered: {named:?}"
         );
+    }
+
+    // -- the typed columns ---------------------------------------------------
+
+    /// Every binding in both tables carries all four of its parts.
+    ///
+    /// Three of the four cannot be left out — the type will not build without
+    /// them — and that is most of this change's point. What is left for a test
+    /// is the part the type cannot hold: the name has to be a name, and the
+    /// two ways a row can say "this is composed" have to say the same thing.
+    /// A binding filed under [`ExecutionFamily::Recipe`] while claiming a
+    /// fidelity of `Native` would read as a single verb everywhere but in the
+    /// one place that matters.
+    #[test]
+    fn every_binding_has_metadata() {
+        for (what, verbs) in every_row() {
+            for representation in Representation::ALL {
+                let Some(binding) = verbs.on(representation) else {
+                    continue;
+                };
+                assert!(
+                    !entry_points(binding.entry_point).is_empty(),
+                    "{what} on {} names no engine entry point at all: {}",
+                    representation.label(),
+                    binding.entry_point
+                );
+                assert_eq!(
+                    binding.family == ExecutionFamily::Recipe,
+                    binding.fidelity == Fidelity::Recipe,
+                    "{what} on {} is a recipe by one of its two columns and \
+                     not by the other",
+                    representation.label()
+                );
+            }
+        }
+    }
+
+    /// A row is filed under the family whose calls it actually names.
+    ///
+    /// The mistake this catches is the quiet one: a hierarchy verb typed into
+    /// the mesh column reads perfectly, passes every count, and tells every
+    /// reader after it the wrong thing about which runtime the call belongs
+    /// to. The engine spells five of the families as a prefix, so for those
+    /// five the claim is checkable against the name itself.
+    #[test]
+    fn every_binding_is_filed_under_the_family_it_calls() {
+        for (what, verbs) in every_row() {
+            for representation in Representation::ALL {
+                let Some(binding) = verbs.on(representation) else {
+                    continue;
+                };
+                let Some(prefix) = binding.family.prefix() else {
+                    continue;
+                };
+                for name in entry_points(binding.entry_point) {
+                    assert!(
+                        name.starts_with(prefix),
+                        "{what} on {} is filed as a {} and calls {name}, which \
+                         is not a {prefix}* call",
+                        representation.label(),
+                        binding.family.label()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A tool is one act, whichever representation it lands on.
+    ///
+    /// This is the claim the shelf makes by showing one button with one
+    /// tooltip for up to four calls, and until the intent was in the value
+    /// nothing held it. What it forbids is a column quietly borrowed from a
+    /// neighbouring verb because the name looked close enough — which is how
+    /// the grid's Padrão came to name the inflate, reading the *shape* of the
+    /// tool off its field counterpart rather than off the call.
+    ///
+    /// How the four differ is [`Fidelity`]'s question, and they do differ:
+    /// saying they are one act is not saying they are one implementation.
+    #[test]
+    fn a_tool_means_one_thing_wherever_it_is_offered() {
+        for tool in ToolKind::ALL {
+            let mut claimed: Option<(SemanticIntent, Representation)> = None;
+            for representation in Representation::ALL {
+                let Some(binding) = tool.binding_on(representation) else {
+                    continue;
+                };
+                match claimed {
+                    None => claimed = Some((binding.intent, representation)),
+                    Some((intent, first)) => assert_eq!(
+                        binding.intent,
+                        intent,
+                        "{} means {} on {} and {} on {}; one button cannot \
+                         carry two acts",
+                        tool.label(),
+                        binding.intent.label(),
+                        representation.label(),
+                        intent.label(),
+                        first.label()
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Two tools on one representation are two tools.
+    ///
+    /// The defect this exists for: Padrão and Inflar on a field name the same
+    /// call with the same operation, and the shelf offers both. That is
+    /// *correct* — relief is the field's Inflate, and Padrão is the
+    /// approximation of a Standard the engine does not ship — but under a
+    /// table of bare strings it was indistinguishable from a row copied by
+    /// mistake. With the intent and the fidelity in the value, the two rows
+    /// differ where they should: same call, different claim.
+    ///
+    /// So what is forbidden is a pair whose bindings are *identical in every
+    /// part*, because then there is nothing left that could make them two
+    /// tools. Where that is nonetheless the truth it is named here, with the
+    /// reason — the list is short, it is meant to shrink, and each entry is a
+    /// tool the shelf offers twice under different words.
+    #[test]
+    fn no_two_tools_on_one_representation_share_an_entry_point_without_differing_parameters() {
+        let mut excused = 0;
+        for representation in Representation::ALL {
+            for (i, a) in ToolKind::ALL.iter().enumerate() {
+                for b in ToolKind::ALL.iter().skip(i + 1) {
+                    let (Some(first), Some(second)) =
+                        (a.binding_on(representation), b.binding_on(representation))
+                    else {
+                        continue;
+                    };
+                    if first != second {
+                        if shared_on_purpose(*a, *b, representation).is_some() {
+                            panic!(
+                                "{} and {} on {} are recorded as one binding \
+                                 and are no longer one. The list is meant to \
+                                 shrink: take the entry out.",
+                                a.label(),
+                                b.label(),
+                                representation.label()
+                            );
+                        }
+                        continue;
+                    }
+                    excused += 1;
+                    assert!(
+                        shared_on_purpose(*a, *b, representation).is_some(),
+                        "{} and {} are the same binding on {} — {} — so the \
+                         shelf offers one verb under two words. Either they \
+                         differ in something the row does not say, in which \
+                         case say it, or one of them does not belong on that \
+                         shelf.",
+                        a.label(),
+                        b.label(),
+                        representation.label(),
+                        first.describe()
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            excused, 2,
+            "the number of shelf entries that are one verb under two words \
+             has moved; the list below says which two they are"
+        );
+    }
+
+    /// The pairs that really are one binding, and why each one still stands.
+    ///
+    /// Both are #203: a shelf entry whose only distinguishing feature is its
+    /// label. They are recorded rather than corrected because correcting one
+    /// is taking a tool off a shelf, which is a change a sculptor feels and
+    /// which this change — a refactor of how the table is *written* — is not
+    /// the place for. What is different now is that they are two named rows
+    /// instead of an unremarkable coincidence.
+    fn shared_on_purpose(
+        a: ToolKind,
+        b: ToolKind,
+        representation: Representation,
+    ) -> Option<&'static str> {
+        match (a, b, representation) {
+            // Occupancy is binary, so the ceiling Camada exists to impose has
+            // nowhere to land: both rows are the deposit. The pair differs on
+            // every other representation and only here collapses.
+            (ToolKind::Padrao, ToolKind::Camada, Representation::Voxel) => {
+                Some("a grid cannot hold a clamped accumulation; both deposit")
+            }
+            // Both are the field's relax over a re-sampled volume. On a mesh
+            // and on a hierarchy they are the engine's SMOOTH and RELAX, which
+            // are two brushes; the field has one verb for the pair.
+            (ToolKind::Suavizar, ToolKind::Relaxar, Representation::Sdf) => {
+                Some("the field has one relax where the mesh sculptor has two")
+            }
+            _ => None,
+        }
+    }
+
+    /// A caveat is the sentence for a row that is not the plain reading.
+    ///
+    /// The two halves of the same fact, written twice until now: a
+    /// [`ToolNote`] told a sculptor that something here is not what the label
+    /// suggests, and the row it hung off said nothing at all. Holding them
+    /// together means a note cannot be attached to a row that does exactly
+    /// what its label says — which would be a sentence about nothing — and a
+    /// row whose fidelity is corrected to `Native` cannot keep its caveat.
+    ///
+    /// Only this direction. The converse is false on purpose: a grid's Padrão
+    /// is an approximation and carries no note, because "a deposit, occupancy
+    /// being binary" is what a grid *is* and a sculptor working one is not
+    /// surprised by it. A note is for the surprise, not for every departure.
+    #[test]
+    fn a_note_never_hangs_off_a_row_that_does_what_its_label_says() {
+        for tool in ToolKind::ALL {
+            for representation in Representation::ALL {
+                let Some(_) = tool.note_on(representation) else {
+                    continue;
+                };
+                // The one note on an absence — a hierarchy stores no colour —
+                // has no binding to speak for, and its whole point is that
+                // there is none.
+                let Some(binding) = tool.binding_on(representation) else {
+                    continue;
+                };
+                assert!(
+                    !binding.fidelity.is_the_plain_reading(),
+                    "{} on {} carries a caveat and binds {}, which claims to \
+                     do exactly what the label says. One of the two is wrong.",
+                    tool.label(),
+                    representation.label(),
+                    binding.describe()
+                );
+            }
+        }
+    }
+
+    /// Relief is the field's Inflate, and the field's Standard is the
+    /// approximation — which is the way round the engine measured it.
+    ///
+    /// ClayCore v0.120.0 (#615, #618) put a frame-isolated inflate reference
+    /// at 0.000 of the amplitude from relief on a sphere, a saddle and a bowl,
+    /// and the draw reference at 0.017, 0.077 and 0.027. The two rows name the
+    /// same call, so the only place that ordering can be written down is the
+    /// fidelity — and [`ToolNote::SdfStandardIsAnInflate`] is the sentence
+    /// that says it to a sculptor. This is what keeps the three from drifting
+    /// apart the next time somebody tidies one of them.
+    #[test]
+    fn the_fields_standard_is_the_approximation_and_its_relief_is_the_inflate() {
+        let standard = ToolKind::Padrao
+            .binding_on(Representation::Sdf)
+            .expect("Padrão reaches a field");
+        let inflate = ToolKind::Inflar
+            .binding_on(Representation::Sdf)
+            .expect("Inflar reaches a field");
+
+        assert_eq!(
+            standard.entry_point, inflate.entry_point,
+            "the two rows are relief, which is why the fidelity is the only \
+             thing left that can order them"
+        );
+        assert_eq!(standard.intent, SemanticIntent::SurfaceDisplace);
+        assert_eq!(standard.fidelity, Fidelity::Approximation);
+        assert_eq!(inflate.intent, SemanticIntent::VolumeInflate);
+        assert_eq!(
+            inflate.fidelity,
+            Fidelity::Native,
+            "relief is the field's Inflate rather than a stand-in for one"
+        );
+        assert_eq!(
+            ToolKind::Padrao.note_on(Representation::Sdf),
+            Some(ToolNote::SdfStandardIsAnInflate),
+            "the sculptor-facing half of the same fact"
+        );
+        assert_eq!(
+            ToolKind::Inflar.note_on(Representation::Sdf),
+            None,
+            "the faithful row is the one with nothing to warn about"
+        );
+    }
+
+    /// A composed tool is describable rather than absent.
+    ///
+    /// Nothing on the shelf is a recipe today, and the voxel Crease column is
+    /// the reason this matters: the engine documents DamStandard there as a
+    /// recipe rather than a verb, so under a table that could only say "a
+    /// call" or "nothing" the honest answer was nothing, with the explanation
+    /// in a comment. A recipe binding says the same thing where the shelf, the
+    /// refusal and the diagnostics line can all read it.
+    #[test]
+    fn a_recipe_is_expressible_and_is_marked_as_one() {
+        let composed = recipe(
+            "clay_layer_apply_stroke (CLAY_OP_INCISE) / clay_layer_apply_stroke \
+             (CLAY_OP_RELIEF)",
+            SemanticIntent::SurfaceCrease,
+        )
+        .expect("a recipe is a binding like any other");
+
+        assert!(composed.is_a_recipe());
+        assert_eq!(composed.fidelity, Fidelity::Recipe);
+        assert_eq!(
+            entry_points(composed.entry_point).len(),
+            1,
+            "a recipe's steps are read back out of it exactly as any row's \
+             are, deduplicated the same way"
+        );
+        // And the table it would go into still answers for it: a `Verbs` with
+        // a recipe in one column reaches that representation like any other.
+        let verbs = Verbs {
+            sdf: None,
+            voxel: recipe("clay_voxel_set_brush", SemanticIntent::SurfaceCrease),
+            mesh: None,
+            multires: None,
+        };
+        assert_eq!(verbs.count(), 1);
+        assert!(verbs
+            .on(Representation::Voxel)
+            .is_some_and(Binding::is_a_recipe));
+    }
+
+    /// Both tables, so a check written for one is not quietly written for half
+    /// of what the application binds.
+    fn every_row() -> Vec<(String, Verbs)> {
+        let mut rows: Vec<(String, Verbs)> = ToolKind::ALL
+            .into_iter()
+            .map(|tool| (tool.label().to_string(), tool.verbs()))
+            .collect();
+        rows.extend(
+            LayerOperation::all()
+                .into_iter()
+                .map(|operation| (operation.label().to_string(), operation.verbs())),
+        );
+        rows.push(("an object".to_string(), crate::OBJECT_VERBS));
+        rows
     }
 
     #[test]
@@ -2305,9 +3361,17 @@ mod tests {
         let verbs = ToolKind::Mascara.verbs();
         assert_eq!(verbs.count(), Representation::ALL.len());
         for representation in Representation::ALL {
+            // The whole binding rather than the name alone: one call painted
+            // four ways would satisfy a name comparison and would still be
+            // four different acts under one button.
             assert_eq!(
                 verbs.on(representation),
-                Some("clay_mask_apply_stroke"),
+                Some(Binding::new(
+                    "clay_mask_apply_stroke",
+                    SemanticIntent::Mask,
+                    ExecutionFamily::MaskField,
+                    Fidelity::Native
+                )),
                 "the mask took a different route on {}",
                 representation.label()
             );
