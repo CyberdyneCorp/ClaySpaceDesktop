@@ -25,7 +25,7 @@ mod seed;
 
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
-pub use document::{CarriedSpan, ClayDocument};
+pub use document::{CarriedSpan, ClayDocument, RefillBudget};
 pub use live::LiveSurface;
 pub use reference::read_reference;
 pub use retopo::{EngineBaker, EngineConformer, EngineRetopologiser, EngineUnwrapper};

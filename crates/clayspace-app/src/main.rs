@@ -15,7 +15,7 @@ use clayspace_app::{
     chord_for, profile_file, ray_at, DocumentShape, SessionStore, SharedDocument, SurfaceGeometry,
     ViewportInput,
 };
-use clayspace_engine::{BackendPolicy, ClayDocument};
+use clayspace_engine::{BackendPolicy, ClayDocument, RefillBudget};
 use clayspace_mcp::{
     report, Applied, CaptureRequest, CaptureWhat, Catalogue, Consent, ConsentOutcome, Frame,
     JobQueue, Measured, Outstanding, Refusal, RefusalCode, Server, ServerHandle, Session, Settled,
@@ -55,7 +55,7 @@ fn main() {
     };
     report(&policy);
 
-    let document =
+    let mut document =
         match ClayDocument::new(policy.clone()).and_then(ClayDocument::with_starting_form) {
             Ok(document) => document,
             Err(e) => {
@@ -63,6 +63,12 @@ fn main() {
                 return;
             }
         };
+    // The budget is set here and nowhere else, because this is where a frame
+    // starts existing. A document built headless — by a test, a benchmark, the
+    // reference builder — has nothing waiting on it and keeps
+    // `RefillBudget::Whole`, which is what makes an exact answer available to
+    // whoever asks for one.
+    document.set_refill_budget(RefillBudget::Within(REFILL_BUDGET));
 
     // With a user event, because the loop waits: `ControlFlow::Wait` is
     // deliberate — an idle application that redraws forever is the failure
@@ -85,6 +91,22 @@ fn main() {
 fn report(policy: &BackendPolicy) {
     print!("{}", policy.diagnostics().to_report());
 }
+
+/// Half a frame, which is what a refill may spend on the interface thread
+/// before it hands the frame back.
+///
+/// Half rather than all of one: a frame that spends every millisecond
+/// refilling has none left to build the interface with, which is the stall
+/// this exists to end wearing a different name. The budget sizes the batches
+/// as well as stopping between them, so the overrun is one small batch and
+/// not one large one.
+///
+/// The work is not dropped. `pump_refill` spends another budget on the next
+/// frame and the frame after, and the viewport patches in each pump's bricks
+/// as they land — so a cancel of a radius-5 tube comes back in a frame and
+/// finishes redrawing over the next few, instead of holding the window for the
+/// thirty-plus minutes the audit measured.
+const REFILL_BUDGET: Duration = Duration::from_millis(8);
 
 /// A request is waiting on the interface thread.
 ///
@@ -1019,6 +1041,17 @@ impl App {
                 fraction: None,
             });
         }
+        // A bounded drain that stopped. An agent that asks whether the
+        // document has settled has to be told about this one for the same
+        // reason it is told about the pending re-mesh: the surface it would
+        // measure is still catching up with the document it would measure it
+        // against.
+        if self.document.with(|document| document.refill_is_pending()) {
+            outstanding.push(Outstanding {
+                what: "refill of the surface cache".to_string(),
+                fraction: None,
+            });
+        }
         if self.mask_revision != Some(self.document.with(|document| document.mask_revision())) {
             outstanding.push(Outstanding {
                 what: "mask attribute refresh".to_string(),
@@ -1907,6 +1940,37 @@ impl App {
     fn settle_geometry(&mut self) {
         self.timed("re-malha final", Self::settle_geometry_now);
         self.report_settle();
+    }
+
+    /// Spends one budget on a refill a bounded drain left standing, and asks
+    /// for the next frame while there is more.
+    ///
+    /// The other half of [`REFILL_BUDGET`]: the drain stops, this is what
+    /// starts it again. It runs before anything else in the frame so the
+    /// bricks it fills are in the dirty set the geometry sync reads further
+    /// down, which is what makes a long refill arrive as a surface filling in
+    /// rather than as a window that has stopped.
+    ///
+    /// The redraw request is not optional. The loop waits on events — see
+    /// `about_to_wait` — so a pump that did not ask for the next frame would
+    /// leave the rest of the refill until somebody moved the mouse.
+    fn pump_refill(&mut self) {
+        if !self.document.with(|document| document.refill_is_pending()) {
+            return;
+        }
+        if let Err(e) = self.document.with(ClayDocument::pump_refill) {
+            eprintln!("a superfície não pôde ser recomposta: {e}");
+            // And no frame is asked for. A refusal that repeats would spin the
+            // loop at frame rate printing the same sentence — an idle
+            // application that redraws forever is the failure `Observable`
+            // exists to prevent, and a failing pump must not become one. The
+            // bricks stay marked and the next thing that wakes the loop tries
+            // again.
+            return;
+        }
+        if self.document.with(|document| document.refill_is_pending()) {
+            self.request_redraw();
+        }
     }
 
     /// Pays a settle a finished stroke owed, at the top of a frame.
@@ -4840,6 +4904,7 @@ impl App {
         if self.graphics.is_none() {
             return;
         }
+        self.pump_refill();
         self.flush_pending_settle();
         self.settle_quality(frame_started);
         // A retopology that has finished is placed here, before the interface

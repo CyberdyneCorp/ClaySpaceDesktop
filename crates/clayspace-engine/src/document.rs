@@ -1171,6 +1171,91 @@ struct LiveHook {
     points: usize,
 }
 
+/// What one drain of the dirty set may spend before it hands the thread back.
+///
+/// The brick cache holds the fold of the visible field layers in one set of
+/// world bricks, and re-evaluating a brick is the only way to find out what
+/// the fold now says there. So a refill cannot be skipped — but it can be
+/// *stopped*, because the cache keeps whatever was not taken and the next
+/// drain carries on from there. That is what this names: not how much work
+/// there is, which the document decides, but how much of it one call is
+/// allowed to do.
+///
+/// Draining in full is the right default for a caller with nothing waiting on
+/// it — a test, an export, a document built headless — and the wrong one for a
+/// caller holding a frame open. A radius-5 tube cancelled in the audit held
+/// the interface thread inside this loop for over half an hour; the work was
+/// real, and every millisecond of it was spent where a window was trying to
+/// paint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefillBudget {
+    /// Drain until the cache is clean, however long that takes.
+    ///
+    /// What a document has until its host says otherwise, because a host that
+    /// does not pump is a host whose surface would never catch up, and a
+    /// silently stale surface is worse than a slow one.
+    Whole,
+    /// Spend at most this much of the caller's thread.
+    ///
+    /// Honoured by sizing the batches as well as by stopping between them. A
+    /// budget that only stopped between them would be this plus one whole
+    /// batch, and a whole batch on a slow backend is most of a frame by
+    /// itself — which is the stall this exists to end, arriving one batch at a
+    /// time.
+    Within(std::time::Duration),
+    /// Stop after this many bricks.
+    ///
+    /// For a test, which needs the boundary to fall in the same place on a
+    /// loaded machine as on an idle one. Nothing in the application sets it.
+    Bricks(usize),
+}
+
+/// Bricks one batch of a drain takes out of the cache.
+///
+/// The unit the backend routing is decided on. Unchanged from the constant
+/// that was written into `take_dirty` before there was a budget, and the
+/// ceiling a timed budget works down from.
+const REFILL_BATCH: usize = 512;
+
+/// The smallest batch a timed budget will ask for.
+///
+/// A floor rather than an exact division, because a batch pays a fixed cost —
+/// a device submission, on the accelerated backend — and a budget that had run
+/// down to a handful of bricks would spend the whole of the next frame's share
+/// on that fixed cost and make no progress at all. Better to overrun one
+/// budget by a small batch than to stop converging.
+const SMALLEST_BATCH: usize = 32;
+
+impl RefillBudget {
+    /// How many bricks the next batch may take, given what the drain has spent
+    /// so far. Zero when the budget is gone and the thread should be handed
+    /// back.
+    fn next_batch(self, since: std::time::Instant, bricks: usize) -> usize {
+        match self {
+            RefillBudget::Whole => REFILL_BATCH,
+            RefillBudget::Bricks(limit) => limit.saturating_sub(bricks).min(REFILL_BATCH),
+            RefillBudget::Within(limit) => {
+                let left = limit.saturating_sub(since.elapsed());
+                if left.is_zero() {
+                    return 0;
+                }
+                // What this drain has measured, and nothing else. A rate from
+                // an earlier drain would be a rate for a different backend on
+                // a different region, and the first batch of a drain is where
+                // there is nothing to measure — so that one is the floor and
+                // every batch after it is priced on what the ones before it
+                // actually cost.
+                let spent = since.elapsed().as_nanos();
+                if bricks == 0 || spent == 0 {
+                    return SMALLEST_BATCH;
+                }
+                let affordable = left.as_nanos().saturating_mul(bricks as u128) / spent;
+                (affordable as usize).clamp(SMALLEST_BATCH, REFILL_BATCH)
+            }
+        }
+    }
+}
+
 pub struct ClayDocument {
     // -- what must go before the document ------------------------------------
     //
@@ -1218,6 +1303,27 @@ pub struct ClayDocument {
     policy: BackendPolicy,
     /// Bricks dirtied since the viewport last caught up.
     dirty: Vec<BrickKey>,
+    /// Whether the visibility pattern in force is one an operation borrowed.
+    ///
+    /// Dynamic scope rather than an argument, because it is a property of the
+    /// *bracket* and not of any one flag: the five callers between
+    /// [`ClayDocument::with_borrowed_visibility`] and
+    /// [`ClayDocument::write_layer_visible`] have nothing to say about it and
+    /// would only be passing it along. Set by that bracket and cleared by it
+    /// on every exit but a panic, which ends the process here.
+    visibility_is_borrowed: bool,
+    /// What one drain may spend before it hands the thread back.
+    ///
+    /// [`RefillBudget::Whole`] until a host sets otherwise, for the reason
+    /// that variant gives.
+    refill_budget: RefillBudget,
+    /// Whether the last drain stopped with bricks still dirty.
+    ///
+    /// Read rather than recomputed: asking the cache would mean taking
+    /// requests out of it to count them, and taking them is the one thing a
+    /// question must not do. The cache keeps what a bounded drain did not
+    /// take, so this is the whole of what the next pump needs to know.
+    refill_pending: bool,
     stats: SceneStats,
     /// Chunk keys re-meshed by the last refresh.
     ///
@@ -1616,6 +1722,9 @@ impl ClayDocument {
             voxel_grab: None,
             recording_pass: false,
             dirty: Vec::new(),
+            visibility_is_borrowed: false,
+            refill_budget: RefillBudget::Whole,
+            refill_pending: false,
             stats: SceneStats::default(),
             carried: (0, 0),
             live_mesh: None,
@@ -2118,7 +2227,7 @@ impl ClayDocument {
             .set_layer_visible(id, visible)
             .map_err(ModelError::engine)?;
         self.layers[index].visible = visible;
-        if !self.layers[index].is_in_the_field() {
+        if self.visibility_is_borrowed || !self.layers[index].is_in_the_field() {
             return Ok(());
         }
         self.mark_for_refill(id, &[])
@@ -2503,6 +2612,58 @@ impl ClayDocument {
         Ok(value)
     }
 
+    /// The same bracket, for a pattern that is *borrowed* and put straight
+    /// back — and which therefore owes the surface cache nothing.
+    ///
+    /// **A refill pays for a field that changed, and here none does.** The
+    /// bracket writes a pattern, reads the document's own field through it,
+    /// and writes the sculptor's pattern back, all before returning; the fold
+    /// the cache holds is the same fold on both sides, brick for brick. So
+    /// every mark the flags would make names a brick whose value is about to
+    /// be what it already is, and every drain behind one is work with no
+    /// reader.
+    ///
+    /// It was not a small amount of work. A subtool boolean hides the whole
+    /// scene around each of its two operands and shows it again: on the
+    /// audit's ~45-layer document that is about 180 whole-layer refills for
+    /// one boolean, which is most of the 73 seconds it took to produce
+    /// nothing, and a copy of a hidden subtool paid half of it for the same
+    /// reason. A save under a solo paid it too.
+    ///
+    /// The one thing this must not do is leave the document showing a pattern
+    /// the cache was not told about, so a restore that fails is caught here
+    /// and the flags it could not put back are refilled after all.
+    fn with_borrowed_visibility<T>(
+        &mut self,
+        wanted: &[(LayerKey, bool)],
+        body: impl FnOnce(&mut Self) -> Result<T, ModelError>,
+    ) -> Result<T, ModelError> {
+        let was = self.visibility_snapshot();
+        self.visibility_is_borrowed = true;
+        let outcome = self.with_visibility(wanted, body);
+        self.visibility_is_borrowed = false;
+        // Whatever did not come back. Empty on every path the bracket is
+        // designed for — the body succeeding, the body refusing, the flags
+        // refusing halfway — because each of those ends with the restore
+        // having run. It is only a restore that itself failed that leaves
+        // anything here, and that is a cache disagreeing with the document
+        // until something else happens to drain it.
+        let stranded: Vec<LayerKey> = was
+            .iter()
+            .filter(|(key, visible)| {
+                self.index_of(*key)
+                    .is_ok_and(|index| self.layers[index].visible != *visible)
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        if !stranded.is_empty() {
+            let marked = self.mark_what_moved(&stranded);
+            let settled = self.drain_dirty();
+            marked.and(settled)?;
+        }
+        outcome
+    }
+
     /// Runs `body` with only these layers shown, and restores the rest
     /// afterwards.
     ///
@@ -2511,6 +2672,11 @@ impl ClayDocument {
     /// hidden layer "contributes nothing to the field; showing it again
     /// restores the original field exactly" — so baking one subtool alone *is*
     /// hiding the others around the bake.
+    ///
+    /// Borrowed rather than set, for the reason
+    /// [`ClayDocument::with_borrowed_visibility`] gives: the pattern is gone
+    /// again before anything reads the surface, and the field it samples is
+    /// the document's and not the cache's.
     ///
     /// Public because that caller wants it and because the restore is a
     /// promise worth testing on its own, with an operation that fails inside.
@@ -2524,7 +2690,7 @@ impl ClayDocument {
             .iter()
             .map(|layer| (layer.key, shown.contains(&layer.key)))
             .collect();
-        self.with_visibility(&wanted, body)
+        self.with_borrowed_visibility(&wanted, body)
     }
 
     /// Steps back over every visibility gesture sitting on top of the history.
@@ -3103,58 +3269,13 @@ impl ClayDocument {
     /// floor, so a model sculpted past that floor was still being measured as
     /// if it were the sphere it started as.
     fn drain_dirty(&mut self) -> Result<(), ModelError> {
-        // Routed per batch rather than once for the whole drain: a stroke's
-        // last iteration is often a handful of residual bricks, and those are
-        // cheaper on the CPU than the fixed cost of a device submission.
-        // `refill_backend` holds the threshold, and `backend_choice.rs` fails
-        // if the measured ratio ever flips back.
         let mut dirty = Vec::new();
-        loop {
-            let (requests, remaining) = self.cache.take_dirty(512).map_err(ModelError::engine)?;
-            if requests.is_empty() {
-                break;
-            }
-            dirty.extend(requests.iter().map(|request| request.key()));
-            // The first eligible batch of a session is split: a slice on the
-            // CPU, the rest on the accelerated backend. That is what turns the
-            // routing from a constant into a measurement, and it costs a
-            // fraction of one batch rather than a startup probe — which would
-            // be paid by every machine, including the ones the constant is
-            // already right for.
-            if self.policy.needs_refill_calibration()
-                && requests.len() >= 3 * Self::CALIBRATION_SLICE
-            {
-                // Two equal slices, one per backend, and then the remainder is
-                // routed on what they cost. Equal because the comparison is
-                // per brick; small because whichever backend loses only ever
-                // runs the slice, so the calibration cannot cost more than a
-                // few milliseconds even where one backend is several times
-                // slower than the other.
-                let slice = Self::CALIBRATION_SLICE;
-                // The accelerated backend runs once before it is timed. The
-                // first call into a device in a process pays for the context
-                // and for compiling its pipelines — on a machine whose toolkit
-                // is older than its GPU, that is a PTX JIT — and charging a
-                // one-time cost to the per-brick rate made CUDA measure 21x
-                // slower than the CPU where a warm sweep says 4x. Wrong in the
-                // direction that happened to be right here, which is the worst
-                // kind of wrong to leave in.
-                self.timed_refill(Some(self.active_backend()), &requests[..slice])?;
-                self.policy.forget_refill_costs();
-
-                self.timed_refill(None, &requests[slice..2 * slice])?;
-                self.timed_refill(Some(self.active_backend()), &requests[2 * slice..3 * slice])?;
-                let rest = &requests[3 * slice..];
-                let backend = self.policy.refill_backend(rest.len()).cloned();
-                self.timed_refill(backend, rest)?;
-            } else {
-                let backend = self.policy.refill_backend(requests.len()).cloned();
-                self.timed_refill(backend, &requests)?;
-            }
-            if remaining == 0 {
-                break;
-            }
-        }
+        let outcome = self.drain_within_budget(&mut dirty);
+        // A drain that refused partway is a drain that left bricks marked, and
+        // the flag has to say so or nothing will ever come back for them. Set
+        // here rather than inside the loop so that no early return can skip
+        // it — which is the whole reason the loop is a function of its own.
+        self.refill_pending = outcome.as_ref().copied().unwrap_or(true);
 
         // Accumulated, not assigned. This set is pending work for the
         // viewport and is only emptied by `take_dirty_keys`. Overwriting it
@@ -3162,11 +3283,140 @@ impl ClayDocument {
         // re-meshed the last dab's neighbourhood and left the rest of the
         // stroke as it was, which drew a closed outline of stale geometry
         // around the edit. `visual_incremental` shows it.
+        //
+        // Kept on the refusing path too: the batches that did land are on the
+        // surface whether or not a later one refused, and leaving them out
+        // would draw the old fold over the new one.
         self.dirty.extend(dirty);
         self.dirty.sort();
         self.dirty.dedup();
         self.refresh_stats();
-        Ok(())
+        outcome.map(|_| ())
+    }
+
+    /// The drain's loop: batches until the cache is clean or the budget is
+    /// gone, saying which of those it was.
+    ///
+    /// Apart from [`ClayDocument::drain_dirty`] so that the bookkeeping around
+    /// it — the pending flag, the viewport's set, the statistics — is owed on
+    /// every exit including a refusal, rather than being skipped by the first
+    /// `?` inside the loop.
+    fn drain_within_budget(&mut self, dirty: &mut Vec<BrickKey>) -> Result<bool, ModelError> {
+        let started = std::time::Instant::now();
+        let mut spent = 0usize;
+        loop {
+            // Asked before the bricks are taken, not after. A batch that has
+            // been taken is out of the cache and no longer in it, so stopping
+            // once it is in hand would mean keeping a second dirty set of our
+            // own — and losing it on the first path that returns early.
+            let take = self.refill_budget.next_batch(started, spent);
+            if take == 0 {
+                return Ok(true);
+            }
+            let (requests, remaining) = self.cache.take_dirty(take).map_err(ModelError::engine)?;
+            if requests.is_empty() {
+                return Ok(false);
+            }
+            dirty.extend(requests.iter().map(|request| request.key()));
+            self.refill_batch(&requests)?;
+            spent += requests.len();
+            if remaining == 0 {
+                return Ok(false);
+            }
+        }
+    }
+
+    /// Refills one batch, on whichever backend the routing picks for it.
+    ///
+    /// Routed per batch rather than once for the whole drain: a stroke's last
+    /// iteration is often a handful of residual bricks, and those are cheaper
+    /// on the CPU than the fixed cost of a device submission. `refill_backend`
+    /// holds the threshold, and `backend_choice.rs` fails if the measured
+    /// ratio ever flips back.
+    fn refill_batch(&mut self, requests: &[claycore::BrickRequest]) -> Result<(), ModelError> {
+        // The first eligible batch of a session is split: a slice on the CPU,
+        // the rest on the accelerated backend. That is what turns the routing
+        // from a constant into a measurement, and it costs a fraction of one
+        // batch rather than a startup probe — which would be paid by every
+        // machine, including the ones the constant is already right for.
+        if !self.policy.needs_refill_calibration() || requests.len() < 3 * Self::CALIBRATION_SLICE {
+            let backend = self.policy.refill_backend(requests.len()).cloned();
+            return self.timed_refill(backend, requests);
+        }
+        // Two equal slices, one per backend, and then the remainder is routed
+        // on what they cost. Equal because the comparison is per brick; small
+        // because whichever backend loses only ever runs the slice, so the
+        // calibration cannot cost more than a few milliseconds even where one
+        // backend is several times slower than the other.
+        let slice = Self::CALIBRATION_SLICE;
+        // The accelerated backend runs once before it is timed. The first call
+        // into a device in a process pays for the context and for compiling
+        // its pipelines — on a machine whose toolkit is older than its GPU,
+        // that is a PTX JIT — and charging a one-time cost to the per-brick
+        // rate made CUDA measure 21x slower than the CPU where a warm sweep
+        // says 4x. Wrong in the direction that happened to be right here,
+        // which is the worst kind of wrong to leave in.
+        self.timed_refill(Some(self.active_backend()), &requests[..slice])?;
+        self.policy.forget_refill_costs();
+
+        self.timed_refill(None, &requests[slice..2 * slice])?;
+        self.timed_refill(Some(self.active_backend()), &requests[2 * slice..3 * slice])?;
+        let rest = &requests[3 * slice..];
+        let backend = self.policy.refill_backend(rest.len()).cloned();
+        self.timed_refill(backend, rest)
+    }
+
+    /// Says what one drain of this document may spend before it gives the
+    /// thread back.
+    ///
+    /// Set by the host, because the host is what knows whether anything is
+    /// waiting. See [`RefillBudget`] for why the default is to drain in full.
+    pub fn set_refill_budget(&mut self, budget: RefillBudget) {
+        self.refill_budget = budget;
+    }
+
+    /// The budget in force, for a caller that has to put one back.
+    pub fn refill_budget(&self) -> RefillBudget {
+        self.refill_budget
+    }
+
+    /// Whether a bounded drain stopped with bricks still dirty.
+    ///
+    /// A host that budgets its drains has to pump while this is true and keep
+    /// asking for frames: what is left is a region of the surface the viewport
+    /// is still drawing the old fold of.
+    pub fn refill_is_pending(&self) -> bool {
+        self.refill_pending
+    }
+
+    /// Spends one more budget on what a bounded drain left standing.
+    ///
+    /// The whole of the continuation: the cache kept the requests the last
+    /// drain did not take, so there is no partial state on this side to
+    /// resume from and nothing to do when nothing is pending.
+    pub fn pump_refill(&mut self) -> Result<(), ModelError> {
+        if !self.refill_pending {
+            return Ok(());
+        }
+        self.drain_dirty()
+    }
+
+    /// Finishes the refill however long it takes, ignoring the budget.
+    ///
+    /// For the caller that cannot proceed on a surface that is still catching
+    /// up — an export, a digest, a measurement — and for a test that wants the
+    /// boundary to sit in a known place. The budget is put back afterwards:
+    /// it belongs to the host, not to whichever operation last needed an exact
+    /// answer.
+    pub fn settle_refill(&mut self) -> Result<(), ModelError> {
+        if !self.refill_pending {
+            return Ok(());
+        }
+        let budget = self.refill_budget;
+        self.refill_budget = RefillBudget::Whole;
+        let settled = self.drain_dirty();
+        self.refill_budget = budget;
+        settled
     }
 
     /// Bricks per slice when calibrating the two backends against each other.
@@ -10889,7 +11139,7 @@ impl DocumentModel for ClayDocument {
         // gets to check before trusting it. So the real pattern goes down and
         // the solo is put back around the write.
         match self.solo.clone() {
-            Some(solo) => self.with_visibility(&solo.was, |doc| {
+            Some(solo) => self.with_borrowed_visibility(&solo.was, |doc| {
                 doc.document.save(path).map_err(ModelError::engine)
             })?,
             None => self.document.save(path).map_err(ModelError::engine)?,
@@ -11067,6 +11317,9 @@ impl ClayDocument {
             cache,
             policy,
             dirty: Vec::new(),
+            visibility_is_borrowed: false,
+            refill_budget: RefillBudget::Whole,
+            refill_pending: false,
             stats: SceneStats::default(),
             carried: (0, 0),
             live_mesh: None,
@@ -12161,6 +12414,27 @@ impl ClayDocument {
     }
 
     /// Takes the placed sweep back out, leaving the curve's points alone.
+    ///
+    /// **The region is the tube's own, and it is worked out before the removal
+    /// — both halves matter.** Before, because afterwards the layer no longer
+    /// reaches where the tube was and nothing left in the document can say
+    /// where it had been; the tube's own, because the alternatives are the
+    /// layer's whole extent and the box the layer vacated, and on a worked
+    /// subtool those are the same thing: everything the sculptor has ever put
+    /// in it. That is what a cancel used to pay. A radius-5 tube in the audit
+    /// left the interface thread in this drain for over half an hour, on a
+    /// document whose dirty region was measured at 2.3M of a 6.7M brick
+    /// budget, and the window never came back.
+    ///
+    /// The bound asked for is the **node's own** and not a box drawn around
+    /// the control points. The points' own balls are what a drag dirties, and
+    /// they are deliberately a little short of the truth — a Catmull-Rom
+    /// through them bulges outside them on a bend, which a drag can afford
+    /// because it is adding material a later segment covers. A retire cannot:
+    /// measured on a three-point tube, the points' boxes left 26 bricks
+    /// holding a sweep that was gone. `clay_brick_cache_mark_dirty_nodes`
+    /// answers with everything the tube has ever reached, which is exactly the
+    /// region and no more.
     fn retire_curve_node(&mut self) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
             return Ok(());
@@ -12175,28 +12449,14 @@ impl ClayDocument {
         let key = curve.layer;
         let index = self.index_of(key)?;
         let layer = self.layers[index].id;
-        // The region *before* the removal, because after it the layer no
-        // longer reaches where the tube was and marking its extent would leave
-        // those bricks holding a sweep that is gone. The same reason removing
-        // a layer captures its bounds first.
-        let vacated = self.document.layer_bounds(layer).ok().flatten();
+        // Marked before the removal and drained after it: the engine can only
+        // be asked for the bound of a node the document still holds, and the
+        // bricks in it can only be re-evaluated once it does not.
+        self.mark_for_refill(layer, &[node])?;
         self.document
             .remove_node(layer, node)
             .map_err(ModelError::engine)?;
-        match vacated {
-            Some((min, max)) => {
-                // Padded, because a brick the surface only grazes still holds
-                // a piece of it and a box drawn exactly on the bounds can miss
-                // the outermost one.
-                let pad = self.cache.config().voxel_size * Self::BRICK_MARGIN;
-                self.refill(layer, &[])?;
-                self.refill_region(
-                    std::array::from_fn(|i| min[i] - pad),
-                    std::array::from_fn(|i| max[i] + pad),
-                )
-            }
-            None => self.refill(layer, &[]),
-        }
+        self.drain_dirty()
     }
 }
 

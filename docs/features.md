@@ -2680,14 +2680,14 @@ eye — so hiding one leaves it out of the next frame and re-evaluates nothing,
 however much material it holds. This used to refill a layer the field has no
 term for, on the reasonable-sounding grounds that an eye changes what is drawn.
 
-**A field subtool's eye costs its refill.** Hiding one really does change the
-field: the bricks it reached have to be rewritten or the viewport goes on
-drawing a surface the document no longer describes. There is nothing per-layer
-to switch off instead, because the cache holds one merged field addressed in
-world bricks. On a worked subtool that is still seconds, on the interface
-thread, and it is not fixed here — it waits on the refill drain becoming
-something the frame loop spends a budget on rather than something a command
-runs to completion.
+**A field subtool's eye costs its refill — but not all at once.** Hiding one
+really does change the field: the bricks it reached have to be rewritten or the
+viewport goes on drawing a surface the document no longer describes. There is
+nothing per-layer to switch off instead, because the cache holds one merged
+field addressed in world bricks. So the work is real, and what the click costs
+is one refill budget: the drain stops when the budget is gone and the frame
+loop spends another on the next frame. See [What a refill costs the
+frame](#what-a-refill-costs-the-frame).
 
 **Stepping back over a solo brings the subtools back to the screen, not only to
 the stack.** The hop used to refill whichever subtool happened to be *active*,
@@ -2697,6 +2697,63 @@ showed four and the viewport drew two until something else dirtied that
 ground. The gesture now carries the layers it actually wrote a flag on — not
 the pattern it was asked for, since a flag already at the wanted value is left
 alone — and the hop refills exactly those.
+
+### What a refill costs the frame
+
+Re-evaluating the surface cache is the one piece of work every edit ends in,
+and it used to run to completion on the interface thread. However small the
+region, that happened between one frame and the next; however large, the window
+stopped until it was finished. Cancelling a radius-5 tube held the thread for
+over thirty minutes and the application never came back.
+
+**A drain spends a budget and hands the frame back.** The application asks for
+half a frame. What the drain did not take is still in the cache — nothing is
+dropped — and the frame loop spends another budget at the top of the next
+frame, and the frame after, asking for each one until there is nothing left.
+The surface fills in over those frames instead of appearing all at once, which
+is what a large refill now looks like from the outside.
+
+The budget sizes the batches as well as stopping between them. Each batch is
+priced on what the batches before it in the same drain actually cost, with a
+floor of thirty-two bricks: a batch pays a fixed cost to reach the backend, and
+a budget run down to a handful of bricks would spend the whole of the next
+frame's share on that cost and make no progress.
+
+**Only the application sets a budget.** A document built by a test, a benchmark
+or the reference builder drains in full, because a caller with nothing waiting
+on it needs the exact answer before it returns. `outstanding_work` names a
+refill that has not finished, so an agent measuring the surface is told it is
+still catching up rather than measuring it half-built.
+
+### What a command is allowed to dirty
+
+Two operations marked far more of the field than they had changed, and paid for
+all of it.
+
+**Cancelling a curve costs the tube.** Retiring the placed sweep used to refill
+the subtool the curve was laid on *and* the box that subtool occupied before
+the removal — the same thing twice, and on a worked subtool that is everything
+the sculptor has ever put in it. It now asks the engine for the node's own
+bound, before the node is removed, which is everything the tube has ever
+reached and nothing else. Not the control points' own boxes: those are what a
+*drag* dirties and they are deliberately a little short of the truth, since a
+Catmull-Rom bulges outside them on a bend and the next segment covers the gap.
+A retire has no next segment — measured, they left twenty-six bricks holding a
+sweep that was gone.
+
+**A bake's borrowed visibility costs nothing.** Sampling one subtool alone
+means hiding the others, because the engine samples the whole document's field
+and a hidden layer contributes nothing to it. Every flag used to mark its layer
+whole and drain it, so a boolean over a forty-five-layer document paid about a
+hundred and eighty whole-layer refills — most of the seventy-three seconds it
+took to produce nothing. The pattern is written, the field is sampled through
+it, and the sculptor's pattern is written back before anything reads the
+surface: the fold the cache holds is the same fold on both sides, brick for
+brick, so there is nothing to re-evaluate. A save under a solo borrows its
+pattern the same way and is now free for the same reason.
+
+The one exit that still owes a refill is a restore that did not complete, and
+the bracket pays it for the layers that did not come back.
 
 ### When the clay is behind your hand
 
