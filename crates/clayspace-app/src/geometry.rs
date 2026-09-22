@@ -24,7 +24,7 @@ use clayspace_engine::ClayDocument;
 use clayspace_model::Detail;
 use clayspace_view::{Gpu, GpuMesh, Vertex};
 
-use crate::slots::SlotMap;
+use crate::slots::{Slot, SlotMap};
 
 /// How much of the drawn index range may be holes before it is worth the cost
 /// of laying the whole surface out again.
@@ -805,58 +805,122 @@ impl SurfaceGeometry {
             self.lay_out(gpu);
             return;
         }
-        for key in std::mem::take(&mut self.touched) {
-            if !self.patch(gpu, key) {
-                // Out of room. Everything written so far is still consistent,
-                // and the rebuild below replaces all of it anyway.
-                self.touched.clear();
-                self.lay_out(gpu);
-                return;
-            }
+        if !self.patch_touched(gpu) {
+            // Out of room. Everything written so far is still consistent,
+            // and the rebuild below replaces all of it anyway.
+            self.touched.clear();
+            self.lay_out(gpu);
+            return;
         }
         self.mesh.set_index_count(self.layout.index_count());
         self.mesh.set_bounds(self.bounds);
         self.dirty = false;
     }
 
-    /// Writes one key into its span, re-homing it if it has outgrown it.
+    /// Writes every touched key, merging the spans that abut.
+    ///
+    /// Two passes rather than one, because the merge cannot see whether two
+    /// spans meet until both have been placed. A dab re-meshes twenty-odd keys
+    /// and each one used to cost a write of both buffers; the keys a settle
+    /// relocates are placed back to back, so their index spans — which cover
+    /// their whole slot, padding included — become one upload. That matters
+    /// beyond the call count: each `write_buffer` takes a staging buffer of
+    /// its own, and a session's footprint follows how many of those are in
+    /// flight.
     ///
     /// `false` means the buffers are full and the caller must rebuild.
-    fn patch(&mut self, gpu: &Gpu, key: BrickKey) -> bool {
+    fn patch_touched(&mut self, gpu: &Gpu) -> bool {
+        // Rebased indices for every span, end to end, so the whole settle
+        // costs one allocation rather than one per key.
+        let mut rebased: Vec<u32> = Vec::new();
+        let mut spans: Vec<(BrickKey, Slot, usize)> = Vec::new();
+        for key in std::mem::take(&mut self.touched) {
+            let Some(slot) = self.place_touched(gpu, key) else {
+                return false;
+            };
+            let Some(slot) = slot else {
+                continue;
+            };
+            let at = rebased.len();
+            let indices = &self.keys[&key].indices;
+            // Indices are stored relative to the key's own vertices, so they
+            // are rebased onto wherever the span landed. The tail of the span
+            // is filled with degenerate triangles: the surface is one draw
+            // call over one range, and a zero-area triangle is the cheapest
+            // way for a partly-used span to draw only the part that is used.
+            rebased.extend(indices.iter().map(|i| i + slot.vertex_base));
+            rebased.resize(at + slot.index_capacity as usize, slot.vertex_base);
+            spans.push((key, slot, at));
+        }
+
+        let Self { keys, mesh, .. } = self;
+        let mut vertex_runs: Vec<(u32, &[Vertex])> = spans
+            .iter()
+            .map(|(key, slot, _)| (slot.vertex_base, keys[key].vertices.as_slice()))
+            .collect();
+        let mut index_runs: Vec<(u32, &[u32])> = spans
+            .iter()
+            .map(|(_, slot, at)| {
+                (
+                    slot.index_base,
+                    &rebased[*at..*at + slot.index_capacity as usize],
+                )
+            })
+            .collect();
+        mesh.patch_vertex_runs(gpu, &mut vertex_runs);
+        mesh.patch_index_runs(gpu, &mut index_runs);
+        true
+    }
+
+    /// Reserves one touched key's span, re-homing it if it has outgrown it,
+    /// and blanks whatever that left behind.
+    ///
+    /// `None` means the buffers are full and the caller must rebuild.
+    /// `Some(None)` means there is nothing to write: the key is gone, or was
+    /// emptied by an edit rather than removed, in which case it keeps its span
+    /// so a later edit finds it but stops drawing.
+    fn place_touched(&mut self, gpu: &Gpu, key: BrickKey) -> Option<Option<Slot>> {
         let Some(geometry) = self.keys.get(&key) else {
-            return true;
+            return Some(None);
         };
         if geometry.indices.is_empty() {
-            // Emptied by an edit rather than removed: the key keeps its span
-            // so a later edit finds it, but must stop drawing.
             if let Some(slot) = self.layout.get(key) {
                 let span = (slot.index_base, slot.index_base + slot.index_capacity);
                 blank(&mut self.mesh, gpu, span);
             }
-            return true;
+            return Some(None);
         }
-        let Some(placed) = self.layout.place(
+        let placed = self.layout.place(
             key,
             geometry.vertices.len() as u32,
             geometry.indices.len() as u32,
-        ) else {
-            return false;
-        };
+        )?;
         if let Some(span) = placed.stranded {
             blank(&mut self.mesh, gpu, span);
         }
-        let slot = placed.slot;
+        self.bounds = union(self.bounds, Vertex::bounds(&geometry.vertices));
+        Some(Some(placed.slot))
+    }
 
-        // Indices are stored relative to the key's own vertices, so they are
-        // rebased onto wherever the span landed. The tail of the span is
-        // filled with degenerate triangles: the surface is one draw call over
-        // one range, and a zero-area triangle is the cheapest way for a
-        // partly-used span to draw only the part that is used.
+    /// Writes one key into its span, one buffer at a time.
+    ///
+    /// The full rebuild's path: it lays every key out afresh, and batching
+    /// those writes was measured to cost more whole-action latency than it
+    /// saved in upload time. See the `batch-whole-surface-uploads` change.
+    ///
+    /// `false` means the buffers are full and the caller must rebuild.
+    fn patch(&mut self, gpu: &Gpu, key: BrickKey) -> bool {
+        let Some(slot) = self.place_touched(gpu, key) else {
+            return false;
+        };
+        let Some(slot) = slot else {
+            return true;
+        };
+        let geometry = &self.keys[&key];
         let mut indices = Vec::with_capacity(slot.index_capacity as usize);
         indices.extend(geometry.indices.iter().map(|i| i + slot.vertex_base));
         indices.resize(slot.index_capacity as usize, slot.vertex_base);
 
-        self.bounds = union(self.bounds, Vertex::bounds(&geometry.vertices));
         self.mesh
             .patch_vertices(gpu, slot.vertex_base, &geometry.vertices);
         self.mesh.patch_indices(gpu, slot.index_base, &indices);
