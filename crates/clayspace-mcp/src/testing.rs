@@ -28,7 +28,10 @@ pub struct FakeSession {
     pub consent: ConsentOutcome,
     /// Every consent asked for, in order.
     pub asked: Vec<Consent>,
+    /// A gesture a *person* is holding at the window.
     pub gesture: bool,
+    /// A gesture the agent opened itself and has not closed.
+    pub agent_gesture: bool,
     pub history_depth: usize,
     pub outstanding: Vec<Outstanding>,
     /// How many times state was read, so a test can assert reading changed
@@ -63,6 +66,7 @@ impl FakeSession {
             consent: ConsentOutcome::Granted,
             asked: Vec::new(),
             gesture: false,
+            agent_gesture: false,
             history_depth: 0,
             outstanding: Vec::new(),
             reads: std::cell::Cell::new(0),
@@ -91,6 +95,13 @@ impl FakeSession {
 
     pub fn holding_a_gesture(mut self) -> Self {
         self.gesture = true;
+        self
+    }
+
+    /// The agent has a gesture of its own open — the case where only the
+    /// verbs that finish it may go through.
+    pub fn agent_holding_a_gesture(mut self) -> Self {
+        self.agent_gesture = true;
         self
     }
 
@@ -305,6 +316,10 @@ impl Session for FakeSession {
 
     fn gesture_in_progress(&self) -> bool {
         self.gesture
+    }
+
+    fn agent_gesture_in_progress(&self) -> bool {
+        self.agent_gesture
     }
 }
 

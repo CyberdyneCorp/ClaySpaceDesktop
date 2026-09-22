@@ -121,7 +121,16 @@ impl Catalogue {
             self.obtain(gate, &command)?;
         }
 
-        let changes = command.touches_document();
+        // `changes_the_document` rather than `touches_document`: the narrower
+        // question is about the undo history, and a crossing, an import and a
+        // pass of the active layer's stack answer `false` to it while plainly
+        // changing the document. Those are among the operations that most need
+        // keeping out of an open gesture.
+        //
+        // Asked here rather than in the job, because the command is moved into
+        // it. Both are properties of the command alone.
+        let changes = command.changes_the_document();
+        let continues_a_gesture = command.continues_a_gesture();
         let bound = if capture.is_some() {
             self.bounds.capture
         } else {
@@ -137,6 +146,25 @@ impl Catalogue {
                     RefusalCode::GestureInProgress,
                     "a gesture is in progress at the window; this would land in the \
                      middle of somebody's stroke. Try again once it is finished.",
+                ));
+            }
+
+            // Nor is the agent's own. It opened the gesture, so it may send
+            // the verbs that carry it on or close it — and nothing else.
+            //
+            // The exemption used to be the whole gesture guard: while the
+            // agent held one, *every* command went through, because the rule
+            // was written as "this is not a person's gesture" rather than as
+            // "this belongs to the gesture that is open". `layer/add` and
+            // `history/undo` were measured landing in the middle of the
+            // agent's own stroke, and `layer/remesh` rebuilt a layer that had
+            // half a stroke in it — which left the engine reporting errors and
+            // a band of clay that survived the undo.
+            if changes && !continues_a_gesture && session.agent_gesture_in_progress() {
+                return Err(Refusal::new(
+                    RefusalCode::GestureInProgress,
+                    "a stroke this agent opened is still in progress; this would land in \
+                     the middle of it. Close it with stroke.end or stroke.cancel first.",
                 ));
             }
 
@@ -279,11 +307,14 @@ impl Catalogue {
         }
 
         let answer = self.queue.submit(self.bounds.capture, move |session| {
-            if session.gesture_in_progress() {
+            // Either gesture, and for one reason: a figure taken across an
+            // open gesture measures the gesture as well. Whose it is changes
+            // nothing about the arithmetic.
+            if session.gesture_in_progress() || session.agent_gesture_in_progress() {
                 return Err(Refusal::new(
                     RefusalCode::GestureInProgress,
-                    "a gesture is in progress at the window; a figure taken across \
-                     somebody's stroke measures the stroke as well",
+                    "a gesture is in progress; a figure taken across an open stroke \
+                     measures the stroke as well",
                 ));
             }
             let measured = session.measure(command)?;
@@ -1197,6 +1228,92 @@ mod tests {
             .call("view", json!({ "action": "toggle_grid" }))
             .unwrap();
         assert_eq!(bench.applied(), vec![Command::ToggleGrid]);
+    }
+
+    // -- the agent's own gesture --------------------------------------------
+
+    /// An agent holding a gesture may finish it, and may do nothing else that
+    /// changes the document.
+    ///
+    /// The exemption that lets an agent close its own stroke used to be the
+    /// whole gesture guard: while the agent held one, *every* command went
+    /// through, because the rule was written as "this is not a person's
+    /// gesture" rather than as "this belongs to the gesture that is open".
+    /// Measured over the door: `layer/add` and `history/undo` applied in the
+    /// middle of the agent's own stroke, and `layer/remesh` rebuilt a layer
+    /// with half a stroke in it — which left the engine reporting
+    /// `clay_mesh_sculptor_flush_normals` and `clay_mesh_deltas_revert`
+    /// errors and a band of clay that survived the undo.
+    ///
+    /// A table rather than three tests, because what has to hold is a
+    /// property of the *whole* verb list and a rule stated once per verb is a
+    /// rule with holes in it.
+    #[test]
+    fn an_agent_may_only_continue_its_own_gesture() {
+        let allowed = [
+            ("stroke", json!({"action":"continue","at":[0.1,0,0]})),
+            ("stroke", json!({"action":"end"})),
+            ("stroke", json!({"action":"cancel"})),
+            // Reading is served during a gesture, as it is during a person's.
+            ("view", json!({"action":"toggle_grid"})),
+        ];
+        for (group, arguments) in allowed {
+            let bench = Bench::with(FakeSession::new().agent_holding_a_gesture());
+            bench
+                .call(group, arguments.clone())
+                .unwrap_or_else(|refused| {
+                    panic!("{group} {arguments} belongs to the open gesture: {refused}")
+                });
+            assert_eq!(bench.applied().len(), 1);
+        }
+
+        // Everything structural. Each of these lands inside the half-finished
+        // edit the open gesture is holding.
+        let refused = [
+            ("layer", json!({"action":"add","representation":"field"})),
+            ("layer", json!({"action":"remove","layer":1})),
+            ("layer", json!({"action":"remesh","layer":1})),
+            ("history", json!({"action":"undo"})),
+            ("history", json!({"action":"redo"})),
+            ("repair", json!({"action":"close_holes"})),
+            ("convert", json!({"action":"run"})),
+            // A second gesture on top of the first is the one stroke verb
+            // that is not a continuation: the engine holds one gesture at a
+            // time, and opening another resolves by losing the first.
+            ("stroke", json!({"action":"begin","at":[0,0,0]})),
+        ];
+        for (group, arguments) in refused {
+            let bench = Bench::with(FakeSession::new().agent_holding_a_gesture());
+            let refusal = match bench.call(group, arguments.clone()) {
+                Err(refusal) => refusal,
+                Ok(_) => panic!("{group} {arguments} must not land mid-gesture"),
+            };
+            assert_eq!(refusal.code, RefusalCode::GestureInProgress);
+            assert!(
+                refusal.message.contains("stroke this agent opened"),
+                "the refusal must name the gesture that is in the way: {}",
+                refusal.message
+            );
+            assert!(
+                bench.applied().is_empty(),
+                "{group} {arguments} reached the document anyway"
+            );
+        }
+    }
+
+    /// And a measurement is refused for either gesture: a figure taken across
+    /// an open stroke measures the stroke as well, whoever is holding it.
+    #[test]
+    fn a_measurement_is_refused_during_the_agents_own_gesture() {
+        let bench = Bench::with(FakeSession::new().agent_holding_a_gesture());
+        let refusal = bench
+            .call(
+                "measure",
+                json!({ "group": "history", "action": "undo", "arguments": {} }),
+            )
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::GestureInProgress);
+        assert!(bench.applied().is_empty());
     }
 
     // -- gates --------------------------------------------------------------

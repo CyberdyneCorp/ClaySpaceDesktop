@@ -42,6 +42,9 @@ struct FakeModel {
     /// Which row of a hierarchy takes the next stroke, shared so a test can
     /// move the selection the way a sculptor clicking the pass stack does.
     in_a_pass: Rc<Cell<bool>>,
+    /// Whether a deformation cage stands around the active layer, shared so a
+    /// test can raise and lower one the way `lattice/toggle` does.
+    caged: Rc<Cell<bool>>,
     /// The active subtool's mirror, which the engine keeps per layer.
     ///
     /// Shared so a test can move it the way the document does when the layer
@@ -74,6 +77,7 @@ impl FakeModel {
             representation: Rc::new(Cell::new(Representation::Sdf)),
             smooth_mode: Rc::new(Cell::new(clayspace_model::SmoothFrequency::default())),
             in_a_pass: Rc::new(Cell::new(false)),
+            caged: Rc::new(Cell::new(false)),
             // X on, as the document the engine adapter builds has it and as
             // the ViewModel starts out showing.
             symmetry: Rc::new(Cell::new([true, false, false])),
@@ -121,6 +125,10 @@ impl SculptModel for FakeModel {
 
     fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
         self.in_a_pass.get()
+    }
+
+    fn active_layer_is_caged(&self) -> bool {
+        self.caged.get()
     }
 
     fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
@@ -278,6 +286,14 @@ fn fixture_with_a_moving_layer() -> (
         symmetry,
         recorded,
     )
+}
+
+/// A fixture whose cage a test can raise and lower.
+fn fixture_with_a_cage() -> (SculptViewModel, Rc<Cell<bool>>) {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let model = FakeModel::new(recorded);
+    let caged = model.caged.clone();
+    (SculptViewModel::new(Box::new(model)), caged)
 }
 
 /// A fixture whose hierarchy row a test can move between the form and a pass.
@@ -733,6 +749,52 @@ fn symmetry_reaches_the_model_as_set() {
 }
 
 // -- tool availability -------------------------------------------------------
+
+/// A cage owns the form it stands around, and it owns it for every caller.
+///
+/// The rule lived in `input::press_sculpts`, which only the pointer handler
+/// consults: a press that missed a control point orbited rather than
+/// sculpting. A caller that reached the ViewModel another way — the agent
+/// door does — was unaffected by the cage and sculpted the very form the cage
+/// was there to bend. The stroke it left survived the cage being applied,
+/// which is what made it impossible to attribute afterwards.
+///
+/// Here rather than in the pointer handler's tests because that is where the
+/// guard now is; the pointer's own check stays as a second line.
+#[test]
+fn a_stroke_is_refused_while_a_cage_is_up() {
+    let (mut vm, caged) = fixture_with_a_cage();
+    caged.set(true);
+
+    let error = vm
+        .dispatch(Command::BeginStroke {
+            position: [0.0; 3],
+            pressure: 1.0,
+            modifiers: Default::default(),
+        })
+        .expect_err("a cage takes the form; no stroke may reach past it");
+
+    assert!(
+        error.to_string().contains("cage"),
+        "the refusal must name the cage, so a caller knows what to do about \
+         it: {error}"
+    );
+    assert!(
+        !vm.is_stroking(),
+        "a refused stroke must not start collecting"
+    );
+
+    // And the same ViewModel strokes once the cage is down, so what is
+    // refused is the cage rather than the layer.
+    caged.set(false);
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0; 3],
+        pressure: 1.0,
+        modifiers: Default::default(),
+    })
+    .expect("with the cage down this is an ordinary stroke");
+    assert!(vm.is_stroking());
+}
 
 #[test]
 fn an_unavailable_tool_refuses_before_collecting_a_gesture() {

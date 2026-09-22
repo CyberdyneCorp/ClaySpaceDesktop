@@ -212,6 +212,17 @@ impl ObjectViewModel {
         &self.mode
     }
 
+    /// Whether a manipulator drag is open.
+    ///
+    /// A drag is a gesture, and whoever asks "is a gesture open" has to be
+    /// able to count this one. The pointer path keeps its own record of the
+    /// drag it started, so the question used to be answered from that alone —
+    /// which made a drag opened by a *command* invisible, and only the pointer
+    /// path can open a drag that way.
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
     }
@@ -502,6 +513,25 @@ impl ObjectViewModel {
                 if matches!(*self.target.get(), Some(GizmoTarget::Layer(_))) {
                     self.target.set(None);
                 }
+            }
+            // A cage takes the widget, so it takes the target the widget was
+            // on with it.
+            //
+            // The comment at the dispatch site said this already — "a cage
+            // takes the selection away when it goes up" — and nothing did it.
+            // Both ViewModels answer the manipulator's commands, and which of
+            // them acts is decided by which has a target, so a cage raised
+            // over a selected object left *two* targets standing: one drag
+            // bent the cage and moved a placed object at the same time, and
+            // the object was hidden behind the cage that was drawn over it.
+            //
+            // Cleared on the way down as well, and deliberately. What the cage
+            // took away it does not hand back: the sculptor's last statement
+            // about the widget was to put a cage up, and a manipulator
+            // reappearing on whatever was selected before that is a widget
+            // nobody asked for.
+            Command::ToggleLattice => {
+                self.target.set(None);
             }
             Command::SetGizmoTarget(target) => {
                 self.target.set(*target);

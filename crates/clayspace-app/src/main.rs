@@ -949,22 +949,58 @@ impl App {
         self.request_redraw();
     }
 
-    /// Whether a *person* has hold of something right now.
+    /// Whether a gesture a *command* can open is open in the ViewModels.
     ///
-    /// A gesture the agent opened itself does not count, or an agent could not
-    /// finish a stroke it started. A person cannot open a second gesture while
-    /// the engine holds one, so the two cannot be confused in practice.
-    fn holding_a_gesture(&self) -> bool {
-        if self.agent_gesture.held() {
-            return false;
-        }
-        self.sculpt.is_stroking()
+    /// The three an agent can reach: a stroke, a manipulator drag and a mask
+    /// outline. Asked of the ViewModels rather than of the pointer's own
+    /// record, because the pointer is not the only thing that sends commands
+    /// and the record below it is only of what the pointer itself started.
+    fn a_commanded_gesture_is_open(&self) -> bool {
+        self.sculpt.is_stroking() || self.objects.is_dragging() || self.mask.draft().get().is_some()
+    }
+
+    /// Whether anything at all has hold of the document right now — a stroke,
+    /// a manipulator drag, an outline — whoever opened it.
+    ///
+    /// The five `Option`s are the pointer's own record of what it started:
+    /// a curve, a cage plane, a selection band and a rig plane have no
+    /// ViewModel counterpart to ask.
+    fn a_gesture_is_open(&self) -> bool {
+        self.a_commanded_gesture_is_open()
             || self.gizmo_drag.is_some()
             || self.curve_drag.is_some()
             || self.cage_plane.is_some()
             || self.marquee.is_some()
             || self.rig_plane.is_some()
-            || self.mask.draft().get().is_some()
+    }
+
+    /// Whether a *person* has hold of something right now.
+    ///
+    /// A gesture the agent opened itself does not count, or an agent could not
+    /// finish a stroke it started. A person cannot open a second gesture while
+    /// the engine holds one, so the two cannot be confused in practice.
+    ///
+    /// This is half of the answer and not the whole of it. The agent's own
+    /// gesture is still a gesture: the door asks
+    /// [`App::agent_gesture_in_progress`] beside this and refuses everything
+    /// but the verbs that finish it, because an exemption written as "the
+    /// agent holds this one, so let it through" let `layer/add` and
+    /// `history/undo` land in the middle of the agent's own stroke.
+    fn holding_a_gesture(&self) -> bool {
+        !self.agent_gesture.held() && self.a_gesture_is_open()
+    }
+
+    /// Whether the gesture that is open is the agent's own.
+    ///
+    /// Both halves, and the second is what keeps this from wedging. The flag
+    /// records an *intent* — it is raised before the command is applied, so
+    /// the agent's next call is not refused the stroke it is in the middle of
+    /// — and a begin the ViewModel refused opened nothing. Read alone, one
+    /// refused begin would stand for the rest of the session and every
+    /// changing command the agent sent afterwards would be refused as landing
+    /// in the middle of a gesture that does not exist.
+    fn agent_gesture_in_progress(&self) -> bool {
+        self.agent_gesture.held() && self.a_commanded_gesture_is_open()
     }
 
     /// What has not finished, in words an agent can act on.
@@ -6079,28 +6115,32 @@ struct AgentGesture {
 impl AgentGesture {
     /// What the agent means to do, before the command is applied — so the next
     /// call from the same agent is not refused its own stroke.
+    ///
+    /// Which verbs open a gesture and which close one is asked of the command
+    /// vocabulary rather than listed here. The door needs the same three sets
+    /// to decide what an agent holding a gesture may send, and two copies of
+    /// one list is how a verb comes to be in one of them and not the other.
     fn opening(&mut self, command: &Command) {
-        match command {
-            Command::BeginStroke { .. }
-            | Command::BeginGizmoDrag(..)
-            | Command::BeginMaskOutline(..) => self.held = true,
-            Command::EndStroke
-            | Command::CancelStroke
-            | Command::EndGizmoDrag
-            | Command::EndMaskOutline(_)
-            | Command::CancelMaskOutline => self.held = false,
-            _ => {}
+        if command.opens_a_gesture() {
+            self.held = true;
+        } else if command.closes_a_gesture() {
+            self.held = false;
         }
     }
 
     /// What actually happened, once the command has been applied.
     ///
-    /// `began_a_stroke` is whether the command was a begin, and `open` whether
-    /// the ViewModel holds a stroke now that it has run. A begin that was
-    /// refused holds none, and an agent holding nothing must not go on masking
-    /// a person's gesture.
-    fn settled(&mut self, began_a_stroke: bool, open: bool) {
-        if began_a_stroke {
+    /// `opened` is whether the command was one that opens a gesture, and
+    /// `open` whether anything is held now that it has run. A begin that was
+    /// refused holds nothing, and an agent holding nothing must not go on
+    /// masking a person's gesture.
+    ///
+    /// Every opening verb and not only a stroke's. A manipulator drag and a
+    /// mask outline are opened the same way and can be refused the same way,
+    /// and the flag left standing after one of those is the same defect
+    /// wearing a different coat.
+    fn settled(&mut self, opened: bool, open: bool) {
+        if opened {
             self.held = open;
         }
     }
@@ -6169,7 +6209,7 @@ impl Session for App {
 
         // Whose gesture this is, recorded before the command is applied so the
         // next call from the same agent is not refused its own stroke.
-        let began_a_stroke = matches!(command, Command::BeginStroke { .. });
+        let opened_a_gesture = command.opens_a_gesture();
         self.agent_gesture.opening(&command);
 
         // A sample or a close with nothing open, before it reaches a ViewModel
@@ -6183,7 +6223,7 @@ impl Session for App {
         self.sculpt_refusal = None;
         self.handle(command);
         self.agent_gesture
-            .settled(began_a_stroke, self.sculpt.is_stroking());
+            .settled(opened_a_gesture, self.a_commanded_gesture_is_open());
 
         // The ViewModel's own refusal, which the interface answers by putting
         // it in the options bar and the door has to answer with an error — a
@@ -6512,6 +6552,10 @@ impl Session for App {
 
     fn gesture_in_progress(&self) -> bool {
         self.holding_a_gesture()
+    }
+
+    fn agent_gesture_in_progress(&self) -> bool {
+        App::agent_gesture_in_progress(self)
     }
 }
 
@@ -6861,6 +6905,36 @@ mod tests {
              refused its own stroke"
         );
         gesture.settled(true, false);
+        assert!(!gesture.held());
+    }
+
+    /// And so does a refused manipulator drag, which is the same defect
+    /// wearing a different coat.
+    ///
+    /// The settle used to be asked only of a stroke's begin, so a drag or an
+    /// outline the ViewModel opened nothing for left the flag up for the rest
+    /// of the session. With the narrow exemption in force that is worse than
+    /// it was: the door reads the flag to decide what an agent holding a
+    /// gesture may send, so one refused drag would refuse the agent every
+    /// changing command afterwards.
+    #[test]
+    fn a_refused_manipulator_drag_leaves_the_agent_holding_nothing() {
+        let grab = Command::BeginGizmoDrag(
+            clayspace_model::GizmoHandle::Centre,
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+        );
+        let mut gesture = AgentGesture::default();
+        gesture.opening(&grab);
+        assert!(gesture.held(), "the intent stands while it is applied");
+        gesture.settled(grab.opens_a_gesture(), false);
+        assert!(!gesture.held());
+
+        // A lasso is the third one, and answers the same way.
+        let mut gesture = AgentGesture::default();
+        let lasso = Command::BeginMaskOutline([0.0; 2], false);
+        gesture.opening(&lasso);
+        gesture.settled(lasso.opens_a_gesture(), false);
         assert!(!gesture.held());
     }
 

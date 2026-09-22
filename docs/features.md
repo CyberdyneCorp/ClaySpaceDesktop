@@ -1805,6 +1805,20 @@ that:
   stroke here", so it is drawn only where that is true — the same rule the
   whole-subtool manipulator already followed, now written once as
   `input::shows_the_brush_ring` rather than twice.
+
+  Both of those live where the *pointer* is handled, which for a while was the
+  only place the rule existed: a caller reaching the sculpting ViewModel
+  another way — the agent door does — sculpted the caged layer, and the stroke
+  it left survived the cage being applied. The refusal is in the ViewModel now,
+  where every caller passes it, and the pointer's own check is a second line
+  rather than the only one.
+
+- **The cage takes the widget, and the target with it.** Raising one clears
+  whatever the whole-subtool manipulator was on. Both answer the manipulator's
+  commands and which of them acts is decided by which has a target, so a cage
+  raised over a selected object left two targets standing — and one drag bent
+  the cage and moved the object at the same time, which was hidden behind the
+  cage drawn over it.
 - **A press that takes hold of nothing draws a box.** Not every miss is a
   mistake: a cage is worked a face at a time, and gathering a face by
   Shift-clicking four or eight corners is four or eight chances to miss. So the
@@ -3901,6 +3915,26 @@ transforming, selecting, navigating, undoing. That is what the session is for.
 
 While a person is holding a stroke, a drag or an outline, a call that would
 change the document is refused saying so, and calls that only read are served.
+
+**An agent's own gesture is a gesture too.** It has to be able to close the
+stroke it opened, so `stroke.continue`, `stroke.end` and `stroke.cancel` go
+through while it holds one — and nothing else that changes the document does.
+That exemption used to be the whole guard: the rule was written as "this is
+not a *person's* gesture" rather than as "this belongs to the gesture that is
+open", so while an agent held a stroke every call went through. `layer.add`
+and `history.undo` were measured applying in the middle of the agent's own
+stroke, and `layer.remesh` rebuilt a layer with half a stroke in it — which
+left the engine reporting `clay_mesh_sculptor_flush_normals` and
+`clay_mesh_deltas_revert` errors and a band of clay that survived the undo. A
+`stroke.begin` on top of an open gesture is refused for the same reason: the
+engine holds one gesture at a time.
+
+What counts as changing the document is asked the wide way here, not the undo
+history's narrower question. A crossing, an import and a pass of the active
+layer's stack all mark the document on the composition root's own path rather
+than through the edit path, so they answer "no" to "is this an undo entry" —
+and they are exactly the operations that must not run inside a half-finished
+gesture.
 
 ### Rigging without a pointer
 

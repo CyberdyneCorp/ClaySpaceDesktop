@@ -8731,6 +8731,16 @@ impl SculptModel for ClayDocument {
         self.active_layer().editable()
     }
 
+    /// Whether a cage stands around the layer edits would go to.
+    ///
+    /// The held cage itself rather than `LatticeModel::lattice`, which builds
+    /// a whole `LatticeState` — every control point's world position — to
+    /// answer a question that is one `Option`. This is asked on the way into
+    /// every stroke.
+    fn active_layer_is_caged(&self) -> bool {
+        self.lattice.is_some()
+    }
+
     /// The hierarchy's own answer, and `false` for every other layer.
     ///
     /// Asked of the engine through the held hierarchy rather than read off the

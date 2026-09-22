@@ -52,6 +52,21 @@ pub trait Session {
 
     /// Whether a person is holding a stroke, a drag or an outline right now.
     fn gesture_in_progress(&self) -> bool;
+
+    /// Whether the gesture that is open is the agent's own.
+    ///
+    /// Apart from [`Session::gesture_in_progress`] because the two carry
+    /// different rules. A person's gesture refuses everything that would
+    /// change the document: an agent must not land an edit in the middle of
+    /// somebody's stroke. The agent's own gesture refuses everything *but* the
+    /// verbs that finish it — it opened the gesture, so it has to be able to
+    /// close it, and nothing else it might send belongs inside one.
+    ///
+    /// Provided, so a double that models no agent gesture behaves as it always
+    /// did.
+    fn agent_gesture_in_progress(&self) -> bool {
+        false
+    }
 }
 
 /// What applying a command did.

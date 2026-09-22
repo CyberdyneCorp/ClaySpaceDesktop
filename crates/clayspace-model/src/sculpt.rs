@@ -139,6 +139,20 @@ pub trait SculptModel {
         true
     }
 
+    /// Whether a deformation cage stands around the active layer.
+    ///
+    /// Asked of the model rather than of the cage's ViewModel because the rule
+    /// it answers — a cage owns the form while it stands, and no stroke
+    /// reaches past it — has to hold for every caller. Enforced in the pointer
+    /// handler alone it held for exactly one of them, and an agent's
+    /// `stroke/begin` sculpted a caged layer that the pointer refused.
+    ///
+    /// Provided, like visibility, so a double that models no cage says "none
+    /// is up" and behaves as it always did.
+    fn active_layer_is_caged(&self) -> bool {
+        false
+    }
+
     /// Whether the next stroke would enter a pass rather than the form under
     /// them.
     ///

@@ -692,6 +692,15 @@ pub enum Unavailable {
     LayerProtected,
     /// The layer is hidden, so an edit would land where nothing is drawn.
     LayerHidden,
+    /// A deformation cage is up around the layer.
+    ///
+    /// A cage owns the whole viewport while it stands — a press that misses a
+    /// control point orbits rather than sculpting — and the rule was only ever
+    /// enforced where the pointer is handled, so a caller that reached the
+    /// ViewModel another way sculpted the very form the cage was there to
+    /// bend. The stroke it left survived the cage being applied and was
+    /// impossible to attribute afterwards.
+    LayerCaged,
     /// The layer carries no attribute this tool needs — a mesh with no colour
     /// for a colour brush, say. Produced by the tools that require one.
     MissingAttribute { needs: &'static str },
@@ -728,6 +737,9 @@ impl std::fmt::Display for Unavailable {
             }
             Self::LayerProtected => f.write_str("this layer is locked"),
             Self::LayerHidden => f.write_str("this layer is hidden"),
+            Self::LayerCaged => f.write_str(
+                "a deformation cage is up on this layer; apply it or take it down before sculpting",
+            ),
             Self::MissingAttribute { needs } => {
                 write!(f, "this layer carries no {needs}")
             }

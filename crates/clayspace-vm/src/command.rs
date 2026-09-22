@@ -746,6 +746,82 @@ impl Command {
         )
     }
 
+    /// Whether applying this would change the document, by whatever route.
+    ///
+    /// A wider question than [`Command::touches_document`], which answers
+    /// "should the ordinary edit path bank an undo for this" — and seven
+    /// commands that plainly change the document answer `false` to it,
+    /// because each marks the document itself on the composition root's own
+    /// path and counting it twice would double the entry.
+    ///
+    /// A guard asking "may this land right now" has to count those seven. A
+    /// crossing and a pass of the active layer's stack are exactly the
+    /// operations that must not run inside somebody's half-finished gesture:
+    /// a re-mesh taken with a mesh gesture open was measured leaving
+    /// `clay_mesh_sculptor_flush_normals` errors and a band of clay that
+    /// survived the undo.
+    pub fn changes_the_document(&self) -> bool {
+        self.touches_document()
+            || matches!(
+                self,
+                Self::RunConversion
+                    | Self::RunImport
+                    | Self::InsertMesh
+                    | Self::CommitRenameLayer
+                    | Self::SculptLayer(_)
+                    | Self::MultiresLevel(_)
+                    | Self::MultiresSculptLayer(_)
+            )
+    }
+
+    /// Whether this command opens a gesture that stays open until a later
+    /// command closes it.
+    ///
+    /// A gesture is the one thing in this vocabulary that spans more than one
+    /// command: a press, a run of samples and a release, with a half-finished
+    /// edit in the document between the first and the last. Who is allowed to
+    /// do what while one is open is a rule about *these three sets*, so the
+    /// sets live beside the vocabulary rather than being spelled out again at
+    /// each caller — the composition root had its own copy, the door had
+    /// another, and the two were not the same list.
+    pub fn opens_a_gesture(&self) -> bool {
+        matches!(
+            self,
+            Self::BeginStroke { .. } | Self::BeginGizmoDrag(..) | Self::BeginMaskOutline(..)
+        )
+    }
+
+    /// Whether this command closes a gesture that is open, applying it or
+    /// abandoning it.
+    pub fn closes_a_gesture(&self) -> bool {
+        matches!(
+            self,
+            Self::EndStroke
+                | Self::CancelStroke
+                | Self::EndGizmoDrag
+                | Self::EndMaskOutline(_)
+                | Self::CancelMaskOutline
+        )
+    }
+
+    /// Whether this command belongs to a gesture that is already open —
+    /// carrying it on, or closing it.
+    ///
+    /// This is what a caller holding a gesture of its own is allowed to send:
+    /// the verbs that finish what it started, and nothing else. A begin is not
+    /// one of them. Opening a second gesture on top of an open one is the
+    /// thing no caller may do, and the engine holds one gesture at a time.
+    pub fn continues_a_gesture(&self) -> bool {
+        self.closes_a_gesture()
+            || matches!(
+                self,
+                Self::ContinueStroke { .. }
+                    | Self::DragGizmo(..)
+                    | Self::DragLatticePoint(_)
+                    | Self::ExtendMaskOutline(_)
+            )
+    }
+
     /// A short name for the history panel and for diagnostics.
     pub fn label(&self) -> &'static str {
         match self {
@@ -1079,6 +1155,60 @@ mod tests {
             Command::Redo,
         ] {
             assert!(command.touches_document(), "{} is an edit", command.label());
+        }
+    }
+
+    /// The three gesture sets do not overlap, and a begin is in none of the
+    /// two a caller holding a gesture may send.
+    ///
+    /// The rule this backs is that a caller holding a gesture of its own may
+    /// send the verbs that finish it and nothing else. Were a begin to count
+    /// as continuing one, an agent could open a second gesture on top of its
+    /// own — which the engine, holding one gesture at a time, resolves by
+    /// losing the first.
+    #[test]
+    fn only_the_verbs_that_finish_a_gesture_continue_one() {
+        let begin = Command::BeginStroke {
+            position: [0.0; 3],
+            pressure: 1.0,
+            modifiers: Default::default(),
+        };
+        let sample = Command::ContinueStroke {
+            position: [0.0; 3],
+            pressure: 1.0,
+        };
+
+        assert!(begin.opens_a_gesture());
+        assert!(!begin.continues_a_gesture());
+        assert!(!begin.closes_a_gesture());
+
+        for command in [sample, Command::EndStroke, Command::CancelStroke] {
+            assert!(
+                command.continues_a_gesture(),
+                "{} belongs to the stroke that is open",
+                command.label()
+            );
+            assert!(!command.opens_a_gesture());
+        }
+
+        // The manipulator and the lasso are gestures too, and each has the
+        // same three moments. A rule written for strokes alone would let an
+        // agent rebuild a layer in the middle of its own cage drag.
+        assert!(
+            Command::BeginGizmoDrag(GizmoHandle::Axis(0), [0.0; 3], [0.0, 0.0, 1.0])
+                .opens_a_gesture()
+        );
+        assert!(Command::DragGizmo([0.0; 3], false).continues_a_gesture());
+        assert!(Command::EndGizmoDrag.continues_a_gesture());
+        assert!(Command::BeginMaskOutline([0.0; 2], false).opens_a_gesture());
+        assert!(Command::ExtendMaskOutline([0.0; 2]).continues_a_gesture());
+        assert!(Command::CancelMaskOutline.closes_a_gesture());
+
+        // And everything that is not part of a gesture is in none of them,
+        // which is what makes "refuse the rest" a safe default.
+        for command in [Command::Undo, Command::AddLayer(Representation::Sdf)] {
+            assert!(!command.opens_a_gesture());
+            assert!(!command.continues_a_gesture());
         }
     }
 
