@@ -602,16 +602,16 @@ Three sources: the **fourteen bounded primitives**, a **mesh read from a file**,
 and a **copy of a subtool already in the scene**. Each arrives as one undo step.
 A primitive's size is priced before it reaches the document: every parameter is
 bounded by what the brick cache can hold rather than by a round number, and the
-placed shape's box is priced as a whole, because two radii each inside the
-bound can still make a torus four times as wide. A value that had to be clamped
-is reported with the number actually used.
-A copy is a *copy*, so sculpting it cannot reach the original. The engine can
-now instance a layer instead (`clay_document_instance_layer`, which closed
-ClayCore [#364](https://github.com/CyberdyneCorp/ClayCore/issues/364)); this
-application has not taken it up yet. The layer stack's add control asks the same question: a new layer
-declares whether it is a field or a grid rather than being crossed to one
-afterwards. Not a carried mesh, because there is no way to make an empty one —
-a mesh subtool comes from the import above, which brings its own.
+placed shape's box is priced as a whole, because two radii each inside the bound
+can still make a torus four times as wide. A value that had to be clamped is
+reported with the number actually used. A copy is a *copy*, so sculpting it
+cannot reach the original. The engine can now instance a layer instead
+(`clay_document_instance_layer`, which closed ClayCore
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364)); this application
+has not taken it up yet. The layer stack's add control asks the same question: a
+new layer declares whether it is a field or a grid rather than being crossed to
+one afterwards. Not a carried mesh, because there is no way to make an empty one
+— a mesh subtool comes from the import above, which brings its own.
 
 ### A boolean between two subtools
 

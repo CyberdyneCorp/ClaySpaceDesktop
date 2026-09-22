@@ -47,14 +47,14 @@ written.
 
 ## The engine underneath
 
-ClayCore is a headless C++20 library with a stable C ABI — 708 `clay_*`
-function declarations in `bindings/c/clay.h` at v0.120.0, the pin this builds
-against (610 when this page was first written, at v0.78.0), covering document and layer authoring, the stroke
-engine, voxel grids and their sculpting verbs, fixed-topology mesh sculpting,
-subdivision hierarchies and their pass stacks, mask fields, the brick cache,
-one chunked transport shared by three surface kinds, a memory ledger, a
-maintenance queue, picking, meshing, evaluation and file I/O. Three of its
-properties shape everything above.
+ClayCore is a headless C++20 library with a stable C ABI — 708 `clay_*` function
+declarations in `bindings/c/clay.h` at v0.120.0, the pin this builds against
+(610 when this page was first written, at v0.78.0), covering document and layer
+authoring, the stroke engine, voxel grids and their sculpting verbs,
+fixed-topology mesh sculpting, subdivision hierarchies and their pass stacks,
+mask fields, the brick cache, one chunked transport shared by three surface
+kinds, a memory ledger, a maintenance queue, picking, meshing, evaluation and
+file I/O. Three of its properties shape everything above.
 
 **Backends are runtime-registered and parity-gated.** CPU is compiled in
 unconditionally and *defines correctness*; Metal, Vulkan, CUDA and OpenCL
