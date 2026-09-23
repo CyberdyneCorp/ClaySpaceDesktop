@@ -5,7 +5,9 @@ The window a sculptor works in: which regions it is divided into, what the
 menu bar, the status area and the window title say, how the chrome folds away,
 which preferences survive a restart, and who is asked before the application
 lets anything else in.
+
 ## Requirements
+
 ### Requirement: The window is organized into fixed functional regions
 The application window SHALL present: a menu bar; a tool rail along the leading edge; a tool options bar under the menu bar carrying the active tool's primary parameters; a left region holding the scene tree, the layer stack and sculpting settings; a central viewport; a right region holding material, geometry, resolution and brush-control inspectors; a brush shelf along the trailing edge of the window; and a status area.
 
@@ -73,7 +75,18 @@ close control instead, are exempt.
 - **THEN** the section opens shown
 
 ### Requirement: Panels can be resized, collapsed and restored
-The user SHALL be able to resize and collapse each panel region and restore the default layout in one action. Layout SHALL persist across sessions.
+The user SHALL be able to resize and collapse each panel region and restore the
+default layout in one action. Layout SHALL persist across sessions.
+
+A resize SHALL be clamped so that a region can neither vanish nor swallow the
+viewport. A collapsed region SHALL be given no space at all rather than a narrow
+one, and SHALL remember the size it had, so that bringing it back returns the
+size the user chose rather than a default.
+
+The arrangement SHALL NOT be document state: it SHALL emit no command, enter no
+edit history, and reach no saved document. Where it cannot be stored, or where
+what was stored is unreadable, the application SHALL open at the design's own
+sizes rather than failing to open.
 
 #### Scenario: Layout survives a restart
 - **WHEN** the user resizes and collapses panels and restarts the application
@@ -83,8 +96,27 @@ The user SHALL be able to resize and collapse each panel region and restore the 
 - **WHEN** the user chooses to reset the layout
 - **THEN** every region returns to its default size and expansion state
 
+#### Scenario: A collapsed region gives up its space
+- **WHEN** a region is collapsed
+- **THEN** it draws nothing, and the space it held goes to the viewport
+
+#### Scenario: Bringing a region back restores the chosen size
+- **WHEN** a region is resized, collapsed, and brought back
+- **THEN** it returns to the size it was resized to
+
+#### Scenario: A corrupt stored layout does not stop the application
+- **WHEN** the stored arrangement is unreadable
+- **THEN** the application opens at the design's sizes
+
+#### Scenario: Rearranging the regions changes no document
+- **WHEN** the user resizes, collapses or resets the regions
+- **THEN** no command is emitted and the edit history is unchanged
+
 ### Requirement: The menu bar carries the application's commands
 The menu bar SHALL present File, Edit, View, Sculpt, Brushes, Masks, Window and Help menus. Every menu item SHALL dispatch through the same command path as its equivalent control elsewhere in the interface, SHALL display its keyboard shortcut where one exists, and SHALL be disabled with the same conditions as that equivalent control.
+
+No menu the bar presents SHALL be empty. A menu with nothing under it is a
+promise the interface does not keep.
 
 #### Scenario: A menu item and a panel control agree
 - **WHEN** an operation is unavailable and is present both in a menu and as a panel control
@@ -93,6 +125,10 @@ The menu bar SHALL present File, Edit, View, Sculpt, Brushes, Masks, Window and 
 #### Scenario: Shortcuts are discoverable
 - **WHEN** a menu is opened
 - **THEN** each item with a shortcut displays it
+
+#### Scenario: The Window menu carries the regions
+- **WHEN** the user opens the Window menu
+- **THEN** each resizable region is offered, showing whether it is on screen, together with a reset
 
 ### Requirement: Keyboard shortcuts cover the sculpting loop and are remappable
 The application SHALL provide keyboard shortcuts for the operations used continuously while sculpting — brush selection, size, intensity, symmetry, masking, undo, redo, view presets and frame — and SHALL let the user remap them. A conflicting assignment SHALL be reported rather than silently overriding.
@@ -108,9 +144,32 @@ The listening indicator SHALL say whether a client is currently connected, and
 SHALL show when an agent last changed the document. A surface that moved while
 nobody touched the window is otherwise a defect report with no cause in it.
 
+The memory figures SHALL be read from the engine at most once a second rather
+than once a frame, and a reading SHALL be at most a second behind what the
+engine would answer now. Reading them is a walk of the whole brick cache, at a
+cost proportional to the sculpture — on a worked document it was the largest
+single thing on the idle main thread — and a meter beside a progress bar is
+read by a person, not derived from.
+
+A reading the engine refuses SHALL leave the figures as they were rather than
+showing nothing in use: a cache that cannot answer has not thereby released its
+memory.
+
 #### Scenario: Memory reflects the engine's own accounting
 - **WHEN** memory usage is displayed
 - **THEN** the figures come from the engine's brick cache statistics and budget, not from an estimate maintained by the application
+
+#### Scenario: Frames that change nothing cost nothing
+- **WHEN** the application redraws repeatedly with nothing changing the document
+- **THEN** the engine is asked for the memory figures at most once a second, and the frames in between show the figures already read
+
+#### Scenario: A change is on the meter within a second
+- **WHEN** the memory in use changes
+- **THEN** the status area shows the new figure within a second of the change
+
+#### Scenario: Another document is not reported with the last one's figures
+- **WHEN** the open document is replaced
+- **THEN** the next frame takes a fresh reading rather than waiting out the interval
 
 #### Scenario: Approaching the budget is visible before it is reached
 - **WHEN** memory in use approaches the configured budget
@@ -258,4 +317,3 @@ person records an opt-in for that kind of operation.
 - **WHEN** the person agrees to one export and the agent asks for a second
 - **THEN** the second is asked for again, unless an opt-in for exports has been
   recorded
-

@@ -72,17 +72,26 @@ pub struct SculptViewModel {
     model: Box<dyn SculptModel>,
 
     tool: Observable<ToolKind>,
-    /// Settings are held per tool: switching away and back returns what the
-    /// user left, not a default.
     /// Brush settings, per tool *and* per representation.
     ///
     /// A size that suits a voxel grid's cells is not the size that suits a
     /// field, so returning to a tool on a layer returns the settings it had
-    /// *there* rather than the ones it last had anywhere.
+    /// *there* rather than the ones it last had anywhere. A slot nothing has
+    /// been set in holds its representation's own default,
+    /// `BrushSettings::default_for`, and never a value carried from another.
     brushes: [[BrushSettings; ToolKind::ALL.len()]; Representation::ALL.len()],
     /// Set when the last layer change had to change the tool too, so the
     /// status line can say so rather than leaving it unexplained.
     substituted: bool,
+    /// The tool the sculptor chose and the one standing in for it, while a
+    /// stand-in is in hand.
+    ///
+    /// Kept past the moment of the swap, which `substituted` is not: a switch
+    /// back to a layer that carries the chosen tool returns it, and `state`
+    /// has to be able to tell an agent that the tool it reads was given rather
+    /// than chosen. Cleared by choosing a tool, which is the sculptor
+    /// answering the question the swap asked.
+    substitution: Option<clayspace_model::Substitution>,
     brush: Observable<BrushSettings>,
     /// How the next SDF edit combines with what is under it.
     ///
@@ -179,8 +188,11 @@ impl SculptViewModel {
         let mut vm = Self {
             model,
             tool: Observable::new(ToolKind::Padrao),
-            brushes: [[BrushSettings::default(); ToolKind::ALL.len()]; Representation::ALL.len()],
+            brushes: Representation::ALL.map(|representation| {
+                [BrushSettings::default_for(representation); ToolKind::ALL.len()]
+            }),
             substituted: false,
+            substitution: None,
             brush: Observable::new(BrushSettings::default()),
             // X on, matching the document the engine adapter builds. These two
             // are separate pieces of state and they must not start out
@@ -737,18 +749,32 @@ impl SculptViewModel {
     /// Silently resetting to the first tool was the other option, and it is
     /// the one that leaves a sculptor wondering what they pressed. The status
     /// line says what happened instead.
+    ///
+    /// The substitute is the capability table's answer,
+    /// `ToolKind::substitute_on`, and it is asked on behalf of the tool the
+    /// sculptor *chose* rather than the one in hand: moving from a grid to a
+    /// field with Raspar gives Planar, and moving back gives Raspar again —
+    /// not Planar, which nobody picked.
     fn follow_the_active_layer(&mut self) {
         // The incoming subtool's own mirror, not the one left behind on the
         // outgoing one. Turning symmetry off to work one ear said nothing
         // about the subtool beside it.
         self.symmetry.set_if_changed(self.model.symmetry());
         let representation = self.model.active_representation();
-        let tool = *self.tool.get();
-        if !tool.exists_on(representation) {
-            if let Some(replacement) = ToolKind::for_representation(representation).first() {
-                self.tool.set(*replacement);
-                self.substituted = true;
-            }
+        let chosen = self
+            .substitution
+            .map_or(*self.tool.get(), |substitution| substitution.chosen);
+        let standing_in = chosen.substitute_on(representation);
+        self.substitution = (standing_in != chosen).then_some(clayspace_model::Substitution {
+            chosen,
+            standing_in,
+            representation,
+        });
+        // Announced only when the tool in hand moved *to* a stand-in. One that
+        // stays in hand across a second switch is not news, and a return to
+        // the chosen tool is the swap being undone rather than a new one.
+        if self.tool.set_if_changed(standing_in) && self.substitution.is_some() {
+            self.substituted = true;
         }
         let (row, index) = self.slot(*self.tool.get());
         self.brush.set(self.brushes[row][index]);
@@ -791,6 +817,15 @@ impl SculptViewModel {
     /// only thing this does.
     pub fn refresh_for_active_layer(&mut self) {
         self.follow_the_active_layer();
+    }
+
+    /// The tool the sculptor chose and the one in hand instead, while a layer
+    /// switch has left a stand-in in hand.
+    ///
+    /// What `state` reports and what the answer to the switching command
+    /// says, so a caller can tell a tool it chose from one it was given.
+    pub fn substitution(&self) -> Option<clayspace_model::Substitution> {
+        self.substitution
     }
 
     /// What the active layer holds, for the shell to show and the shelf to
@@ -917,6 +952,9 @@ impl SculptViewModel {
 
     /// Selects a tool, bringing its remembered brush with it.
     fn select(&mut self, tool: ToolKind) {
+        // A choice, so there is no longer a chosen tool waiting for a layer
+        // that carries it.
+        self.substitution = None;
         self.store_brush();
         if self.tool.set_if_changed(tool) {
             let (row, index) = self.slot(tool);

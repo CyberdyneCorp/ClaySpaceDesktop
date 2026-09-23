@@ -294,14 +294,44 @@ impl SubdivisionCost {
         })
     }
 
-    /// Whether the peak fits a byte budget.
+    /// The faces `steps` subdivisions would produce from a cage of
+    /// `triangles` triangles.
     ///
-    /// The peak and not the persistent figure, and that is the whole content of
-    /// this method: a level that fits once it is built and does not fit while
-    /// it is being built is a level that cannot be added.
-    pub fn within(&self, budget_bytes: u64) -> Result<(), Refusal> {
-        if self.peak_bytes > budget_bytes {
+    /// **Three, then four.** Catmull-Clark makes one quad per corner of every
+    /// face, so a triangle's first step is three quads and every step after it
+    /// is four — the cage is the only level that can hold anything but quads.
+    /// It matters because the cage a hierarchy is built over is the mesh layer
+    /// as the document holds it, and a mesh layer holds triangles: a
+    /// retopology of 1,240 quads arrives as 2,480 triangles, and its first
+    /// level is 7,440 faces rather than the 4,960 its quad count suggests. That
+    /// figure was read as the price being wrong. It was the price of the cage
+    /// actually held, quoted against the cage the sculptor remembered.
+    pub fn faces_after_triangles(triangles: u64, steps: u32) -> u64 {
+        match steps {
+            0 => triangles,
+            _ => Self::faces_after(triangles.saturating_mul(3), steps - 1),
+        }
+    }
+
+    /// Whether the peak fits a byte budget, on top of what is already held.
+    ///
+    /// The peak and not the persistent figure: a level that fits once it is
+    /// built and does not fit while it is being built is a level that cannot
+    /// be added.
+    ///
+    /// **And on top of `held_bytes`**, which is the document's own ledger —
+    /// every layer, every surface, every level this hierarchy already has. The
+    /// engine's preflight is arithmetic on the level below and prices the one
+    /// level alone, so a check against it alone passes a level whose peak fits
+    /// an empty machine and not this one: measured, a fifth level was admitted
+    /// with the document already holding most of what the budget allows, and
+    /// left it at 765 MB. Saturating, because a sum that wrapped would read as
+    /// affordable — the failure [`SubdivisionCost::faces_after`] guards
+    /// against, in bytes.
+    pub fn within(&self, held_bytes: u64, budget_bytes: u64) -> Result<(), Refusal> {
+        if held_bytes.saturating_add(self.peak_bytes) > budget_bytes {
             return Err(Refusal::LevelOverBudget {
+                held_bytes,
                 peak_bytes: self.peak_bytes,
                 budget_bytes,
             });
@@ -799,6 +829,26 @@ impl MultiresState {
         self.sculpt_layers.iter().find(|pass| pass.id == id)
     }
 
+    /// Whether `id` names the bottom pass, the one a merge down has nowhere to
+    /// put.
+    ///
+    /// The form under the passes is not a pass — see
+    /// [`MultiresSculptLayerId::BASE`] — so the bottom one has nothing beneath
+    /// it to merge into, and folding it into the form is the separate
+    /// operation [`MultiresSculptLayerOp::BakeToBase`]. The engine refuses the
+    /// merge too, but with its own result code, and it is the only pass
+    /// operation that reached a sculptor as one: every other refusal on the
+    /// stack is a sentence. `false` for an id that is not on the stack, which
+    /// is the engine's refusal to state and not this one.
+    ///
+    /// Read from the order the passes are held in rather than from `index`,
+    /// because the order is what [`MultiresState::sanitized`] derives `index`
+    /// from — a stack assembled by hand and not yet sanitized has the order
+    /// right and may have the numbers wrong.
+    pub fn nothing_beneath(&self, id: MultiresSculptLayerId) -> bool {
+        self.sculpt_layers.first().is_some_and(|pass| pass.id == id)
+    }
+
     /// The pass the next stroke would enter, where it is a pass.
     pub fn active(&self) -> Option<&MultiresSculptLayer> {
         self.sculpt_layer(self.active_sculpt_layer)
@@ -1140,13 +1190,14 @@ mod tests {
             // ...and does not, while it is being built.
             peak_bytes: 900 * 1024 * 1024,
         };
-        assert!(level.within(1024 * 1024 * 1024).is_ok());
+        assert!(level.within(0, 1024 * 1024 * 1024).is_ok());
         let error = level
-            .within(512 * 1024 * 1024)
+            .within(0, 512 * 1024 * 1024)
             .expect_err("the peak is past the budget");
         assert_eq!(
             error,
             Refusal::LevelOverBudget {
+                held_bytes: 0,
                 peak_bytes: level.peak_bytes,
                 budget_bytes: 512 * 1024 * 1024,
             }
@@ -1154,6 +1205,71 @@ mod tests {
         assert!(
             level.peak_over_persistent() > 2.0,
             "the interface has to be able to say how much more the build holds"
+        );
+    }
+
+    /// A level is priced on top of what the document already holds, and the
+    /// refusal names all three figures.
+    ///
+    /// The fixture is the one the audit measured: a level whose peak fits the
+    /// budget with room to spare on an empty document, asked for on one that
+    /// already holds most of it. Priced alone it was admitted, and the
+    /// document ended at 765 MB against 512.
+    #[test]
+    fn a_level_is_priced_against_what_the_document_holds() {
+        const MB: u64 = 1024 * 1024;
+        let level = SubdivisionCost {
+            level: 5,
+            vertices: 1_270_000,
+            faces: 1_269_760,
+            persistent_bytes: 200 * MB,
+            peak_bytes: 300 * MB,
+        };
+        let budget = 512 * MB;
+        assert!(
+            level.within(0, budget).is_ok(),
+            "on its own the level fits, which is all the old price asked"
+        );
+        assert!(
+            level.within(200 * MB, budget).is_ok(),
+            "and it still fits beside a document that leaves room for it"
+        );
+        let refusal = level
+            .within(465 * MB, budget)
+            .expect_err("465 MB held and a 300 MB peak is past 512");
+        assert_eq!(
+            refusal,
+            Refusal::LevelOverBudget {
+                held_bytes: 465 * MB,
+                peak_bytes: 300 * MB,
+                budget_bytes: budget,
+            }
+        );
+        let sentence = refusal.to_string();
+        for figure in ["465 MB", "300 MB", "512 MB"] {
+            assert!(
+                sentence.contains(figure),
+                "the refusal has to name what is held, what the level costs and \
+                 the budget, so the sum can be checked: {sentence}"
+            );
+        }
+        assert!(
+            level.within(u64::MAX, u64::MAX - 1).is_err(),
+            "a sum that wrapped would read as affordable"
+        );
+    }
+
+    /// A triangle cage's first step makes three faces of each, and every step
+    /// after it four — the arithmetic behind a 1,240-quad retopology quoting
+    /// 7,440 faces at level one, since the layer holds it as 2,480 triangles.
+    #[test]
+    fn a_triangle_cage_triples_once_and_then_quadruples() {
+        assert_eq!(SubdivisionCost::faces_after_triangles(2_480, 0), 2_480);
+        assert_eq!(SubdivisionCost::faces_after_triangles(2_480, 1), 7_440);
+        assert_eq!(SubdivisionCost::faces_after_triangles(2_480, 2), 29_760);
+        assert_eq!(
+            SubdivisionCost::faces_after_triangles(u64::MAX / 2, 3),
+            u64::MAX
         );
     }
 
@@ -1400,6 +1516,26 @@ mod tests {
         let dial = MultiresSculptLayerOp::SetStrength { id, strength: 0.5 };
         assert!(dial.changes_the_surface());
         assert!(!dial.is_destructive());
+    }
+
+    /// Only the bottom pass has nothing beneath it to merge into, and the form
+    /// under the stack is not a pass it could fall through to.
+    #[test]
+    fn only_the_bottom_pass_has_nothing_to_merge_into() {
+        let stack = stack();
+        assert!(stack.nothing_beneath(MultiresSculptLayerId::new(7)));
+        assert!(!stack.nothing_beneath(MultiresSculptLayerId::new(11)));
+        assert!(!stack.nothing_beneath(MultiresSculptLayerId::new(3)));
+        assert!(
+            !stack.nothing_beneath(MultiresSculptLayerId::new(99)),
+            "a pass that is not there is the engine's refusal, not this one"
+        );
+        assert!(
+            stack
+                .reordered(MultiresSculptLayerId::new(3), 0)
+                .nothing_beneath(MultiresSculptLayerId::new(3)),
+            "the bottom is a position, so a reorder moves which pass it is"
+        );
     }
 
     /// Every operation is named distinctly, so a history entry says which one
