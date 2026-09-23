@@ -4987,6 +4987,7 @@ fn a_level_the_budget_refuses_says_so_beside_the_viewport() {
     let materials = ["MatCap Cinza 01"];
     let report = diagnostics();
     let refusal = clayspace_model::Refusal::LevelOverBudget {
+        held_bytes: 96 * 1024 * 1024,
         peak_bytes: 2_384 * 1024 * 1024,
         budget_bytes: 1_024 * 1024 * 1024,
     }

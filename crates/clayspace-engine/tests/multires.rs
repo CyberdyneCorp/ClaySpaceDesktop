@@ -767,15 +767,21 @@ fn a_level_that_does_not_fit_is_refused_and_costs_nothing() {
     let ModelError::Conversion(refusal) = refusal else {
         panic!("a refusal a sculptor can act on, not an engine result code: {refusal}");
     };
-    let (peak_bytes, budget_bytes) = match refusal {
+    let (held_bytes, peak_bytes, budget_bytes) = match refusal {
         Refusal::LevelOverBudget {
+            held_bytes,
             peak_bytes,
             budget_bytes,
-        } => (peak_bytes, budget_bytes),
+        } => (held_bytes, peak_bytes, budget_bytes),
         other => panic!("the budget is what refused, and it says so: {other}"),
     };
     assert!(
-        peak_bytes > budget_bytes,
+        held_bytes > 0,
+        "and it is priced on top of what the document holds — a hierarchy \
+         several levels deep is not nothing"
+    );
+    assert!(
+        held_bytes + peak_bytes > budget_bytes,
         "and it is the *peak* during the build that is stated rather than what \
          would remain after it, because on a constrained machine the \
          high-water mark is what ends the session: {peak_bytes} against \
@@ -801,7 +807,7 @@ fn a_level_that_does_not_fit_is_refused_and_costs_nothing() {
         "the level that would come into being"
     );
     assert!(
-        priced.within(budget_bytes).is_err(),
+        priced.within(held_bytes, budget_bytes).is_err(),
         "and the same refusal is available before anything is attempted, which \
          is what lets a control be greyed rather than pressed and refused"
     );

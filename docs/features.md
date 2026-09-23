@@ -1572,6 +1572,19 @@ then publishes, so there is nothing half-built to clear up — and the reason
 arrives beside the viewport, on the same line that says why a tool cannot be
 used.
 
+The peak is priced **on top of what the document already holds** — every
+layer, every surface beside it and the levels the hierarchy already has — and
+the refusal names all three figures: what is held, what the level adds and the
+budget. The engine's preflight prices the new level alone, and priced alone a
+fifth level fitted an empty machine and was admitted on a full one, leaving a
+document at 765 MB.
+
+The face count is the cage's own, multiplied as Catmull-Clark multiplies it.
+A cage taken from a mesh layer is the layer's **triangulation**, and a
+triangle's first step makes three quads rather than four — so a retopology of
+1,240 quads, which the layer holds as 2,480 triangles, quotes 7,440 faces at
+level one, and every level after that is four times the one below.
+
 **A gesture is one undo, and it is exact.** It has to be recorded on this side,
 and unlike a mesh gesture there is no delta to record: `clay.h` states twice,
 unprompted, that the hierarchy's stroke record does not cross the C ABI. So
@@ -1618,7 +1631,9 @@ full contribution and the surface moves half as far, so raising the slider
 afterwards doubles what is on screen. And a **merge** or a **bake into the
 form** is defined by visual parity — the surface after equals the surface
 before, at any strength including zero — so what they cost is the slider, not
-the shape.
+the shape. The **bottom** pass has no pass beneath it — the form is not one —
+so a merge down of it is refused, with a sentence pointing at *Fundir na forma*,
+which is the fold it can make.
 
 **The stack is drawn under the layer it stands on**, in the same shape a grid's
 passes take — a row per pass with an eye, a name and a strength — with the
@@ -2586,6 +2601,14 @@ nothing stops a sculptor stroking the source while it runs;
 the work started and refuses if it has moved, leaving the layer byte-identical.
 A stroke landing mid-retopology therefore costs the retopology rather than the
 stroke.
+
+**It is lit by its own shape.** The result crosses back as positions and a
+triangulation and nothing else — `clay_mesh_from_triangles` takes no normals —
+and a hierarchy exports a level's normals only where its cage carried its own,
+so a retopology and every level of a hierarchy built over it arrive without
+any. The viewport derives them from the triangles, area-weighted, where the
+engine hands back none. It used to stand one constant normal in for all of
+them, which drew both as a flat silhouette.
 
 **Two operations that look alike and are not.** *Refazer a malha* resamples a
 surface through a voxel grid and hands back triangles at an even density;

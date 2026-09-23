@@ -125,8 +125,8 @@ pub use memory::{
     Pressure, SculptMemoryProfile, SurfacePreflight, TrimReport,
 };
 pub use mesh::{
-    ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, ValidationReport,
-    VertexLayout,
+    area_weighted_normals, ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher,
+    ValidationReport, VertexLayout,
 };
 pub use mesh_sculpt::{
     AlphaStamp, Automask, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit,

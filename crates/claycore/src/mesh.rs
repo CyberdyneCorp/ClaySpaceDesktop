@@ -424,6 +424,32 @@ impl Mesh {
         (!ptr.is_null()).then(|| unsafe { slice_of(ptr, self.vertex_count()) })
     }
 
+    /// Vertex normals, the mesh's own where it carries them and derived from
+    /// its triangles where it does not.
+    ///
+    /// **What a renderer should read, and `normals` is not.** Two producers
+    /// hand back a mesh with no normals at all, and both are ordinary:
+    /// `clay_mesh_from_triangles` copies positions and indices and nothing
+    /// else, which is how a retopology comes back into a document; and
+    /// `clay_multires_copy_level_mesh` exports normals only where the *cage*
+    /// carried them, so a hierarchy built over that retopology inherits the
+    /// absence at every level. The fallback this replaced was one constant
+    /// normal for every vertex, which lights the whole surface as a single
+    /// colour — the form drawn as a silhouette, and nothing on screen saying
+    /// why.
+    ///
+    /// Area-weighted rather than angle-weighted: the cross product's length
+    /// *is* twice the area, so the weighting is the arithmetic rather than a
+    /// second pass, and it is what the engine's own face normal mode computes.
+    /// A vertex no triangle reaches keeps a unit normal rather than a zero one,
+    /// because a zero normal normalised in a shader is a NaN.
+    pub fn normals_or_derived(&self) -> Vec<[f32; 3]> {
+        match self.normals() {
+            Some(normals) => normals.to_vec(),
+            None => area_weighted_normals(self.positions(), self.indices()),
+        }
+    }
+
     /// Vertex colours, when the mesh carries them.
     pub fn colors(&self) -> Option<&[[f32; 3]]> {
         // SAFETY: as `positions`, and the engine documents NULL for absent.
@@ -646,4 +672,86 @@ unsafe fn slice_of<'a>(ptr: *const f32, count: usize) -> &'a [[f32; 3]] {
         return &[];
     }
     std::slice::from_raw_parts(ptr as *const [f32; 3], count)
+}
+
+/// Vertex normals from a triangulation, each the area-weighted sum of the
+/// faces around it.
+///
+/// Public because a host holding bare triangles has the same question as a
+/// [`Mesh`] without normals, and one answer to it is better than two. An index
+/// past the end is skipped rather than trusted, and a vertex no triangle
+/// reaches — or one whose faces cancel — keeps `+y`, so every normal returned
+/// is unit length and none of them is a NaN waiting in a shader.
+pub fn area_weighted_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut sums = vec![[0.0f32; 3]; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let corners = [triangle[0], triangle[1], triangle[2]].map(|i| i as usize);
+        if corners.iter().any(|&i| i >= positions.len()) {
+            continue;
+        }
+        let [a, b, c] = corners.map(|i| positions[i]);
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        // Unnormalised on purpose: its length is twice the triangle's area,
+        // which is the weight.
+        let face = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for corner in corners {
+            for (sum, add) in sums[corner].iter_mut().zip(face) {
+                *sum += add;
+            }
+        }
+    }
+    sums.into_iter()
+        .map(|[x, y, z]| {
+            let length = (x * x + y * y + z * z).sqrt();
+            if length > f32::EPSILON && length.is_finite() {
+                [x / length, y / length, z / length]
+            } else {
+                [0.0, 1.0, 0.0]
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::area_weighted_normals;
+
+    /// A tent: two triangles meeting along a ridge, each tilted 45 degrees.
+    /// The ridge vertices are shared, so they point straight up; the eaves
+    /// belong to one face each and point along it. A constant normal — what a
+    /// mesh without normals was drawn with — gets every one of these wrong
+    /// but the ridge.
+    #[test]
+    fn a_shared_vertex_leans_between_its_faces_and_an_unshared_one_follows_its_face() {
+        let positions = [
+            [0.0, 1.0, 0.0],  // ridge, front
+            [0.0, 1.0, 1.0],  // ridge, back
+            [-1.0, 0.0, 0.0], // left eave
+            [1.0, 0.0, 0.0],  // right eave
+        ];
+        let indices = [0, 2, 1, 0, 1, 3];
+        let normals = area_weighted_normals(&positions, &indices);
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(close(normals[0], [0.0, 1.0, 0.0]), "{:?}", normals[0]);
+        assert!(close(normals[2], [-half, half, 0.0]), "{:?}", normals[2]);
+        assert!(close(normals[3], [half, half, 0.0]), "{:?}", normals[3]);
+    }
+
+    /// Nothing returned is a NaN or a zero vector, whatever it is handed.
+    #[test]
+    fn a_vertex_no_triangle_reaches_still_has_a_unit_normal() {
+        let positions = [[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [5.0; 3]];
+        // A degenerate triangle, and one that names a vertex that is not there.
+        let indices = [0, 0, 1, 0, 1, 9];
+        for normal in area_weighted_normals(&positions, &indices) {
+            let length = normal.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!((length - 1.0).abs() < 1e-5, "{normal:?}");
+        }
+    }
 }
