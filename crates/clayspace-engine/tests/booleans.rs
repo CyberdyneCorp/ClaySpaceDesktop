@@ -15,8 +15,8 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     BooleanOp, BooleanRefusal, BooleanSettings, BrushSettings, Combine, CombineSettings,
-    GestureSample, LayerKey, ModelError, ObjectModel, Protection, Representation, SceneModel,
-    SculptModel, Shape, ToolKind,
+    ConversionSettings, Direction, ExchangeModel, GestureSample, ImportSettings, LayerKey,
+    ModelError, ObjectModel, Protection, Representation, SceneModel, SculptModel, Shape, ToolKind,
 };
 
 /// A document with one empty field layer and nothing in it.
@@ -1188,4 +1188,193 @@ fn a_pair_too_large_to_sample_is_refused_even_inside_the_byte_budget() {
         budget_bytes, 16_000_000,
         "refused against {budget_bytes} bytes, which is not the cell ceiling"
     );
+}
+
+// -- two sculpted field subtools ---------------------------------------------
+
+/// A field subtool of its own, sculpted with this combine where a ray from +X
+/// at height `y` meets the scaffold sphere.
+///
+/// The audit's reproduction step for step: add a field subtool, sculpt
+/// something on it. The sphere is only there to give the brush a surface to
+/// land on — the same reason a sculptor would add clay over an existing form.
+fn a_sculpted_subtool(doc: &mut ClayDocument, name: &str, y: f32, op: Combine) -> LayerKey {
+    let key = doc
+        .add_layer(name, Representation::Sdf)
+        .expect("a field subtool");
+    doc.set_combine(CombineSettings {
+        op,
+        ..CombineSettings::for_strokes()
+    });
+    let at = doc
+        .pick([8.0, y, 0.0], [-1.0, 0.0, 0.0])
+        .expect("the scaffold's surface");
+    dab(doc, at);
+    key
+}
+
+/// The audit's boolean, and the acceptance criterion it failed: two field
+/// subtools, each sculpted, overlapping — and the subtraction leaves a layer.
+#[test]
+fn a_boolean_produces_a_layer() {
+    let mut doc = document();
+    a_sphere(&mut doc);
+    let base = a_sculpted_subtool(&mut doc, "Base", 0.0, Combine::Add);
+    let tool = a_sculpted_subtool(&mut doc, "Ferramenta", 0.1, Combine::Add);
+    let before = doc.scene().layers.len();
+
+    let result = doc
+        .run_boolean(settings(base, tool, BooleanOp::Subtract))
+        .expect("two overlapping sculpted field subtools make a boolean");
+
+    assert_eq!(
+        doc.scene().layers.len(),
+        before + 1,
+        "the boolean left no subtool of its own"
+    );
+    assert_eq!(doc.scene().active, Some(result.layer));
+    assert!(
+        doc.layer_bounds(result.layer).is_some(),
+        "the result is a subtool with nothing in it"
+    );
+}
+
+/// Why the audit's boolean produced nothing, named rather than passed through.
+///
+/// A stroke is a relief unless the sculptor says otherwise, and a relief on a
+/// subtool of its own has no surface to offset — so the subtool has an extent,
+/// is offered and priced, and sampled alone it is nothing. The run answered
+/// with the sampler's own words, "invalid argument (empty document)", which
+/// says neither which subtool nor why.
+#[test]
+fn a_formless_operand_is_refused_by_name() {
+    let mut doc = document();
+    a_sphere(&mut doc);
+    let base = a_sculpted_subtool(&mut doc, "Relevo", 0.0, Combine::Relief);
+    let tool = a_sculpted_subtool(&mut doc, "Ferramenta", 0.1, Combine::Add);
+    let before = doc.scene().layers.len();
+    assert!(
+        doc.boolean_operands().iter().any(|(key, _)| *key == base),
+        "the relief subtool is no longer offered, so this no longer reproduces \
+         what the sculptor met"
+    );
+
+    let refused = doc
+        .run_boolean(settings(base, tool, BooleanOp::Subtract))
+        .expect_err("a subtool with no form of its own has nothing to combine");
+
+    match &refused {
+        ModelError::Boolean(BooleanRefusal::Formless { operand }) => {
+            assert_eq!(operand, "Relevo", "the refusal named the wrong subtool");
+        }
+        other => panic!("a formless operand was refused as {other}"),
+    }
+    assert_eq!(doc.scene().layers.len(), before);
+    assert_eq!(is_visible(&doc, base), Some(true));
+    assert_eq!(is_visible(&doc, tool), Some(true));
+}
+
+/// A flat quad grid written out, which is the only route a cage has into a
+/// document — and the shape Catmull-Clark wants.
+fn cage_obj(path: &std::path::Path, divisions: usize) {
+    let mut text = String::new();
+    let step = 4.0 / divisions as f32;
+    for z in 0..=divisions {
+        for x in 0..=divisions {
+            text.push_str(&format!(
+                "v {} 0 {}\n",
+                -2.0 + step * x as f32,
+                -2.0 + step * z as f32
+            ));
+        }
+    }
+    let stride = divisions + 1;
+    for z in 0..divisions {
+        for x in 0..divisions {
+            let a = z * stride + x + 1;
+            text.push_str(&format!(
+                "f {} {} {} {}\n",
+                a,
+                a + stride,
+                a + stride + 1,
+                a + 1
+            ));
+        }
+    }
+    std::fs::write(path, text).expect("write the cage");
+}
+
+/// A document holding the scaffold sphere and a subdivision hierarchy.
+fn with_a_hierarchy(doc: &mut ClayDocument) -> LayerKey {
+    let path =
+        std::env::temp_dir().join(format!("clayspace-boolean-cage-{}.obj", std::process::id()));
+    cage_obj(&path, 4);
+    doc.import_mesh(&path, ImportSettings::default())
+        .expect("import the cage");
+    let _ = std::fs::remove_file(&path);
+    let cage = doc
+        .scene()
+        .layers
+        .iter()
+        .find(|layer| layer.representation == Representation::Mesh)
+        .map(|layer| layer.key)
+        .expect("the cage is a mesh layer");
+    doc.set_active_layer(cage).expect("activate the cage");
+    let conversion = ConversionSettings::default();
+    doc.convert_layer_in_place(
+        Direction::MeshToMultires,
+        conversion.cell_size,
+        conversion.blur,
+    )
+    .expect("a flat quad grid is a cage");
+    doc.scene()
+        .layers
+        .iter()
+        .find(|layer| layer.representation == Representation::Multires)
+        .map(|layer| layer.key)
+        .expect("the cage became a hierarchy")
+}
+
+/// A subdivision hierarchy is refused when it is chosen, by name — and a run
+/// asked for anyway refuses it the same way, before the other operand is
+/// sampled for nothing.
+#[test]
+fn a_hierarchy_is_refused_when_it_is_chosen() {
+    let mut doc = document();
+    let sphere = a_sphere(&mut doc);
+    let hierarchy = with_a_hierarchy(&mut doc);
+    let named = doc
+        .scene()
+        .layer(hierarchy)
+        .map(|layer| layer.name.clone())
+        .expect("its name");
+
+    let at_set = doc
+        .admit_boolean_operand(hierarchy)
+        .expect_err("a hierarchy is not an operand");
+    let ModelError::Boolean(BooleanRefusal::Hierarchy { operand }) = &at_set else {
+        panic!("chosen, a hierarchy was refused as {at_set}");
+    };
+    assert_eq!(*operand, named, "the refusal named the wrong subtool");
+    doc.admit_boolean_operand(sphere)
+        .expect("a sphere is an operand");
+
+    let at_run = doc
+        .run_boolean(settings(sphere, hierarchy, BooleanOp::Union))
+        .expect_err("run anyway, the hierarchy is still refused");
+    assert_eq!(at_run.to_string(), at_set.to_string());
+}
+
+/// A subtool with nothing in it is refused when it is chosen, too.
+#[test]
+fn an_empty_operand_is_refused_when_it_is_chosen() {
+    let mut doc = document();
+    let empty = doc
+        .add_layer("Vazia", Representation::Sdf)
+        .expect("an empty subtool");
+
+    assert!(matches!(
+        doc.admit_boolean_operand(empty),
+        Err(ModelError::Boolean(BooleanRefusal::Empty { .. }))
+    ));
 }

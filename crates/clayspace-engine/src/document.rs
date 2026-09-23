@@ -14817,7 +14817,9 @@ impl ClayDocument {
         max: [f32; 3],
     ) -> Result<Item, ModelError> {
         let cell = cell.max(1e-4);
+        let operand = self.operand_name(key)?;
         self.with_only_visible(&[key], |doc| {
+            doc.refuse_a_formless_operand(operand, min, max)?;
             doc.document
                 .volume_from_region(
                     VolumeParams {
@@ -14833,6 +14835,46 @@ impl ClayDocument {
                 )
                 .map_err(ModelError::engine)
         })
+    }
+
+    /// What the evaluator returns where the shown field holds no surface at
+    /// all: ClayCore's `CLAY_TAPE_FAR`, 3.4e37. Compared against a threshold
+    /// far below it rather than for equality, because nothing a real form
+    /// returns is within twenty orders of magnitude of it.
+    const NO_FIELD: f32 = 1.0e30;
+
+    /// Refuses, by name, an operand that holds strokes and no form.
+    ///
+    /// **This is why the audit's boolean produced nothing.** A stroke on a
+    /// field subtool is a *relief* by default — `CombineSettings::for_strokes`
+    /// — and relief offsets the field already accumulated rather than adding
+    /// one. On a subtool of its own there is nothing to offset, so the engine
+    /// drops the item when it compiles the field: the layer has an extent,
+    /// because every stroke has a box, and is offered, priced and baked; and
+    /// the bake, sampling a document whose only shown layer compiles to
+    /// nothing, refuses with "invalid argument (empty document)". That was the
+    /// run's answer after the minute of hiding and showing, on a channel
+    /// nothing read.
+    ///
+    /// One evaluation, at the middle of the region, with the operand already
+    /// the only thing shown: an empty field is far everywhere, so one point
+    /// answers for all of them, and it is asked before the sampling rather
+    /// than recognised from the sampler's error text afterwards.
+    fn refuse_a_formless_operand(
+        &self,
+        operand: String,
+        min: [f32; 3],
+        max: [f32; 3],
+    ) -> Result<(), ModelError> {
+        let middle: [f32; 3] = std::array::from_fn(|axis| 0.5 * (min[axis] + max[axis]));
+        let value = self
+            .document
+            .eval_points(None, &[middle])
+            .map_err(ModelError::engine)?;
+        if value.first().is_some_and(|d| *d < Self::NO_FIELD) {
+            return Ok(());
+        }
+        Err(ModelError::Boolean(BooleanRefusal::Formless { operand }))
     }
 
     /// Creates a subtool and fills it, as one thing the sculptor asked for.
@@ -14989,6 +15031,24 @@ impl ClayDocument {
             .ok_or(ModelError::Boolean(BooleanRefusal::Empty { operand }))
     }
 
+    /// Whether a subtool is the kind of thing an operand can be, and its box
+    /// when it is.
+    ///
+    /// What the panel asks when an operand is chosen and what the run asks
+    /// again before anything is sampled — one answer, so the two cannot come
+    /// to disagree about what is refused. A hierarchy is refused here rather
+    /// than only where [`ClayDocument::bake_operand`] meets it, because by
+    /// then the other operand may already have been baked for nothing.
+    fn operand_kind(&mut self, key: LayerKey) -> Result<Bounds, ModelError> {
+        let index = self.index_of(key)?;
+        if self.layers[index].representation == Representation::Multires {
+            return Err(ModelError::Boolean(BooleanRefusal::Hierarchy {
+                operand: self.layers[index].name.clone(),
+            }));
+        }
+        self.operand_extent(key)
+    }
+
     /// Both operands' boxes, once both are able to take part at all.
     fn boolean_extents(
         &mut self,
@@ -14997,7 +15057,7 @@ impl ClayDocument {
     ) -> Result<(Bounds, Bounds), ModelError> {
         self.operand_is_free(base)?;
         self.operand_is_free(tool)?;
-        Ok((self.operand_extent(base)?, self.operand_extent(tool)?))
+        Ok((self.operand_kind(base)?, self.operand_kind(tool)?))
     }
 
     /// The region both operands are sampled over: the pair's box, padded by
@@ -15170,10 +15230,9 @@ impl ClayDocument {
             // subtool the sculptor can see, using geometry they cannot. The
             // route that works is to bake a level out first, which is one
             // crossing and says what it costs.
-            Representation::Multires => Err(ModelError::engine(
-                "uma hierarquia de subdivisão não entra numa booleana; \
-                 converta um nível para malha primeiro",
-            )),
+            Representation::Multires => Err(ModelError::Boolean(BooleanRefusal::Hierarchy {
+                operand: self.layers[index].name.clone(),
+            })),
         }
     }
 
@@ -15490,6 +15549,10 @@ impl ObjectModel for ClayDocument {
             .into_iter()
             .filter(|(key, _)| self.operand_bounds(*key).is_some())
             .collect()
+    }
+
+    fn admit_boolean_operand(&mut self, operand: LayerKey) -> Result<(), ModelError> {
+        self.operand_kind(operand).map(|_| ())
     }
 
     fn boolean_cell(&mut self, base: LayerKey, tool: LayerKey) -> Option<f32> {
