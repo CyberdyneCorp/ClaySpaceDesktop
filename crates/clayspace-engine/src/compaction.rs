@@ -44,9 +44,12 @@
 //! starting form is the form's whole bound — thousands of bricks either way —
 //! so the per-brick price is the whole story, and the collapse raises it. The
 //! chain *is* bounded; the cost the chain stood for is not, over the range a
-//! session reaches. The engine measured whole-layer consolidation 6x worse for
-//! a chain on the same grounds, and the regional scope inherits it because what
-//! it installs is the same kind of item.
+//! session reaches. Those are debug-host figures: Linux CI in release measured
+//! the gesture-11 undo at 1.9x the chain rather than sixty, so the size of the
+//! loss depends on the build and its direction does not. The engine measured
+//! whole-layer consolidation 6x worse for a chain on the same grounds, and the
+//! regional scope inherits it because what it installs is the same kind of
+//! item.
 //!
 //! What would change the verdict is either half of that product: a volume that
 //! refills at something near the chain's per-brick cost, or an undo whose reach

@@ -365,6 +365,14 @@ fn a_collapse_keeps_the_surface_it_was_given() {
 /// and makes every undo after it slower, which is the opposite of what the
 /// collapse is for.
 ///
+/// The margin is the build's, not the engine's. The sixty was measured on a
+/// debug host; an optimised build runs the chain's arithmetic far faster than
+/// it runs the volume's lookups, and Linux CI in release measured this undo at
+/// 1.9x. So the wire is set at 1.25x: below every figure measured in either
+/// build, and still above the noise of the fastest of three on a shared
+/// runner. What it is for is the *direction* — the day the patch is no dearer
+/// than its chain — and that is what it still catches.
+///
 /// When this fails, the product has changed in the collapse's favour: turn the
 /// floor on by default, re-run the series in `compaction.rs`, and delete this.
 #[test]
@@ -405,7 +413,7 @@ fn a_baked_patch_still_refills_dearer_than_its_chain() {
     let ratio = baked.as_secs_f64() / chain.as_secs_f64();
     println!("undo over the chain {chain:?}, over the baked patch {baked:?}: {ratio:.1}x");
     assert!(
-        ratio > 2.0,
+        ratio > 1.25,
         "an undo over a baked patch now costs {ratio:.1}x one over the chain it \
          replaced. The collapse has stopped making undo dearer: see \
          `clayspace_engine::compaction` and turn the floor on"
