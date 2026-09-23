@@ -7,12 +7,13 @@
 //!
 //! 1. **The surface moves while the gesture is being made**, and the document
 //!    does not — no nodes, no history, nothing to undo until it commits.
-//! 2. **The result lands where the preview showed it.** Not by the same
-//!    arithmetic: the preview relaxes the transaction's retained volume
-//!    cumulatively per dab, and the stroke is laid down by the bake that was
-//!    always used — see `ClayDocument::close_live_gesture` for why the
-//!    transaction's own commit is not taken. So the claim held here is
-//!    agreement within a tolerance, and the tolerance is stated.
+//! 2. **The result lands where the preview showed it.** By the same
+//!    arithmetic on different samples: the preview relaxes the transaction's
+//!    retained volume once per dab, and the release replays those dabs, in
+//!    order, on a bake of the region they reached — see
+//!    `ClayDocument::close_live_gesture` for why the transaction's own commit
+//!    is not taken. So the claim held here is agreement within a tolerance,
+//!    and the tolerance is stated.
 //!
 //! What *is* exact is the preview itself: it is drawn from a lattice of the
 //! transaction's own, relabelled into a cache rather than resampled onto the
@@ -163,6 +164,73 @@ fn the_stroke_lands_where_the_preview_showed_it() {
         "the surface moved when the gesture was laid down: previewed {shown}, \
          committed {kept} — far enough that the preview was showing something \
          else"
+    );
+}
+
+/// Where the lump stands proud of the starting form, and so where it is
+/// dabbed. The form is a unit sphere: a smooth convex surface that a relax
+/// barely moves, so it needs something for the smoothing to take off.
+const LUMP: [f32; 3] = [1.05, 0.0, 0.0];
+
+/// The starting form with a small lump on its +x side.
+fn lumpy() -> ClayDocument {
+    let mut document = sphere();
+    document
+        .place_object(Shape::Sphere, &[0.12], LUMP, CombineSettings::default())
+        .expect("a lump to smooth away");
+    document
+}
+
+/// Dabs held on the lump, as a sculptor works a spot smooth without letting
+/// go.
+fn dab_in_place(document: &mut ClayDocument, dabs: usize) {
+    let here = [GestureSample {
+        position: LUMP,
+        pressure: 1.0,
+        time: 0.0,
+    }];
+    for _ in 0..dabs {
+        document
+            .apply_stroke(ToolKind::Suavizar, brush(), &here, STARTING_SYMMETRY)
+            .expect("a live dab");
+    }
+}
+
+/// How far a gesture of `dabs` dabs in one spot pulled the lump in: once as
+/// the preview showed it, and once as the release laid it down.
+fn pulled_in(dabs: usize) -> (f32, f32) {
+    let mut document = lumpy();
+    let settled = reach_along_x(&drawn_vertices(&document));
+    assert!(document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY));
+    dab_in_place(&mut document, dabs);
+    let shown = reach_along_x(&drawn_vertices(&document));
+    document.close_live_gesture().expect("commit");
+    let kept = reach_along_x(&drawn_vertices(&document));
+    (settled - shown, settled - kept)
+}
+
+/// Every dab of a held gesture survives the release.
+///
+/// The regression this pins: the preview compounded a relax per dab, and the
+/// release replayed the gesture as ONE pass about the centre of its box. A
+/// spot dabbed smooth sprang back to what its first dab had done the moment
+/// the pointer came up. `the_stroke_lands_where_the_preview_showed_it` did not
+/// catch it: its drag runs at x = 0.55, inside the unit sphere, where a relax
+/// has no surface to move. Dabs stacked on a lump move it measurably, and
+/// only as far as they compound.
+#[test]
+fn every_dab_of_a_held_gesture_survives_the_release() {
+    let (_, one) = pulled_in(1);
+    let (shown, kept) = pulled_in(12);
+    assert!(
+        shown > 2.0 * one,
+        "the fixture does not compound even in the preview: twelve dabs \
+         pulled the lump in {shown}, one dab {one}"
+    );
+    assert!(
+        (shown - kept).abs() < 0.1 * shown,
+        "the release did not keep what the preview showed: twelve dabs \
+         previewed {shown} and laid down {kept} (one dab lays down {one})"
     );
 }
 
