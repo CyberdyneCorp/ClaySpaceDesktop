@@ -603,6 +603,17 @@ pub struct ToolState {
     /// it decides nothing is a switch an agent will act on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rig_mirror: Option<bool>,
+    /// The key of the tool that was chosen, when `tool` is standing in for it.
+    ///
+    /// A layer switch keeps the chosen tool where the new layer carries it and
+    /// hands over a substitute from the capability table where it does not.
+    /// The switch's own answer says so once; this says so for as long as it
+    /// is true, so an agent that reads `state` after a switch can tell a tool
+    /// it chose from one it was given — and knows that switching back to a
+    /// layer that carries the chosen one returns it. Absent when the tool in
+    /// hand is the one chosen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stands_in_for: Option<String>,
 }
 
 /// Everything the brush panel holds, beside the size and strength the tool
@@ -1183,6 +1194,7 @@ mod tests {
                 representation: "field".into(),
                 smooth_mode: None,
                 rig_mirror: None,
+                stands_in_for: None,
             }),
             brush: Some(BrushState {
                 flow: 1.0,

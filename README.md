@@ -18,13 +18,15 @@ work a crash took. The interface ships in English, Brazilian Portuguese and
 Spanish.
 
 **Status.** The specification lives in `openspec/` and its tasks files are the
-authority on what is done: thirty-three changes, twenty-five of them with every
-task ticked. `add-clayspace-desktop` stands at 107 of 109 tasks — milestones 1
-to 4 delivered and milestone 5 all but closed — and what is still open in
-`benchmark-every-operation` and `upgrade-engine-0-52-2` is the same single
-task, a macOS re-recording that needs a macOS machine.
-[docs/roadmap.md](docs/roadmap.md) carries the milestone table, what the engine
-currently gets wrong, and what that costs.
+authority on what is done. `openspec list` reports each change still open with
+its ticked and total tasks; a change whose work has landed is archived under
+`openspec/changes/archive/`, which is where `add-clayspace-desktop` — the
+original five milestones — now stands. This page no longer quotes those
+counts: it quoted thirty-three changes and one open task for a week in which
+both had moved, and the command cannot go stale.
+[docs/roadmap.md](docs/roadmap.md) carries the milestone table, the work in
+flight, what the engine currently gets wrong, and what the pinned engine
+already offers that this application has not taken up.
 
 **The engine pin now stands at v0.120.0.** Nothing had to change to build
 against it — thirteen symbols added, zero removed, and the one struct that grew
@@ -69,7 +71,7 @@ The field was being meshed twice per stroke. What the upgrade deliberately does
 *not* take up is in
 [docs/roadmap.md](docs/roadmap.md).
 
-The largest thing the **previous** pin brought is a fourth way of holding a
+The largest thing the **v0.78.0** pin brought is a fourth way of holding a
 surface. A **subdivision hierarchy** — a cage,
 levels over it, and detail stored per level in a frame carried up from the
 level below — stands beside the field, the grid and the carried mesh: a wrinkle
@@ -93,12 +95,12 @@ report says which part of a document a byte belongs to.
 
 | | |
 |---|---|
-| Tests | 2393, all headless — two ignored: one a long-session check, one a measuring aid |
-| Visual captures | ~640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
+| Tests | About 2,700 `#[test]` functions, all headless — five ignored: three release-only timing aids, one known long-session defect, one measuring aid. `cargo test --workspace` prints the exact count |
+| Visual captures | Some 640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
 | Engine | ClayCore 0.120.0, pinned to the release tag as a submodule |
-| Sculpting tools | 21 across four representations · 14 SDF, 13 voxel, 17 mesh, 15 on a subdivision hierarchy |
+| Sculpting tools | 21 across four representations · 15 SDF, 13 voxel, 17 mesh, 16 on a subdivision hierarchy |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
 The timing figures are `benchmarks/baseline-linux-x86_64.json`: Linux x86_64 on
@@ -137,7 +139,7 @@ movement; and the conditions name the vendored engine's git revision beside its
 version, because two builds can both say 0.120.0 and differ by a commit. A
 comparison across two engine pins is announced above the table rather than
 refused: refusing would leave an upgrade with no instrument at all. The
-twenty-three figures this pin added — the hierarchy's own group, the deferred
+twenty-three figures the v0.78.0 pin added — the hierarchy's own group, the deferred
 normal flush against the same stroke without it, and the drain between two
 strokes — are in no baseline and report as `new`.
 
@@ -201,7 +203,7 @@ repository routinely does; see [Common tasks](#common-tasks).
 | Middle-drag | Pan |
 | Wheel | Zoom **at what is under the pointer**, stopping short of the surface rather than going through it |
 | `1`–`4` | Perspective, front, side, top |
-| `⌘Z` / `⇧⌘Z` | Undo / redo — one stroke is one undo |
+| `⌘Z` / `⇧⌘Z` | Undo / redo — one stroke is one undo, and so is every other command that changes the document |
 | `X` `Y` `S` | Symmetry — X is **on** by default, as the design asks |
 | `[` `]` | Brush smaller / larger |
 | `M` / `⇧M` | Mask painting on / off — Blender's key — and cycle materials, which `M` used to do |
@@ -259,6 +261,24 @@ already has panels for — `tool`, `brush`, `stroke`, `mask`, `curve`, `shape`,
 menu item does, so an agent's edit is one history entry and one undo away, and
 is refused wherever the interface would refuse it.
 
+Those refusals live in the model rather than where the pointer is handled, so
+the door meets them too. While a gesture is open — a person's or the agent's
+own — a command that changes the document is refused unless it continues that
+gesture, and a measurement is refused outright; a stroke cannot begin on a
+layer whose deformation cage is up. A refusal reaches the caller on the channel
+it was raised on, and a value the application clamped rather than refused — a
+shape radius past what the brick cache can hold, say — comes back as a remark
+naming the number it used.
+
+**It can check its own work.** `state` answers in twenty named sections —
+`StateQuery::NAMES` in `crates/clayspace-mcp/src/session.rs` is the list —
+covering what a command can change: the brush, the stroke's and the
+placement's combine, a raised cage and the deform settings, the placed forms by
+node id, the last rebuild, retopology and crossing, the reference images, the
+exchange settings, a grid's passes and a hierarchy's levels. Its `history`
+section names `next_undo` and `next_redo`: the step a Cmd+Z would actually
+take back, rather than the last thing that happened.
+
 `measure` includes geometry work owed by the command, and `wait` drains pending
 geometry and changed mask attributes. Neither forces a full surface rebuild
 when there is no pending work.
@@ -288,7 +308,7 @@ door, shutting it and answering that request are the only three commands in the
 application an agent cannot reach at all.
 
 The door has a suite of its own: `just test-agent` runs the agent-facing
-crate's 133 tests, which need no display, no GPU and no engine built, and `just
+crate's tests (`clayspace-mcp`), which need no display, no GPU and no engine built, and `just
 test-agent-e2e` drives the real application over loopback. The second is asked
 for rather than run by `just test` — it starts a window and a GPU device of its
 own, and doing that beside the visual suite makes both flaky.
@@ -321,9 +341,10 @@ with the crossings beside them, and the tool shelf offers what the *active
 layer* has rather than one list with most of it greyed out. Twenty-one tools
 are bound across the four: fifteen have an SDF verb, thirteen a voxel one,
 seventeen a mesh one — a mesh layer alone carries the engine's sixteen
-fixed-topology brushes — and fifteen a hierarchy one, which is the mesh list
-less the two colour brushes, because a hierarchy stores where a vertex went and
-not what colour it is.
+fixed-topology brushes — and sixteen a hierarchy one: the mesh list less the
+two colour brushes, because a hierarchy stores where a vertex went and not what
+colour it is, plus Erase, which on a hierarchy takes the selected pass's detail
+back toward zero.
 
 The same shelf on a field, on a grid and on a mesh. The filter column on the
 left switches between what the active layer can run, each representation's own
@@ -341,13 +362,18 @@ Fill, Layer, Mask, Nudge, Paint, Erase](docs/images/shelf-voxel.png)
 plus Mask](docs/images/shelf-mesh.png)
 
 There is no fourth picture because there is no fourth shelf to photograph: a
-hierarchy draws the mesh shelf less Paint and Smear. That is the engine's doing
+hierarchy draws the mesh shelf less Paint and Smear, plus Erase. That is the engine's doing
 rather than a convenience — one brush runtime serves every representation, so
 the same verb, falloff, mask and alpha reach a hierarchy's active level.
 
 Which tool reaches which representation is a declared table rather than a rule
 written per tool, and the shelf, the availability check and the tests all read
-it — so the list you see and the list that works cannot drift apart. A tool
+it — so the list you see and the list that works cannot drift apart. Each cell
+of that table is a typed binding rather than a bare entry-point name: the call,
+what the tool means by it, the family of calls it belongs to, and how faithfully
+it keeps the label's promise — `Native`, `Specialized`, `Approximation` or
+`Recipe`. So "on a field, Inflate's call is the faithful one and Standard's is
+an approximation" is a value the tests read, not a comment beside the row. A tool
 with no verb on the active representation is *absent* rather than shown and
 greyed: with four vocabularies a single list would be mostly disabled rows all
 saying the same sentence. A tool that *does* have a verb and still cannot be
@@ -494,7 +520,7 @@ Field subtools only, because a cut resolves to a field item.
 ### Retopology, UV and baking
 
 The pipeline is `sculpt -> retopo -> UV -> bake`. This application owns the
-first stage; **CyberRemesher v0.8.0** owns the rest, vendored beside ClayCore as
+first stage; **CyberRemesher v0.9.0** owns the rest, vendored beside ClayCore as
 a second engine. Four operations reach a mesh subtool, all of them off the
 interface thread with progress and a cancel:
 
@@ -574,11 +600,18 @@ the layer being worked, which is how the parts of one form are built.
 
 Three sources: the **fourteen bounded primitives**, a **mesh read from a file**,
 and a **copy of a subtool already in the scene**. Each arrives as one undo step.
-A copy is a *copy* — the engine has no instancing, so sculpting it cannot reach
-the original. The layer stack's add control asks the same question: a new layer
-declares whether it is a field or a grid rather than being crossed to one
-afterwards. Not a carried mesh, because there is no way to make an empty one —
-a mesh subtool comes from the import above, which brings its own.
+A primitive's size is priced before it reaches the document: every parameter is
+bounded by what the brick cache can hold rather than by a round number, and the
+placed shape's box is priced as a whole, because two radii each inside the bound
+can still make a torus four times as wide. A value that had to be clamped is
+reported with the number actually used. A copy is a *copy*, so sculpting it
+cannot reach the original. The engine can now instance a layer instead
+(`clay_document_instance_layer`, which closed ClayCore
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364)); this application
+has not taken it up yet. The layer stack's add control asks the same question: a
+new layer declares whether it is a field or a grid rather than being crossed to
+one afterwards. Not a carried mesh, because there is no way to make an empty one
+— a mesh subtool comes from the import above, which brings its own.
 
 ### A boolean between two subtools
 
@@ -783,7 +816,9 @@ from a brush is not the shape it leaves but that it can be *gone back to*: a
 stroke is over when the pointer comes up, and a curve is a set of points that
 stay where they were put. Thickness, join — corners, through the points, or
 rounded — and profile — circle, square, hexagon, triangle — are the controls,
-and *Apply* leaves the swept form and takes the curve down.
+and *Apply* leaves the swept form and takes the curve down. Thickness is priced
+against the same budget as a placed shape: a radius the cache cannot hold is
+refused, and the guide is left exactly as it was.
 
 ### ZSphere armatures
 
@@ -905,6 +940,15 @@ how the application says the write went fine.
   the document modified — the engine documents several verbs as legitimately
   able to change nothing, so a successful call is not evidence that anything
   happened.
+- **One Cmd+Z takes back one command, whatever it cost the engine.** A subtool
+  added, a shape inserted, a cage applied, a crossing, a repair, a rebuild, a
+  mask edit, a change to a grid's pass: each measures how many engine entries it
+  spent and banks that count as one action. Before that, a command that banked
+  nothing left the next undo to spend the *previous* command's count on entries
+  that were not its own — one undo after a cage apply deleted the subtool
+  before it. Removing a grid's pass and merging one down stay outside the
+  history, because the engine records neither. A rebuild asked for mid-stroke is
+  refused.
 - Which shapes were *placed* live in a side-car, `<name>.clayspace.objects`,
   beside the document: the container is the engine's, and which nodes a
   sculptor put there is this application's own bookkeeping. Send someone the
@@ -977,6 +1021,26 @@ keeps following the machine. This replaced a constant measured on an M-series
 Mac: on a 24-thread Linux box with an RTX 5060, CUDA is 3.5x *slower* than the
 CPU at every batch size from 8 bricks to 7600.
 
+**A refill has a budget, and the interface thread keeps its frame.** A refill
+used to drain the brick cache until it was empty, on the interface thread, so
+the window stopped for as long as the region took — cancelling a thick tube held
+it for over thirty minutes. The application now gives each drain half a frame
+and pumps what is left at the top of the next one; nothing is dropped, only
+spread. A document built headless keeps the whole drain, because a caller with
+nothing waiting on it needs the exact answer before it returns. Saving uses the
+same bracket to write the visibility the sculptor set without refilling the
+scene around a solo, and the autosave interval now counts from when a save
+*ends*.
+
+**An idle application does nothing.** Three costs that grew with the sculpture
+and were paid whether or not anything changed are gone. The status area's
+memory meter walked the whole brick cache on every frame, which kept a worked
+document at 185–200% CPU with nobody touching it; it reads once a second. Hidden
+grids are no longer re-meshed for a display change nobody can see. And the
+surface's GPU buffers are reused and grown rather than replaced on every
+settle, its writes merged, and the device polled once a frame so staging memory
+is released — an audited session had climbed to 26 GB and never came down.
+
 **Help → Diagnostics** carries the application version, the engine version, the
 vendored engine's git revision, the platform, every registered backend, the
 active one and why, the graphics adapter, anything that fell back this session,
@@ -1033,13 +1097,24 @@ display unit is presentation only and changes no geometry.
 Shortcuts are fixed. Bezier handles on a curve, reopening a curve after it is
 applied, colour on a field, and the rest of the domain's vocabulary in more
 than one language are named with their reasons in
-[docs/features.md](docs/features.md#not-built-yet), along with the three things
-that are blocked on the engine and filed upstream — alpha stamps on an SDF
-stroke ([#392](https://github.com/CyberdyneCorp/ClayCore/issues/392)), a live
-preview under a voxel drag
-([#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)), and a voxel
-crease. An SDF pinch was the fourth
-([#391](https://github.com/CyberdyneCorp/ClayCore/issues/391)) and is closed:
+[docs/features.md](docs/features.md#not-built-yet). Every engine issue those
+reasons once cited is now closed upstream, which leaves two different kinds of
+gap:
+
+- **Answered, not yet taken up.** A live preview under a voxel drag
+  ([#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)) has its
+  gesture in the pinned header — `clay_voxel_grab_begin`, `_update`, `_commit`
+  — and the grid's drag still lands when the pointer comes up.
+  [docs/roadmap.md](docs/roadmap.md) lists the rest of what the pin offers and
+  nothing here calls yet.
+- **Closed, and still reproducing.** Alpha stamps on an SDF stroke
+  ([#392](https://github.com/CyberdyneCorp/ClayCore/issues/392)) stay refused:
+  the test written to fail when the engine carries a stroke's alpha into each
+  stamp, `a_stroke_does_not_carry_the_chain_into_each_stamp`, still passes at
+  v0.120.0. A voxel crease has no engine verb at all.
+
+An SDF pinch was once on this list
+([#391](https://github.com/CyberdyneCorp/ClayCore/issues/391)) and is done:
 `clay_layer_magnify_surface` is the assembled-surface resolver it wanted, and
 Pinch is on the field's shelf.
 
@@ -1066,39 +1141,54 @@ graph TD
     VIEW["clayspace-view: widgets and renderer"]
     VM["clayspace-vm: ViewModels"]
     MODEL["clayspace-model: the domain"]
+    MCP["clayspace-mcp: the agent door"]
     ENGINE["clayspace-engine: engine adapter"]
     SAFE["claycore: safe wrapper"]
     SYS["claycore-sys: generated FFI"]
     CLAY["ClayCore: C++20 engine"]
+    RSAFE["cyberremesh: safe wrapper"]
+    RSYS["cyberremesh-sys: generated FFI"]
+    REMESH["CyberRemesher: retopology, UV, bake"]
 
     APP --> VIEW
     APP --> VM
+    APP --> MCP
+    APP --> MODEL
     APP --> ENGINE
     VIEW --> VM
     VIEW --> MODEL
+    MCP --> VM
+    MCP --> MODEL
     VM --> MODEL
     ENGINE --> MODEL
     ENGINE --> SAFE
+    ENGINE --> RSAFE
     SAFE --> SYS
     SYS --> CLAY
+    RSAFE --> RSYS
+    RSYS --> REMESH
 
     style MODEL fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style APP fill:#D9744A,stroke:#D9744A,color:#23262B
     style CLAY fill:#3A3E45,stroke:#C9C4BD,color:#C9C4BD
+    style REMESH fill:#3A3E45,stroke:#C9C4BD,color:#C9C4BD
 ```
 
 | Crate | Holds | Must not reach |
 |---|---|---|
 | `claycore-sys` | Generated FFI to `clay.h`. No hand-written declarations | — |
 | `claycore` | Safe wrapper: ownership, errors, threading | — |
-| `clayspace-model` | The domain: tools, interfaces, types | ClayCore |
-| `clayspace-engine` | The ClayCore-backed implementations of those interfaces | — |
-| `clayspace-vm` | ViewModels: observable state and commands | egui, wgpu, winit, ClayCore |
-| `clayspace-view` | Widgets and the renderer | ClayCore, directly or transitively |
+| `cyberremesh-sys` | Generated FFI to CyberRemesher's C header | — |
+| `cyberremesh` | Safe wrapper over the retopology, UV and bake engine | — |
+| `clayspace-model` | The domain: tools, interfaces, types | egui, wgpu, CyberRemesher, serde — and ClayCore, by having no dependencies at all rather than by a rule |
+| `clayspace-engine` | The ClayCore- and CyberRemesher-backed implementations of those interfaces | — |
+| `clayspace-vm` | ViewModels: observable state and commands | egui, wgpu, winit, ClayCore, CyberRemesher, serde |
+| `clayspace-view` | Widgets and the renderer | ClayCore and CyberRemesher, directly or transitively; serde_json |
+| `clayspace-mcp` | The agent door: MCP over loopback, answering through the ViewModels | both engines, the engine adapter, the View, egui, wgpu, winit |
 | `clayspace-app` | Composition root, window, event loop | — |
 
-Two rules make this checkable rather than aspirational, and
-`tools/check_layering.py` asserts both:
+The "must not reach" column is `FORBIDDEN` in `tools/check_layering.py`, which
+fails CI on any of those edges. The two that carry the design:
 
 - **`clayspace-view` cannot reach the engine**, directly or transitively. A
   View reads ViewModel state and emits commands; it has no other way to affect
@@ -1112,9 +1202,10 @@ dependencies, and no arrangement of the others could satisfy the isolation
 rule. A useful side effect is that the ViewModel tests run without compiling
 the C++ engine at all.
 
-`unsafe` lives in `claycore-sys` and `claycore` and nowhere else; every other
-crate declares `#![forbid(unsafe_code)]`, and the layering check fails if one
-drops the declaration.
+`unsafe` lives in the two engines' bridge crates — `claycore-sys`, `claycore`,
+`cyberremesh-sys` and `cyberremesh` — and nowhere else; every other crate
+declares `#![forbid(unsafe_code)]`, and the layering check fails if one drops
+the declaration.
 
 ### What happens when you sculpt
 
@@ -1317,7 +1408,7 @@ long-form commands live in one place. `just` on its own lists them.
 | `just visual` | Render every visual test and open the captures |
 | `just bench` | The performance table: every brush, operation, conversion and bake |
 | `just bench-only brush` | One group of it, for when the whole table is too long to wait for |
-| `just bench-compare` | Against the recorded baseline — this is the CI gate |
+| `just bench-compare` | Against the recorded baseline for this platform. CI runs it on macOS, where the baseline predates the reference suite, so the job refuses rather than compares — see the note on the facts table |
 | `just bench-to run.json` | Record a whole run somewhere that is not the committed baseline |
 | `just bench-against run.json` | Compare against a run recorded elsewhere — the other half of an engine A/B |
 | `just segments` | Per-segment cost of every brush, which is what a sculptor feels as lag |
@@ -1359,7 +1450,7 @@ just test-one visual_brushes      # one target, with output
 ```
 
 Visual tests render real frames into `target/visual/`, and `just visual`
-renders them all and opens the directory. The 618 captures there are how the
+renders them all and opens the directory. The captures there — some 640 — are how the
 screenshots above were checked against what the tests assert.
 
 These are meant to be looked at. Several real bugs were invisible to the
@@ -1411,11 +1502,15 @@ crates/
   clayspace-engine/  the ClayCore-backed implementations of those interfaces
   clayspace-vm/      ViewModels: observable state + commands, no egui/wgpu
   clayspace-view/    widgets and renderer; cannot reach the engine at all
+  clayspace-mcp/     the agent door: MCP over loopback, through the ViewModels
   clayspace-app/     composition root, window, event loop
+  cyberremesh-sys/   generated FFI to CyberRemesher
+  cyberremesh/       safe wrapper — retopology, UV layout and baking
 benchmarks/          one recorded baseline per platform
 docs/                architecture, features, roadmap, and the screenshots above
 tools/               the layering check, packaging and attribution scripts
 vendor/ClayCore/     the engine, pinned
+vendor/CyberRemesherAndUV/  the retopology engine, pinned
 openspec/            the specification this is built against
 ```
 
@@ -1425,8 +1520,8 @@ This project is specified before it is built. The specification lives in
 `openspec/` and is the source of truth for what the application should do.
 
 ```sh
-openspec list
-openspec show add-clayspace-desktop
+openspec list                 # what is still open, with its task counts
+openspec show <change>        # one change's proposal and deltas
 openspec validate --all --strict
 ```
 
@@ -1444,8 +1539,9 @@ Implementation follows the `tasks.md` under each change in
 | [ATTRIBUTION.md](ATTRIBUTION.md) | The dependency manifest, generated from `cargo metadata` |
 
 The screenshots in this file live in `docs/images/`. They are of the running
-application on Linux with the CUDA backend, against ClayCore 0.73.0 — the pin
-before this one — at a 1280×800 window. They are not the visual-test captures;
+application on Linux with the CUDA backend, against ClayCore 0.73.0 — five
+pins ago, so older than the shelf counts and the hierarchy above — at a
+1280×800 window. They are not the visual-test captures;
 those live in `target/visual/`, are written by `cargo test` for looking at, and
 are compared against nothing — see the note on the facts table above.
 

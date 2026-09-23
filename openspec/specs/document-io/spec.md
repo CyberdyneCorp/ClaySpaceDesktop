@@ -5,7 +5,9 @@ Opening and saving `.clayspace` documents through the engine's own format,
 importing and exporting meshes, and the surrounding promises — a working unit, a
 crash-survivable draft, a decision before unsaved work is closed, and a failure
 that says so rather than leaving a half-written file.
+
 ## Requirements
+
 ### Requirement: Documents are saved and opened in the engine's format
 The application SHALL open and save `.clayspace` documents through the engine's
 document I/O. It SHALL NOT define a container format of its own, and SHALL NOT
@@ -64,6 +66,19 @@ The application SHALL apply the engine's import guardrails, SHALL present the li
 ### Requirement: Unsaved work survives a crash
 The application SHALL autosave recovery state for open documents at a configurable interval and after significant edits. On starting after an abnormal termination, it SHALL offer to recover each document that has recovery state newer than its saved file.
 
+The interval SHALL be idle time between autosaves: it is counted from the
+moment one autosave finishes rather than the moment it starts. Counted from one
+start to the next, a document whose save takes longer than the interval is due
+again the instant it lands, and the application spends its time saving instead
+of being usable between saves.
+
+A failed autosave SHALL wait out the same interval as a successful one, so that
+a save that cannot be written is not retried on every turn of the event loop.
+
+An autosave SHALL be skipped while a gesture is open — a stroke, a manipulator
+drag, an outline — and SHALL NOT thereby be cancelled: skipping a tick SHALL
+NOT restart the interval, so the write happens as soon as the hand comes off.
+
 #### Scenario: Recovery is offered after a crash
 - **WHEN** the application starts after terminating abnormally with unsaved changes
 - **THEN** it lists the recoverable documents and lets the user open or discard each
@@ -71,6 +86,21 @@ The application SHALL autosave recovery state for open documents at a configurab
 #### Scenario: Autosave does not overwrite the user's file
 - **WHEN** autosave runs on a document with unsaved changes
 - **THEN** recovery state is written separately and the user's saved file is unchanged
+
+#### Scenario: A slow autosave is not immediately due again
+- **WHEN** an autosave takes longer than the configured interval
+- **THEN** the next one is not due until the interval has passed since it
+  finished
+
+#### Scenario: An autosave that fails does not retry on every wake-up
+- **WHEN** an autosave cannot be written
+- **THEN** the next attempt is an interval away, as it would be after a
+  successful write
+
+#### Scenario: A gesture holds the autosave off and does not cancel it
+- **WHEN** an autosave falls due while a stroke, drag or outline is open
+- **THEN** nothing is written until the gesture ends, and it is written then
+  rather than an interval later
 
 #### Scenario: Clean exit clears recovery state
 - **WHEN** the application exits normally with all documents saved
@@ -159,3 +189,74 @@ the one refusal in this application that costs work rather than a click.
 - **WHEN** a later save succeeds
 - **THEN** the reason is gone
 
+### Requirement: Writing a file does not change what is drawn
+Saving a document SHALL NOT alter the scene on the screen. A save is not an
+edit: no layer's visibility as the viewport reads it SHALL move, no part of the
+surface SHALL be re-evaluated, and nothing SHALL be left for the sculptor to
+undo.
+
+This binds the one place the file and the screen legitimately disagree. A solo
+is a way of looking at a document rather than part of it, so a file written
+while one is engaged SHALL record the visibility the sculptor set — a document
+that reopened with everything but one subtool hidden, the crash recovery
+included, would carry a way of looking at it as though it were the work. The
+pattern SHALL reach the file without reaching the live scene: what is written
+is the sculptor's, what stays drawn is the solo.
+
+Where the engine records a command for each flag a save has to write, those
+commands SHALL be stepped over as one, so that the undo after a save reaches
+the sculptor's own edit and not the file's bookkeeping.
+
+#### Scenario: A soloed document is saved without redrawing
+- **WHEN** a document with a subtool soloed is saved
+- **THEN** no brick of the surface is re-evaluated, and the viewport goes on
+  showing the soloed subtool alone
+
+#### Scenario: The file carries the sculptor's own pattern
+- **WHEN** a document saved while soloed is reopened
+- **THEN** every layer's visibility is the one the sculptor set before the
+  solo, and the reopened document is not soloed
+
+#### Scenario: A save costs no undo step
+- **WHEN** a sculptor edits, engages a solo, saves, and undoes
+- **THEN** the edit is what is taken back
+
+### Requirement: An export says when the mesh it wrote is not sound
+The application SHALL validate the mesh an export actually writes, and SHALL
+tell the sculptor when it is not watertight or not 2-manifold.
+
+This is the class of defect that breaks a slicer, a boolean engine or a stricter
+importer while a viewport shows nothing wrong, so it cannot be left to be
+discovered in the file.
+
+The finding SHALL carry the counts and not only the fault. A handful of pinched
+edges in a large mesh is usually a file worth shipping and thousands of them is
+not, and a sculptor told only that the mesh "is not manifold" cannot tell which
+they have.
+
+A validator that fails SHALL leave the export silent rather than failing it. The
+file is the sculptor's work, and withholding it because the checker broke is the
+worse trade.
+
+#### Scenario: A decimated export comes back pinched
+- **WHEN** an export is written whose mesh carries an edge with more than two
+  incident triangles
+- **THEN** the sculptor is shown that it is not manifold, and how many edges
+
+#### Scenario: A sound export says nothing about itself
+- **WHEN** an export is written whose mesh is watertight and 2-manifold
+- **THEN** no finding is raised, because a warning that appears on every export
+  teaches a sculptor to ignore the panel
+
+### Requirement: What is predicted and what is observed are kept apart
+The application SHALL distinguish what it can say about an export **before** the
+write — derived from the format and the settings — from what it can only say
+**after** it, derived from the bytes.
+
+The two SHALL NOT produce the same message, so that a sculptor reading the panel
+can tell a property of their choices from an observation about their file.
+
+#### Scenario: A prediction and a finding do not restate each other
+- **WHEN** a mesher is chosen that is described in advance as not manifold, and
+  the written mesh is then found not to be
+- **THEN** the panel carries both, and they are not the same sentence

@@ -4,7 +4,9 @@
 Every verb a sculptor reaches for and the rules it obeys: the tools and the
 engine verbs behind them, brush parameters and shaping, strokes and symmetry,
 masks, cages, curves, and what a gesture shows while it is still being made.
+
 ## Requirements
+
 ### Requirement: Every tool maps to a documented engine verb
 Each sculpting tool the interface presents SHALL correspond to a documented
 ClayCore verb reached through the C ABI. The application SHALL NOT present a
@@ -14,6 +16,13 @@ behavior differs from what the label states.
 Where a tool applies SHALL be declared once, per tool and per representation,
 in the table the shelf, the availability check, the diagnostics report and the
 tests all read. Nothing else may decide where a tool applies.
+
+A row SHALL name the entry point that executes for that pair, spelled in full.
+A family abbreviated to one name plus suffixes — `begin/update/commit` — is a
+name that cannot be looked up, and a row that names the kind of call rather than
+the call is a row nothing can check. Where the same verb reaches the engine
+through a resolved stroke for one tool and a single stamp for another, the rows
+SHALL differ accordingly.
 
 Beyond the vocabulary already bound, the declared table SHALL include:
 
@@ -26,6 +35,8 @@ Beyond the vocabulary already bound, the declared table SHALL include:
 - **Mover Topológico**, on SDF layers only, through the engine's topological
   move — a drag whose falloff is measured along the material rather than
   through space.
+- **Pinçar** on SDF layers, through the magnify of the assembled surface at a
+  negative strength.
 
 A tool SHALL NOT be offered on a representation whose engine verb this
 application does not reach, and a declared pair SHALL reach a distinct engine
@@ -38,8 +49,8 @@ call rather than falling through to a neighbouring one.
 
 #### Scenario: Padrão and Inflar leave different marks on a field
 - **WHEN** the same stroke is made on an SDF layer with Padrão and with Inflar
-- **THEN** the two surfaces differ: Padrão's mark is a ridge following the
-  falloff, Inflar's a broader swelling of the footprint
+- **THEN** the two surfaces differ: one operation, two profiles, Padrão's a
+  ridge that follows the falloff and Inflar's a broader and lower swell
 
 #### Scenario: No orphan tools
 - **WHEN** the tool registry is enumerated
@@ -49,6 +60,12 @@ call rather than falling through to a neighbouring one.
 - **WHEN** each tool is applied on each representation its row declares
 - **THEN** the edit lands, and no two tools on one representation resolve to the
   same engine call unless the table says they do
+
+#### Scenario: A row names the call that runs
+- **WHEN** a row names an entry point and the dispatch for that pair calls
+  another
+- **THEN** the row is wrong, whether or not the name it carries is a symbol the
+  engine has
 
 #### Scenario: Crease cuts a trough on a field
 - **WHEN** Vinco is stroked across an SDF surface
@@ -83,15 +100,58 @@ The interface SHALL expose brush intensity, size and flow as always-visible cont
 - **THEN** it is shown in the unit the document uses, so that a size means the same thing at any zoom level
 
 ### Requirement: Brush shaping controls are exposed
-The interface SHALL expose the shaping parameters the engine's stroke engine and brush parameters accept: an alpha curve, noise amount, edge falloff, accumulation mode (buildup versus clamped), stroke smoothing, and mirroring. Each SHALL map to a stroke preset or brush parameter field, and SHALL NOT be presented if it has no engine counterpart.
+The interface SHALL expose the shaping parameters the engine's stroke engine and
+brush parameters accept: an alpha curve, noise amount, **the angle each stamp is
+turned about its own facing**, edge falloff, accumulation mode (buildup versus
+clamped), stroke smoothing, and mirroring. Each SHALL map to a stroke preset or
+brush parameter field, and SHALL NOT be presented if it has no engine
+counterpart.
+
+The stamp angle SHALL be set in degrees over a whole turn and SHALL wrap rather
+than clamp, because an angle has no ends: a whole turn is none, and a value the
+control cannot represent — a quantity that is not a number, or an infinity —
+SHALL become no rotation rather than reaching the engine, which builds a rotation
+basis out of it. Zero SHALL mean no rotation at all rather than a rotation by
+zero, which is the value every stroke made before this control existed was made
+with.
+
+The angle SHALL be observable only where the footprint has something to orient. A
+round brush with no stamp loaded looks the same at every angle by construction,
+so the control SHALL be offered without being gated on an alpha being present:
+gating it would make a setting appear and disappear as the sculptor changes
+stamps, and the setting is held per tool.
+
+The edge falloff SHALL be sent under the name the sculptor chose. Where the
+engine's own reading of that name changes, the application SHALL follow the
+engine rather than compensating for it behind the control, so that the name on
+the dial and the curve on the surface stay the same thing.
 
 #### Scenario: Buildup versus clamped differ observably
-- **WHEN** the same stroke is applied twice over itself with accumulation enabled and again with it disabled
-- **THEN** the accumulated pass deposits more than the clamped pass, matching the engine's buildup semantics
+- **WHEN** the same stroke is applied twice over itself with accumulation enabled
+  and again with it disabled
+- **THEN** the accumulated pass deposits more than the clamped pass, matching the
+  engine's buildup semantics
 
 #### Scenario: Falloff selection reaches the engine
 - **WHEN** the user selects an edge falloff
-- **THEN** the corresponding falloff value is set in the brush parameters passed to the verb
+- **THEN** the corresponding falloff value is set in the brush parameters passed
+  to the verb
+
+#### Scenario: A turned stamp lands turned
+- **WHEN** the same directional stamp is stroked along the same path twice, once
+  upright and once at a quarter turn
+- **THEN** the two strokes leave the material in different places
+
+#### Scenario: A whole turn is none
+- **WHEN** the stamp angle is set to a whole turn, or to a value that is not a
+  representable angle
+- **THEN** the setting reads as no rotation
+
+#### Scenario: The name on the dial is the curve on the surface
+- **WHEN** the engine's reading of a falloff name changes, and the user selects
+  that falloff
+- **THEN** the value sent is still the one that name stands for, rather than a
+  neighbouring one chosen to reproduce the old curve
 
 ### Requirement: Strokes are resolved by the engine's stroke engine
 A drag across the surface SHALL be captured as stroke samples — position, pressure and timing — and resolved into edits by the engine's stroke engine, honoring arc-length spacing, pressure curves, jitter, taper and steady-stroke settings. The application SHALL NOT synthesize its own stamp spacing.
@@ -142,6 +202,11 @@ against each other — only against an unmirrored gesture.
 ### Requirement: Masks freeze regions against every verb
 The application SHALL let the user paint, invert, clear, expand, contract and smooth mask fields, and SHALL pass the active mask to every sculpting verb it invokes. A fully masked region SHALL be unchanged by any verb.
 
+A mask SHALL belong to the layer it was painted on. Each layer MAY carry its
+own mask; the mask presented and applied is the active layer's, and switching
+the active layer SHALL neither discard the previous layer's mask nor apply it
+to the new one.
+
 #### Scenario: A masked region resists every tool
 - **WHEN** a region is fully masked and each available sculpting tool is applied over it
 - **THEN** no tool alters that region
@@ -149,6 +214,12 @@ The application SHALL let the user paint, invert, clear, expand, contract and sm
 #### Scenario: Masks survive a resolution change
 - **WHEN** the voxel resolution level changes on a layer carrying a mask
 - **THEN** the mask still covers the same region of the model
+
+#### Scenario: Two subtools keep independent masks
+- **WHEN** the user paints a mask on one layer, activates another and paints a
+  different mask there, then returns to the first
+- **THEN** the first layer's mask protects exactly what was painted on it, and
+  neither mask gates edits on the other layer
 
 ### Requirement: A mask can be extruded into a new solid
 The application SHALL expose mask extrude, producing a solid from the masked region, with outward, inward and centred options and a roundable rim, applied through the engine's mask-extrude entry point.
@@ -193,6 +264,36 @@ Because many engine verbs can be valid calls that change nothing — a sub-cell 
 ### Requirement: Armatures are authored as a tree
 The application SHALL expose armature authoring — a tree of spheres skinned by the engine's sphere-swept links and smooth union — allowing nodes to be added, moved, resized, reparented and removed, with the skin thickness controllable. Moving a parent node SHALL carry its subtree.
 
+An armature SHALL belong to the layer that holds its nodes. A document MAY
+carry an armature per layer; activating a layer that carries one SHALL make
+that rig the one presented and posable, and rigs on other layers SHALL be
+untouched by it.
+
+An edit naming a sphere the rig does not have SHALL be refused and SHALL leave
+the history alone. Every rig edit rewrites the whole armature into the
+document, so an index nobody has would otherwise place the tree again
+unchanged — an undo step for a gesture that never happened, spent instead of
+the sculptor's last real one.
+
+The tree SHALL hold the radii as authored and the document SHALL hold them with
+the skin thickness applied, so that moving the thickness is reversible and
+never rewrites the rig. Reading a rig back out of the document SHALL divide by
+the thickness **in effect**, under the same bounds the multiply uses. Dividing
+by the default instead returns radii with the thickness baked in, and the next
+edit writes them out scaled a second time.
+
+A rig SHALL survive a step through the history, in both directions and past its
+own creation: after a step the tree the editor holds SHALL be the one the
+document holds, and a rig a step brings back SHALL be posable — accepting a new
+sphere, a resize and a reparent — rather than present in the surface and
+unreachable. Where a step brings a rig back onto a subtool that is not the
+active one, that subtool SHALL become active, since a rig is offered for the
+active subtool alone.
+
+A change to the skin thickness SHALL itself be undoable: a step back over it
+SHALL restore the thickness as well as the radii it wrote, and a step forward
+SHALL apply it again.
+
 #### Scenario: Moving a parent carries the chain
 - **WHEN** the user moves an armature node that has descendants
 - **THEN** the descendants move with it and the skinned surface follows
@@ -200,6 +301,30 @@ The application SHALL expose armature authoring — a tree of spheres skinned by
 #### Scenario: Armatures persist with the document
 - **WHEN** a document containing an armature is saved and reopened
 - **THEN** the armature tree is present and editable
+
+#### Scenario: Each subtool's rig is its own
+- **WHEN** two layers each carry an armature and the user poses one
+- **THEN** the other layer's rig and skin are unchanged, and activating the
+  other layer presents its rig as it was left
+
+#### Scenario: A rig taken back past its creation comes back editable
+- **WHEN** the user undoes past the creation of a rig and then redoes
+- **THEN** the rig is present on its subtool, that subtool is the active one,
+  and it accepts a new sphere, a resize and a reparent
+
+#### Scenario: Radii survive a step at a thickness other than the default
+- **WHEN** the skin thickness is 0.5 and the user undoes and redoes five times
+- **THEN** no radius in the tree has changed
+
+#### Scenario: The thickness is itself one step
+- **WHEN** the user moves the skin thickness and undoes once
+- **THEN** the thickness is what it was, the radii are what they were, and the
+  edit before the thickness change is still there to undo
+
+#### Scenario: An edit on a sphere that is not there is refused
+- **WHEN** the user resizes or reparents a sphere index the rig does not have
+- **THEN** the edit is refused with a notice, the tree is unchanged, and the
+  history offers exactly what it did before
 
 ### Requirement: The engine's combine operations and blend profiles are selectable
 The application SHALL let a sculptor choose the combine operation an SDF edit
@@ -269,9 +394,34 @@ shown before any repair is applied.
 The application SHALL apply a painted mask to any operation the engine can gate,
 including combine operations, and not only to brush strokes.
 
+The gate SHALL be set on the stroke's own template, which is correct for every
+stamp the stroke deposits because the engine measures a gate in **world space**:
+the region it protects is where the mask was painted and stays there whatever
+placement the gated item is then given. This is the opposite of the alpha rule,
+where a deformer is resolved in the item's own frame and so cannot be carried by
+a template — the two must not be reasoned about together.
+
+A gate the engine refuses SHALL leave the stamp ungated rather than failing the
+stroke. The engine refuses a gate that would protect nothing — an empty mask, or
+one no cell of which reaches the threshold — and an ungated stamp is the correct
+outcome in exactly that case.
+
+Protection SHALL fade across a stated width rather than at a step. A gate is a
+measured distance and not the painted mask, so painted softness is re-derived
+from that width; a hard edge has no finite Lipschitz bound and nothing could
+march it.
+
 #### Scenario: A mask protects against a boolean
 - **WHEN** a region is masked and a subtracting edit crosses it
 - **THEN** the masked region is not cut
+
+#### Scenario: An unmasked document is unaffected
+- **WHEN** a subtracting stroke is made on a layer carrying no mask
+- **THEN** the stroke is not refused and cuts as it always did
+
+#### Scenario: Masking still keeps a brush from depositing
+- **WHEN** a depositing stroke crosses a masked region wider than the brush
+- **THEN** the masked region is not deposited into
 
 ### Requirement: Held keys substitute the verb and the sign for one gesture
 The application SHALL let a sculptor smooth or take material away with the tool
@@ -327,9 +477,30 @@ smoothing are, and SHALL apply those amounts rather than fixed defaults.
 
 Each menu entry SHALL show the amount it would apply.
 
+The amount applied SHALL be the one the **command carries**. The menu fills it
+in from the panel before it dispatches, which is where a menu entry gets to
+spell out what it would do, and a caller at the agent door names its own. A
+ViewModel that wrote the panel's amount over whatever arrived made `steps` a
+parameter the door accepted and ignored.
+
+An amount outside what the engine accepts SHALL be brought inside it, by the
+same bounds the panel's own control uses, and SHALL be reported rather than
+applied silently.
+
 #### Scenario: An expansion reaches as far as the panel says
 - **WHEN** the amount is set to four and Expandir is chosen
 - **THEN** the frozen region grows further than it would at one
+
+#### Scenario: An expansion reaches as far as a caller asked
+- **WHEN** an expansion of four steps is asked for through the agent door while
+  the panel stands at one
+- **THEN** the region grows by four
+
+#### Scenario: An amount the engine would refuse is brought in and reported
+- **WHEN** an operation is asked for with no steps or with more than the engine
+  takes
+- **THEN** the operation is applied at the nearest amount that means something
+  and the caller is told the amount was changed
 
 #### Scenario: An extrusion is as thick as the panel says
 - **WHEN** the thickness is set and the patch is extruded outward
@@ -351,6 +522,11 @@ control points were dragged.
 The cage SHALL be offered wherever the engine has a route for it, at the
 resolution that route accepts, and refused readably where it has none.
 
+A cage belongs to the subtool it was raised around. Changing the active
+subtool while a cage stands SHALL resolve it — applied or dropped, as the
+sculptor chooses — rather than carrying it to the new subtool, whose form it
+was never sized to.
+
 #### Scenario: A cage wraps the form and bends it
 - **WHEN** a cage is put around a layer and its top control points are dragged up
 - **AND** the cage is applied
@@ -364,6 +540,12 @@ resolution that route accepts, and refused readably where it has none.
 #### Scenario: A layer with no lattice route says so
 - **WHEN** a cage is asked for on a voxel layer
 - **THEN** it is refused with a reason naming the crossing that would work
+
+#### Scenario: Switching subtools resolves a standing cage
+- **WHEN** a cage is dragged but not applied and the sculptor activates another
+  subtool
+- **THEN** the sculptor is asked to apply or drop it, and the cage does not
+  appear around the newly active subtool
 
 ### Requirement: A manipulator transforms a selection of control points
 The application SHALL let a sculptor select more than one lattice control point
@@ -439,6 +621,16 @@ down, move those points afterwards, and sweep a tube along it.
 Editing a control point SHALL replace the swept form rather than adding
 another, and abandoning the curve SHALL take its form with it.
 
+The control points the sculptor holds SHALL follow the history. A point reaches
+the engine as part of the guide as soon as there are two to sweep along, so a
+step through the history moves them: after any step the points in hand SHALL be
+the points the document holds, and a point a step took back SHALL NOT reappear
+when the next one is placed. Where a step goes past the sweep's own creation
+the curve SHALL be left in hand and empty rather than abandoned, and a step
+forward SHALL bring back the same tube rather than place a second one beside
+it. Where a step takes away the layer the curve was being drawn into, the curve
+SHALL be let go of.
+
 #### Scenario: A tube follows its control points
 - **WHEN** a control point of a placed curve is moved
 - **THEN** the tube follows it
@@ -451,6 +643,16 @@ another, and abandoning the curve SHALL take its form with it.
 #### Scenario: Abandoning a curve leaves nothing behind
 - **WHEN** a curve is taken down without being applied
 - **THEN** the form is exactly as it was
+
+#### Scenario: The points in hand follow a step through the history
+- **WHEN** the user places three control points and undoes once
+- **THEN** the curve in hand holds two points, and redoing brings the third
+  back where it was
+
+#### Scenario: An undone point does not come back on the next edit
+- **WHEN** the user undoes a control point and then places a different one
+- **THEN** the curve holds the points it had before the undone one, plus the
+  new one, and nothing else
 
 ### Requirement: A gesture in progress is previewed without erasing itself
 While a gesture is open, the model SHALL take back what its last segment did
@@ -769,20 +971,28 @@ started and appearing to hang.
 ### Requirement: A hierarchy is sculpted with the mesh vocabulary less its colour
 The application SHALL offer, on a layer holding a subdivision hierarchy, the
 fixed-topology brushes it offers on a mesh layer, together with the mask brush.
-It SHALL NOT offer the brushes that write vertex colour. Which tools reach a
-hierarchy SHALL be derived from the same declared table every other
-representation is derived from, and the count SHALL be asserted against the
-engine's own vocabulary so that a verb the engine gains is a failing count
-rather than a silence.
+It SHALL NOT offer the brushes that write vertex colour. It SHALL additionally
+offer the eraser, which is not a fixed-topology brush and reaches no mesh
+layer: a hierarchy stores detail in channels that can be taken back one at a
+time, and a mesh has one surface with nothing stored beneath it.
+
+Which tools reach a hierarchy SHALL be derived from the same declared table
+every other representation is derived from, and the count SHALL be asserted
+against the engine's own vocabulary so that a verb the engine gains is a
+failing count rather than a silence. Both differences from the mesh column —
+the two colour brushes that are absent and the one eraser that is present —
+SHALL be asserted by name, so that a third difference appearing is a failure
+rather than a shelf nobody looked at.
 
 #### Scenario: The mesh brushes reach a hierarchy
 - **WHEN** the tools offered on a hierarchy are listed
 - **THEN** they are the tools offered on a mesh layer, less the two colour
-  brushes
+  brushes and plus the eraser
 
 #### Scenario: A tool the mesh sculptor does not have is not invented here
-- **WHEN** a tool is offered on a hierarchy
-- **THEN** it is also offered on a mesh layer
+- **WHEN** a tool is offered on a hierarchy and not on a mesh layer
+- **THEN** it is the eraser, which the representation earns rather than
+  inherits, and no other
 
 #### Scenario: The mask is the same call wherever it is painted
 - **WHEN** the mask brush is used on any representation
@@ -1144,6 +1354,14 @@ amount of overlap closed them.
 An alpha carve is the exception: the stamp's own greys have nowhere but
 coverage to live, so it still dithers, with a seed that differs per dab.
 
+**A drag is the other exception, and it is a different one.** A drag's falloff
+is not a coverage control at all: the grab is an inverse map, so the weight
+decides where each cell in the ball takes its material *from*. Flattened to a
+constant it translates the whole neighbourhood rigidly, which is a block being
+shoved rather than clay being drawn. So a drag SHALL be written solid like
+every other dab and SHALL keep a falloff that falls to the rim, and the two
+SHALL NOT be conflated.
+
 #### Scenario: A stroke at the shelf's defaults
 - **WHEN** a Padrão stroke is made on a grid at the default intensity and
   falloff
@@ -1159,3 +1377,445 @@ coverage to live, so it still dithers, with a seed that differs per dab.
 - **THEN** the cells it carries are the whole footprint rather than a scattered
   subset of it
 
+#### Scenario: A drag draws a bulge rather than shoving a block
+- **WHEN** Mover drags material on a voxel layer and the surface is measured
+  over the drag's centre and near the rim of its footprint
+- **THEN** the centre rises materially further than the rim
+
+#### Scenario: A drag as long as its own brush arrives short of the ask
+- **WHEN** Mover drags material on a voxel layer by the brush's own radius
+- **THEN** the surface rises by materially less than the distance asked for,
+  because the pull tapers rather than carrying the ball rigidly
+
+### Requirement: The capability table is checked against the engine that is linked
+Every engine entry point the capability table names SHALL be a symbol the
+build's own generated bindings declare, and every offered pair of tool and
+representation SHALL reach an entry point its row names.
+
+Both are properties of the table against the *engine*, and neither can be
+asserted where the table lives: the domain links no engine and holds its verbs
+as text. The list of declared entry points SHALL therefore be published by the
+bridge, generated from the bindings rather than transcribed from the header, so
+that what is checked is the ABI this build links.
+
+What a stroke called SHALL be recorded where every fallible engine call already
+passes, so the recorded name is the name that call would carry in its own error
+and cannot fall out of step with it. The record SHALL NOT be compiled into a
+build that does not ask for it.
+
+A row MAY name more than one entry point, because more than one is reachable —
+a field drag opens a transaction where it can and falls back where it cannot —
+and the check is that the stroke reached one of them.
+
+#### Scenario: An engine release renames a verb
+- **WHEN** the engine pin moves and an entry point the table names is no longer
+  declared
+- **THEN** a test fails naming that entry point, rather than the row going on
+  describing a call nobody makes
+
+#### Scenario: A tool is rerouted to another entry point
+- **WHEN** a tool's dispatch is changed to call an entry point its row does not
+  name
+- **THEN** a test fails naming the tool, the representation, what the row claims
+  and what the stroke called
+
+#### Scenario: A row that is right about the call
+- **WHEN** every offered pair is stroked on a fixture of its representation
+- **THEN** each one reaches an entry point its own row names
+
+### Requirement: Each caveat about a representation is measured
+Every caveat the application attaches to a tool on one representation SHALL
+have a test measuring the difference it describes, and adding a caveat without
+one SHALL NOT compile.
+
+A caveat is shown to an artist as a fact about the engine's vocabulary. One
+that is not measured is a sentence the interface tells because it reads well,
+and the smoothing caveat on a hierarchy is exactly that today: it describes a
+call no stroke opens.
+
+A caveat that is not yet true SHALL be pinned by a test that fails when it
+becomes true, so that closing the gap is announced rather than silent.
+
+#### Scenario: A caveat is added without a measurement
+- **WHEN** a caveat is added to the set the application can show
+- **THEN** the test that names a measurement for each one stops compiling until
+  it is given one
+
+#### Scenario: A grid's flatten is two-sided
+- **WHEN** the flatten is stroked across material a plane passes through on a
+  grid
+- **THEN** cells that were empty below the plane are filled as well as cells
+  above it removed, where the scrape given the same plane fills none
+
+#### Scenario: A hierarchy has no colour to write
+- **WHEN** a colour brush is applied to a hierarchy layer
+- **THEN** it is refused, where the same brush on the mesh the note sends an
+  artist to is applied
+
+### Requirement: A smooth on a hierarchy is made at the frequency chosen for it
+A smooth stroke on a hierarchy SHALL be made through the engine's layered
+stroke entry point carrying a stated frequency, and SHALL NOT be made as a
+stamp carrying the smoothing brush, which is the plain Laplacian over positions
+and removes detail it passes over.
+
+The frequency SHALL be one of three: the form, the detail alone, or the form
+with the detail re-applied unchanged. It SHALL default to the form with the
+detail, which is what the tool's own caveat describes and the one of the three
+that no other representation can offer.
+
+The choice SHALL be offered on a hierarchy and on no other representation,
+since the other three store one surface and therefore have one smooth, and it
+SHALL be offered only while a smoothing tool is in hand.
+
+Where a pass is active the smooth SHALL be written to that pass; where none is,
+it SHALL be written to the form under them — the same rule every other stroke
+on a hierarchy follows.
+
+#### Scenario: A smooth that keeps the detail it passes over
+- **WHEN** a sculptor smooths a region of a hierarchy carrying detail, at the
+  form-with-detail frequency
+- **THEN** the detail is left standing at its own height
+- **AND** the form beneath it has moved
+
+#### Scenario: A smooth that takes the detail off
+- **WHEN** the same region is smoothed at the form frequency
+- **THEN** the detail is lowered, as a plain Laplacian over it lowers it
+
+#### Scenario: A representation with one smooth
+- **WHEN** the smoothing tool is in hand on a field, a grid or a mesh layer
+- **THEN** no frequency is offered
+
+#### Scenario: Another tool on a hierarchy
+- **WHEN** a tool that does not smooth is in hand on a hierarchy
+- **THEN** no frequency is offered
+
+#### Scenario: What a sculptor who has not chosen gets
+- **WHEN** a smooth is made on a hierarchy and no frequency has been chosen in
+  this session
+- **THEN** it is made at the form with the detail carried through unchanged
+
+### Requirement: Clearing a mask that freezes nothing costs nothing
+Limpar is offered whether or not anything is frozen, because pressing it should
+do the obvious nothing rather than be greyed out with a reason nobody needs.
+That nothing SHALL cost nothing: where the active subtool freezes nothing, the
+application SHALL NOT write to the mask, SHALL NOT send the frozen region to be
+drawn again, and SHALL NOT record anything to take back.
+
+It is not a refusal. The mask ends up exactly as the caller asked for it, so the
+application SHALL say there was nothing to clear as a remark.
+
+#### Scenario: Clearing an empty mask writes nothing
+- **WHEN** Limpar is chosen on a subtool that freezes nothing
+- **THEN** nothing is uploaded, nothing is added to the history, and the
+  caller is told there was nothing to clear
+
+### Requirement: Erasing on a hierarchy takes the selected pass toward zero
+The application SHALL, when the eraser is used on a subdivision hierarchy, take
+the selected pass's own detail toward zero, leaving the form beneath the passes
+and every other pass exactly as they were.
+
+It SHALL state on the tool, for a hierarchy alone, that this is what erasing
+means there — the one label in the table over two different operations, since
+on a grid the same tool clears the cells the brush covers and a hierarchy has
+no cells to clear.
+
+The erase SHALL be reported like any other stroke, so that a sculptor sees that
+something happened even where the change is subtle, and one erase gesture SHALL
+be one step in the edit history however many segments the drag arrived in.
+
+#### Scenario: The pass goes and nothing else moves
+- **WHEN** a sculptor erases over a region of a hierarchy with a pass selected
+- **THEN** that pass's deposit is lowered in the region the brush covered
+- **AND** the form beneath the passes and every other pass are unchanged
+
+#### Scenario: One drag is one undo
+- **WHEN** an erase gesture is made and then undone
+- **THEN** the pass is back exactly as it was before the gesture, in one step
+
+#### Scenario: The caveat is shown for the eraser on a hierarchy
+- **WHEN** the eraser is shown against a hierarchy
+- **THEN** its caveat says that erasing takes the selected pass toward zero
+
+#### Scenario: The same tool on a grid carries no such caveat
+- **WHEN** the eraser is shown against a voxel grid
+- **THEN** no caveat is shown
+
+### Requirement: Erasing is refused where the form is selected rather than a pass
+The application SHALL refuse the eraser on a hierarchy whose selected row is
+the form beneath the passes, and the refusal SHALL name the pass a sculptor has
+to select. It SHALL NOT redirect the gesture to the form: walking the form's own
+detail toward zero takes the whole surface back toward the pure subdivision,
+which is a different operation at a scale an eraser does not suggest.
+
+The refusal SHALL be a state of the layer rather than an absence from the
+shelf, so the eraser stays visible and carries its reason, as every other tool
+that exists for the active representation and cannot be used right now does.
+
+The rule SHALL reach the eraser on a hierarchy and no other pair, since no
+other representation has a row to select and no other verb means something
+different in one row than in the other.
+
+#### Scenario: The form is not a pass
+- **WHEN** a sculptor selects the form's row on a hierarchy and erases
+- **THEN** the stroke is refused, the refusal names a pass, and the surface
+  does not move
+
+#### Scenario: Selecting a pass is all it takes
+- **WHEN** the sculptor then selects a pass and erases again
+- **THEN** the stroke is made
+
+#### Scenario: No other tool asks about a pass
+- **WHEN** any other tool is used on any representation with no pass selected
+- **THEN** it is not refused for want of one
+
+### Requirement: A capability row carries what the call is, not only its name
+Each column of the capability table SHALL be a typed binding carrying the
+engine entry point, the intent the tool means by that call, the engine family
+the call belongs to, and the fidelity with which it keeps the promise the
+tool's label makes. No capability information SHALL be left in prose alone.
+
+An entry point is a name. Whether a row is the representation's natural verb,
+a strength the representation alone has, a useful stand-in, or several verbs
+composed is what a sculptor is actually asking when they ask what a tool does
+here — and stated as prose it can drive nothing and be held to nothing.
+
+The fidelity of a binding SHALL match what the engine has been measured to do.
+Where the engine documents one of two rows as the faithful implementation of an
+intent and the other as its approximation, the table SHALL say which is which.
+
+A binding MAY be a recipe: several engine verbs in a fixed order standing in
+for one the engine does not have. A recipe SHALL be marked as one, so that a
+composed tool is describable rather than absent.
+
+The shelf, the availability refusal, the tool notes and the diagnostics report
+SHALL all read this one table, and no other crate SHALL decide anything per
+tool and representation.
+
+#### Scenario: A field's Standard and its Inflate are ordered as measured
+- **WHEN** the rows for Padrão and Inflar on an SDF layer are read
+- **THEN** both name the relief operation, Inflar's binding is the native one
+  and Padrão's is an approximation, and Padrão is the row carrying the caveat
+
+#### Scenario: A composed tool is described rather than omitted
+- **WHEN** a tool reaches a representation through several verbs rather than one
+- **THEN** its row states them as a recipe, and the shelf, the refusal and the
+  report describe it as one
+
+#### Scenario: A second capability table is added elsewhere
+- **WHEN** a View, a ViewModel, the engine adapter or the agent-facing crate
+  decides something per tool and representation
+- **THEN** the layering check fails, naming the file
+
+### Requirement: The typed row's claims are checked
+Every claim a typed binding makes SHALL be held by a test.
+
+A tool SHALL mean one thing wherever it is offered: every binding of one tool
+SHALL declare the same intent, because the shelf presents them as one button
+with one tooltip and a column borrowed from a neighbouring verb is how that
+button comes to mean two things.
+
+A binding SHALL be filed under the family whose calls it names, where the
+engine spells that family as a prefix.
+
+A caveat SHALL NOT hang off a binding that claims to do exactly what its
+label says. The caveat and the fidelity are two halves of one fact, and a
+caveat on a faithful row is a sentence about nothing.
+
+Two tools offered on one representation SHALL NOT have bindings identical in
+every part, because then nothing distinguishes them but their labels. Where
+that is nonetheless the truth, the pair SHALL be recorded with its reason, and
+a recorded pair that has since come apart SHALL fail so the record is removed.
+
+#### Scenario: A column is borrowed from a neighbouring verb
+- **WHEN** one of a tool's bindings is changed to a call meaning something else
+- **THEN** a test fails naming the tool and the two intents it would carry
+
+#### Scenario: A caveat outlives the difference it described
+- **WHEN** a binding's fidelity is corrected to the plain reading of its label
+  while its caveat is left in place
+- **THEN** a test fails naming the tool, the representation and the binding
+
+#### Scenario: Two shelf entries collapse onto one binding
+- **WHEN** two tools offered on one representation come to name the same call
+  with the same intent, family and fidelity
+- **THEN** a test fails unless the pair is recorded as one verb under two words,
+  with the reason it still stands
+
+### Requirement: A region-sampling verb is demonstrated against a surface it can act on
+Four of the field verbs sample a region rather than stamp into it — the engine
+adapter groups them as such — and each averages toward something the
+neighbourhood already is.
+
+A test that requires such a verb to move the surface SHALL measure it against a
+surface that has something for it to do. A pristine sphere is the smoothest
+thing there is, so requiring a smoothing verb to move one is requiring it to do
+the job it exists *not* to do, and a fixture that passes on one is measuring
+something other than the verb.
+
+This SHALL NOT be met by lowering the threshold. The figure a verb has to clear
+states what a sculptor would notice; a fixture that cannot produce it is the
+part that is wrong.
+
+#### Scenario: A smoothing verb is asked to smooth
+- **WHEN** a region-sampling verb is tested for having any effect
+- **THEN** it is applied to a surface carrying a feature it can flatten, and is
+  required to flatten it by the same margin every other verb must move a
+  surface by
+
+#### Scenario: A stamping verb is unaffected
+- **WHEN** a verb that displaces along a normal is tested for the same property
+- **THEN** a resting surface is a sufficient fixture, and the threshold is
+  unchanged
+
+### Requirement: A curve's thickness is priced against the field
+The application SHALL price the region a curve's tube would fill against what
+this document's brick cache can hold, and SHALL refuse a thickness over that
+budget with a sentence naming both the figure and the limit.
+
+The price SHALL be paid before any control point's radius is written, so that a
+refused thickness leaves the guide exactly as it was — every point at the
+radius it had, and the tube unchanged.
+
+A guide that has been refused a thickness SHALL remain a guide that can be
+edited, have points removed, and be taken down.
+
+#### Scenario: A thickness the field cannot hold
+- **WHEN** a sculptor sets a curve radius whose tube would fill more of the
+  field than the cache can hold
+- **THEN** the thickness is refused, the refusal names what it would fill and
+  what the document holds, and every control point keeps its own radius
+
+#### Scenario: An ordinary thickness
+- **WHEN** a sculptor sets a curve radius the field can carry
+- **THEN** it is taken, and the points under the selection are given it
+
+#### Scenario: A refused curve is still a curve
+- **WHEN** a thickness has been refused
+- **THEN** the guide can still have points removed and can still be taken down
+
+### Requirement: Pinch on a field is a radial scale of the assembled surface
+`Pinçar` on an SDF layer SHALL reach the engine's magnify of the assembled
+surface at a **negative** strength, which gathers the region toward the dab's
+centre. It SHALL NOT be bound to a stroke operation: relief and incise move the
+surface along its own normal, and no shaping of that profile is a gather.
+
+`Pinçar` SHALL be offered on a field. It was absent because the per-item
+magnify gathers one contributor of a smooth union and leaves the rest; the
+assembled-surface entry point resolves the region against every item it
+reaches, which is what makes the tool possible there at all.
+
+The region's radius SHALL come from the brush size and its easing from the drag
+falloff, a magnify being a region deformation rather than a stamp. The
+magnitude SHALL come from Intensidade, and the region SHALL be wider than the
+brush, a gather having nothing to gather from within it otherwise.
+
+A radial scale fixes its own centre: the point the region is centred on does
+not move and the points nearest it barely do. The dab SHALL be left standing on
+the surface, where the gesture's raycast put it, because a gather about a point
+on the surface draws the material toward the stroke — which is what pinching is
+— where a gather about a point sunk into the material deflates uniformly
+instead.
+
+The invert key SHALL spread: the material leaves the stroke instead of arriving
+at it, which is the pair the grid's column already names for this tool.
+
+A stroke SHALL lay one dab per step of the brush's spacing along the path,
+rather than one per sample: the engine folds frames that share a centre, so a
+pointer resting still would otherwise pile a gesture's worth of frames at one
+place and keep only the last.
+
+Under symmetry the gesture SHALL be applied once with the layer's mirror
+pointed, rather than reflected and applied again. The engine reflects the
+region into every image the layer emits and carries the strength across each
+one untouched — a reflection of a radial scale is a radial scale of the same
+strength — where a drag's displacement has to be mapped per image.
+
+The frozen region SHALL be honoured by the stroke. The engine's descriptor
+carries no gate, so samples the mask protects SHALL be dropped from the path
+before any dab is placed.
+
+The whole gesture SHALL be one step of the history the sculptor presses,
+however many dabs it laid down.
+
+#### Scenario: Pinch gathers the surface toward the stroke
+- **WHEN** `Pinçar` is stroked across an SDF surface
+- **THEN** the surface under the stroke stands proud and the rim of the
+  region falls away, the material having moved toward the stroke
+
+#### Scenario: Inverting the gather spreads
+- **WHEN** `Pinçar` is stroked with the invert modifier held
+- **THEN** the surface rises across the whole footprint and nowhere falls
+
+#### Scenario: A magnify across a blend moves both contributors
+- **WHEN** a magnify is stroked over the join of a form made of two
+  smooth-unioned items
+- **THEN** the surface moves on both sides of the blend rather than on one
+
+#### Scenario: A gesture and its mirror are the same field
+- **WHEN** a magnify is made with a symmetry axis on
+- **THEN** the surface on the reflected side is left where the stroke's own
+  side is
+
+#### Scenario: One stroke is one undo
+- **WHEN** a stroke long enough to lay down several dabs is made and then
+  undone once
+- **THEN** the whole stroke is taken back
+
+### Requirement: A field's Standard says what its operation is faithful to
+`Padrão` and `Inflar` on an SDF layer SHALL both remain bound to the relief
+operation, differing in footprint and lift alone. Relief offsets the
+accumulated field, so every point of the isosurface moves along the field's own
+gradient; that is the **Inflate** frame, and the engine's own measurement of it
+against frame-isolated references leaves nothing for a different operation to
+improve on.
+
+Because the same operation is therefore an approximation of Standard, `Padrão`
+on a field SHALL carry a tool note stating the approximation and what decides
+how far off it is: the spread of the normals under the stamp, which is a few
+percent of the amplitude on a form smooth at the brush's scale and the whole
+amplitude on a feature narrower than the stamp. The note SHALL offer the
+remedy, which is a brush smaller than the feature.
+
+The claim the note makes SHALL be held by a measurement rather than by the
+prose, as every tool note's is.
+
+#### Scenario: A thin feature takes the mark on its flanks
+- **WHEN** one `Padrão` stamp is made on the top of a fin thinner than the
+  brush, and on a sphere several times the brush
+- **THEN** the fin grows sideways by nearly as much as its top rose, and the
+  sphere does not, which is the divergence from a displacement along one
+  averaged normal
+
+### Requirement: A drag is seen while it is made
+A gesture that **replays from its anchor** SHALL be sent to the model on every
+pointer move, on every representation.
+
+The threshold that holds a segment back exists because a *stamping* segment
+costs a re-mesh of everything it touched, and sending one per pointer move
+re-meshes the same neighbourhood repeatedly. That reasoning does not apply to a
+replayed gesture: the whole drag is laid down from its anchor each time, so the
+work is the same on the first segment and the fortieth, and waiting buys nothing
+while costing exactly what a sculptor sees.
+
+Whether a gesture replays SHALL therefore be asked **before** the representation
+is asked, and not after it.
+
+#### Scenario: A short field drag
+- **WHEN** a field drag travels less than one stamp gap and the pointer is still
+  down
+- **THEN** the drag has already reached the model, and a live transaction opened
+  for that gesture has been given segments to preview
+
+#### Scenario: A short field stamping stroke
+- **WHEN** a stamping stroke travels less than one stamp gap
+- **THEN** nothing beyond the press's own dab has been sent, because that verb
+  does not replay and every segment would cost a re-mesh
+
+<!-- "Every Move drag is its own gesture" stood here. It asked for a name on
+     every grab both Move doors write, and held its second scenario to the held
+     drag because ClayCore v0.113.0's `clay_sdf_move_begin` did not read
+     `gesture_id`. v0.116.0 carries that fix, so the rule is now part of "A drag
+     costs the field the gesture, not the segments" in the living
+     `sculpting-tools` spec, covering both doors. Keeping a second copy here
+     would leave two texts for one rule, with nothing to say which the
+     application obeys. -->

@@ -1285,12 +1285,9 @@ mod following_the_active_layer {
     /// Every substitution is counted, not only the ones whose sentence is new.
     ///
     /// This channel is read either side of a command to decide what to tell an
-    /// agent, and a swap says the same thing every time it happens. It cannot
-    /// repeat back to back today — the tool a swap lands on is the shelf's
-    /// first, which every representation carries, so the second move has
-    /// nothing to replace — but nothing about the shelf's order is a
-    /// guarantee, and a swap that went unreported would be a tool changing
-    /// under the sculptor in silence.
+    /// agent, and a swap says the same thing every time it happens. A swap
+    /// that went unreported would be a tool changing under the sculptor in
+    /// silence.
     #[test]
     fn each_substitution_is_reported_in_its_own_right() {
         let (mut vm, representation) = fixture_with_layer_changes();
@@ -1337,6 +1334,177 @@ mod following_the_active_layer {
             *vm.tool().get(),
             ToolKind::Suavizar,
             "smooth has a voxel verb, so it must survive the move"
+        );
+    }
+
+    /// Two tools, two representations: four slots, and each gives back what
+    /// was set in it.
+    ///
+    /// The grain the settings are kept at is the pair, so a size set for one
+    /// tool on a grid is neither the size that tool has on a field nor the
+    /// size another tool has on the same grid.
+    #[test]
+    fn settings_are_kept_per_tool_and_representation() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        let set = |vm: &mut SculptViewModel, on, tool, size| {
+            representation.set(on);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                .expect("select");
+            vm.dispatch(Command::SelectTool(tool)).expect("tool");
+            vm.dispatch(Command::SetBrushSize(size)).expect("size");
+        };
+        let slots = [
+            (Representation::Sdf, ToolKind::Suavizar, 0.40),
+            (Representation::Sdf, ToolKind::Padrao, 0.30),
+            (Representation::Voxel, ToolKind::Suavizar, 0.06),
+            (Representation::Voxel, ToolKind::Padrao, 0.08),
+        ];
+        for (on, tool, size) in slots {
+            set(&mut vm, on, tool, size);
+        }
+
+        // Read back in a different order from the one written, so a slot that
+        // only echoes the last write fails.
+        for (on, tool, size) in slots.into_iter().rev() {
+            representation.set(on);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                .expect("select");
+            vm.dispatch(Command::SelectTool(tool)).expect("tool");
+            assert_eq!(
+                vm.brush().get().size,
+                size,
+                "{} on {} came back at a size set somewhere else",
+                tool.label(),
+                on.label()
+            );
+        }
+    }
+
+    /// A slot nothing has been set in starts at its representation's own
+    /// default, whatever was set on the layer before.
+    ///
+    /// The session this came from set a field's brush to 100 and added a
+    /// grid; the first dab on the grid was a metre across. Measured on the
+    /// stroke the model was handed, which is what reached the grid.
+    #[test]
+    fn no_representation_inherits_a_brush_size_from_another() {
+        let (mut vm, representation, _symmetry, recorded) = fixture_with_a_moving_layer();
+        vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+            .expect("smooth is on both");
+        vm.dispatch(Command::SetBrushSize(100.0))
+            .expect("a field-sized brush");
+
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::AddLayer(Representation::Voxel))
+            .expect("add");
+        draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
+
+        let expected = clayspace_model::BrushSettings::default_for(Representation::Voxel);
+        assert_eq!(vm.brush().get().size, expected.size);
+        assert_eq!(
+            recorded.borrow().strokes[0].3.size,
+            expected.size,
+            "the first dab on the grid was made at the field's size"
+        );
+    }
+
+    /// The substitute is the capability table's, and the same switch always
+    /// gives the same one.
+    ///
+    /// Raspar has no verb on a field, and the field's flatten is Planar — the
+    /// same act — rather than whatever the shelf happens to list first.
+    #[test]
+    fn an_unsupported_tool_falls_back_deterministically() {
+        for _ in 0..3 {
+            let (mut vm, representation) = fixture_with_layer_changes();
+            representation.set(Representation::Voxel);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                .expect("select");
+            vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+                .expect("scrape is a voxel tool");
+
+            representation.set(Representation::Sdf);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(2)))
+                .expect("select");
+
+            assert_eq!(*vm.tool().get(), ToolKind::Planar);
+            assert_eq!(
+                vm.tool().get().intent(),
+                ToolKind::Raspar.intent(),
+                "the stand-in does a different act from the tool it replaced"
+            );
+        }
+    }
+
+    /// The swap is said where the sculptor looks, and kept where an agent
+    /// reads: which tool was chosen, which is in hand, and on what.
+    #[test]
+    fn a_substitution_is_reported() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+        vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+            .expect("scrape is a voxel tool");
+        assert_eq!(vm.substitution(), None, "a chosen tool is not a stand-in");
+
+        representation.set(Representation::Sdf);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(2)))
+            .expect("select");
+
+        assert_eq!(
+            vm.tool_status().get().as_deref(),
+            Some(clayspace_vm::TOOL_SUBSTITUTED)
+        );
+        let substitution = vm
+            .substitution()
+            .expect("the swap is held, not only announced");
+        assert_eq!(substitution.chosen, ToolKind::Raspar);
+        assert_eq!(substitution.standing_in, ToolKind::Planar);
+        assert_eq!(substitution.representation, Representation::Sdf);
+        assert!(
+            substitution.describe().contains("'scrape'"),
+            "an agent is told the tool by the key it chose it with: {}",
+            substitution.describe()
+        );
+
+        // Choosing a tool answers the swap.
+        vm.dispatch(Command::SelectTool(ToolKind::Planar))
+            .expect("planar is on a field");
+        assert_eq!(vm.substitution(), None);
+    }
+
+    /// Switching away and back returns the tool that was chosen, not the one
+    /// the switch away handed over.
+    #[test]
+    fn the_chosen_tool_returns_with_a_layer_that_carries_it() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+        vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+            .expect("scrape is a voxel tool");
+        vm.dispatch(Command::SetBrushSize(0.07)).expect("size");
+
+        representation.set(Representation::Sdf);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(2)))
+            .expect("select");
+        assert_eq!(*vm.tool().get(), ToolKind::Planar);
+
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+        assert_eq!(*vm.tool().get(), ToolKind::Raspar);
+        assert_eq!(
+            vm.brush().get().size,
+            0.07,
+            "and with the size it had there"
+        );
+        assert_eq!(vm.substitution(), None);
+        assert_ne!(
+            vm.tool_status().get().as_deref(),
+            Some(clayspace_vm::TOOL_SUBSTITUTED),
+            "a return to the chosen tool is not a second swap"
         );
     }
 
