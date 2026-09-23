@@ -234,9 +234,46 @@ says which of those it is. That is a different sentence and worth the space.
 
 Changing the active layer keeps the active tool where the new representation
 has it and substitutes one where it does not, saying so in the status line
-rather than resetting silently. Brush settings are held per tool *and* per
-representation: a size that suits a grid's cells is not the size that suits a
-field, so returning to a tool on a layer returns the settings it had there.
+rather than resetting silently. The substitute is read off the same table, not
+out of a list kept beside it:
+
+1. a tool meaning the **same act** there — the same semantic intent in its
+   binding — that is the representation's own verb for it;
+2. failing that, a tool meaning the same act at any fidelity;
+3. failing both, Padrão, which every representation carries first.
+
+A tool driven by a different gesture is never a substitute — Trim is a shape
+drawn on the frame and Apagar a stroke, so neither stands in for the other
+although both remove material — and nor is one that refuses the layer until a
+pass is selected. The rule depends on the tool and the representation alone,
+so the same switch always lands on the same tool:
+
+| Chosen | Switched to | Stands in |
+|---|---|---|
+| Raspar | field | Planar |
+| Mover Topológico | grid, mesh, hierarchy | Mover |
+| Puxar | grid | Mover |
+| Nudge | field | Mover |
+| Relaxar | grid | Suavizar |
+| Polir | grid | Raspar |
+| Borrar | grid | Pintar |
+| Argila | grid | Padrão |
+| Trim, Apagar, Preencher, Vinco, Pintar, Borrar | a layer with no tool for that act | Padrão |
+
+A stand-in stays a stand-in: switching back to a layer that carries the tool
+you chose gives it back, rather than keeping the one you were handed. Choosing
+any tool from the shelf ends that. Over the agent door the switching command's
+answer names both tools by their keys, and `state.tool.stands_in_for` carries
+the chosen tool's key for as long as a stand-in is in hand.
+
+Brush settings are held per tool *and* per representation: a size that suits a
+grid's cells is not the size that suits a field, so returning to a tool on a
+layer returns the settings it had there. A tool never used on a representation
+starts at that representation's documented default
+(`BrushSettings::default_for`) — never at a value set on another. The four
+defaults are one radius today, 0.18: clear of the 0.10 a field can show, nine
+cells on the default 0.02 grid and a third of the way to its 63-cell ceiling,
+and the field's reach carried to a mesh and a hierarchy so a crossing keeps it.
 
 **The switch takes effect immediately, not on the command after it.** Choosing
 a subtool is one command, and when it returns the shelf, the brush, the mirror
@@ -275,8 +312,8 @@ looks the same at every angle by construction, so the dial reads as inert until
 a stamp is loaded. A whole turn comes back to none rather than stopping at the
 end of its travel, because an angle has no ends.
 
-Settings are held **per tool**: switching away and back returns what you left,
-not a default. Values are clamped to what the engine accepts rather than
+Settings are held **per tool and per representation**: switching away and
+back returns what you left there, not a default. Values are clamped to what the engine accepts rather than
 producing an error you cannot act on.
 
 **On a grid, Intensidade is the bite rather than the density.** A cell holds
@@ -1535,6 +1572,19 @@ then publishes, so there is nothing half-built to clear up — and the reason
 arrives beside the viewport, on the same line that says why a tool cannot be
 used.
 
+The peak is priced **on top of what the document already holds** — every
+layer, every surface beside it and the levels the hierarchy already has — and
+the refusal names all three figures: what is held, what the level adds and the
+budget. The engine's preflight prices the new level alone, and priced alone a
+fifth level fitted an empty machine and was admitted on a full one, leaving a
+document at 765 MB.
+
+The face count is the cage's own, multiplied as Catmull-Clark multiplies it.
+A cage taken from a mesh layer is the layer's **triangulation**, and a
+triangle's first step makes three quads rather than four — so a retopology of
+1,240 quads, which the layer holds as 2,480 triangles, quotes 7,440 faces at
+level one, and every level after that is four times the one below.
+
 **A gesture is one undo, and it is exact.** It has to be recorded on this side,
 and unlike a mesh gesture there is no delta to record: `clay.h` states twice,
 unprompted, that the hierarchy's stroke record does not cross the C ABI. So
@@ -1581,7 +1631,9 @@ full contribution and the surface moves half as far, so raising the slider
 afterwards doubles what is on screen. And a **merge** or a **bake into the
 form** is defined by visual parity — the surface after equals the surface
 before, at any strength including zero — so what they cost is the slider, not
-the shape.
+the shape. The **bottom** pass has no pass beneath it — the form is not one —
+so a merge down of it is refused, with a sentence pointing at *Fundir na forma*,
+which is the fold it can make.
 
 **The stack is drawn under the layer it stands on**, in the same shape a grid's
 passes take — a row per pass with an eye, a name and a strength — with the
@@ -2549,6 +2601,14 @@ nothing stops a sculptor stroking the source while it runs;
 the work started and refuses if it has moved, leaving the layer byte-identical.
 A stroke landing mid-retopology therefore costs the retopology rather than the
 stroke.
+
+**It is lit by its own shape.** The result crosses back as positions and a
+triangulation and nothing else — `clay_mesh_from_triangles` takes no normals —
+and a hierarchy exports a level's normals only where its cage carried its own,
+so a retopology and every level of a hierarchy built over it arrive without
+any. The viewport derives them from the triangles, area-weighted, where the
+engine hands back none. It used to stand one constant normal in for all of
+them, which drew both as a flat silhouette.
 
 **Two operations that look alike and are not.** *Refazer a malha* resamples a
 surface through a voxel grid and hands back triangles at an even density;

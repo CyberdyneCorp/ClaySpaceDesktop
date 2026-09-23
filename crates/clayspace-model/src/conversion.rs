@@ -279,8 +279,14 @@ pub enum Refusal {
     ///
     /// The figure is the **peak** rather than what remains, because on a
     /// constrained device it is the high-water mark during the build that ends
-    /// the session, not the steady state after it.
-    LevelOverBudget { peak_bytes: u64, budget_bytes: u64 },
+    /// the session, not the steady state after it — and it is priced on top of
+    /// `held_bytes`, what the document already holds, because a level that
+    /// fits an empty machine is not the question being asked.
+    LevelOverBudget {
+        held_bytes: u64,
+        peak_bytes: u64,
+        budget_bytes: u64,
+    },
     /// The hierarchy is already as deep as this build will take it.
     DepthLimit { levels: u32 },
 }
@@ -318,12 +324,15 @@ impl std::fmt::Display for Refusal {
                 ),
             },
             Self::LevelOverBudget {
+                held_bytes,
                 peak_bytes,
                 budget_bytes,
             } => write!(
                 f,
-                "that level peaks at {} MB, past the {} MB budget",
+                "that level peaks at {} MB on top of the {} MB the document \
+                 already holds, past the {} MB budget",
                 peak_bytes / (1024 * 1024),
+                held_bytes / (1024 * 1024),
                 budget_bytes / (1024 * 1024)
             ),
             Self::DepthLimit { levels } => write!(
@@ -537,14 +546,17 @@ mod tests {
     }
 
     /// A level past the budget is refused in the currency the engine refuses in
-    /// — the peak, which is what ends a session — and says both numbers.
+    /// — the peak, which is what ends a session — and says all three numbers:
+    /// what the document holds, what the level adds and the budget.
     #[test]
     fn a_level_past_the_budget_names_the_peak_and_the_budget() {
         let error = Refusal::LevelOverBudget {
+            held_bytes: 300 * 1024 * 1024,
             peak_bytes: 900 * 1024 * 1024,
             budget_bytes: 512 * 1024 * 1024,
         }
         .to_string();
+        assert!(error.contains("300 MB"), "{error}");
         assert!(error.contains("900 MB"), "{error}");
         assert!(error.contains("512 MB"), "{error}");
     }

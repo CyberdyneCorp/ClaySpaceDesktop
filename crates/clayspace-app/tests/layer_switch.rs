@@ -28,10 +28,139 @@
 //!   rename would confuse it, and it is still worth more than a test that
 //!   cannot fail.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use clayspace_app::SharedDocument;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{Representation, SceneModel, SculptModel, StrokeModifiers, ToolKind};
+use clayspace_model::{
+    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, Representation,
+    SceneModel, SceneStats, SculptModel, StrokeModifiers, ToolKind,
+};
 use clayspace_vm::{Command, MaskViewModel, SceneViewModel, SculptViewModel};
+
+// -- what a stroke was made with ----------------------------------------------
+
+/// Every stroke the document was handed: the layer it landed on and the radius
+/// it was made at.
+type Stamps = Rc<RefCell<Vec<(Representation, f32)>>>;
+
+/// The shared document, with a note taken of each stroke on its way through.
+///
+/// What the options bar *shows* is one number and what a stroke is *made
+/// with* is another, and the defect was the two disagreeing — so the radius is
+/// read at the last point before the engine rather than off the ViewModel.
+/// Every other call passes straight through, so the document behaves exactly
+/// as the composition root's does.
+struct Recording {
+    document: SharedDocument,
+    stamps: Stamps,
+}
+
+impl SculptModel for Recording {
+    fn active_representation(&self) -> Representation {
+        self.document.active_representation()
+    }
+    fn active_layer_editable(&self) -> bool {
+        self.document.active_layer_editable()
+    }
+    fn active_layer_carries_geometry(&self) -> bool {
+        self.document.active_layer_carries_geometry()
+    }
+    fn active_layer_visible(&self) -> bool {
+        self.document.active_layer_visible()
+    }
+    fn active_layer_is_caged(&self) -> bool {
+        self.document.active_layer_is_caged()
+    }
+    fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
+        self.document.active_layer_stroke_lands_in_a_pass()
+    }
+    fn apply_operation(
+        &mut self,
+        operation: clayspace_model::LayerOperation,
+    ) -> Result<EditOutcome, ModelError> {
+        self.document.apply_operation(operation)
+    }
+    fn apply_stroke(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        self.stamps
+            .borrow_mut()
+            .push((self.document.active_representation(), brush.size));
+        self.document.apply_stroke(tool, brush, samples, symmetry)
+    }
+    fn symmetry(&self) -> [bool; 3] {
+        SculptModel::symmetry(&self.document)
+    }
+    fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        self.document.set_symmetry(symmetry)
+    }
+    fn set_combine(&mut self, combine: clayspace_model::CombineSettings) {
+        self.document.set_combine(combine);
+    }
+    fn combine(&self) -> clayspace_model::CombineSettings {
+        self.document.combine()
+    }
+    fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
+        self.document.smooth_mode()
+    }
+    fn set_smooth_mode(&mut self, mode: clayspace_model::SmoothFrequency) {
+        self.document.set_smooth_mode(mode);
+    }
+    fn set_colour(&mut self, colour: clayspace_model::Colour) {
+        self.document.set_colour(colour);
+    }
+    fn choose_recent_colour(&mut self, index: usize) -> bool {
+        self.document.choose_recent_colour(index)
+    }
+    fn colour_state(&self) -> clayspace_model::ColourState {
+        self.document.colour_state()
+    }
+    fn set_alpha(&mut self, alpha: Option<clayspace_model::Alpha>) {
+        self.document.set_alpha(alpha);
+    }
+    fn alpha_name(&self) -> Option<String> {
+        self.document.alpha_name()
+    }
+    fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
+        SculptModel::pick(&self.document, origin, direction)
+    }
+    fn undo(&mut self) -> Result<bool, ModelError> {
+        SculptModel::undo(&mut self.document)
+    }
+    fn redo(&mut self) -> Result<bool, ModelError> {
+        SculptModel::redo(&mut self.document)
+    }
+    fn history(&self) -> HistoryState {
+        SculptModel::history(&self.document)
+    }
+    fn stats(&self) -> SceneStats {
+        self.document.stats()
+    }
+    fn begin_gesture(&mut self) {
+        self.document.begin_gesture();
+    }
+    fn end_gesture(&mut self) {
+        self.document.end_gesture();
+    }
+    fn open_live_gesture(&mut self, tool: ToolKind, symmetry: [bool; 3]) -> bool {
+        self.document.open_live_gesture(tool, symmetry)
+    }
+    fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
+        self.document.close_live_gesture()
+    }
+    fn discard_live_gesture(&mut self) -> usize {
+        self.document.discard_live_gesture()
+    }
+    fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+        SculptModel::bounds(&self.document)
+    }
+}
 
 // -- the followers, against a real document ----------------------------------
 
@@ -42,6 +171,7 @@ use clayspace_vm::{Command, MaskViewModel, SceneViewModel, SculptViewModel};
 /// observable at all.
 struct Switching {
     document: SharedDocument,
+    stamps: Stamps,
     sculpt: SculptViewModel,
     scene: SceneViewModel,
     mask: MaskViewModel,
@@ -55,8 +185,13 @@ impl Switching {
                 .and_then(ClayDocument::with_starting_form)
                 .ok()?,
         );
+        let stamps = Stamps::default();
         Some(Self {
-            sculpt: SculptViewModel::new(Box::new(document.clone())),
+            sculpt: SculptViewModel::new(Box::new(Recording {
+                document: document.clone(),
+                stamps: stamps.clone(),
+            })),
+            stamps,
             scene: SceneViewModel::new(Box::new(document.clone())),
             mask: MaskViewModel::new(Box::new(document.clone())),
             document,
@@ -88,6 +223,11 @@ impl Switching {
             .document
             .with(|d| SculptModel::pick(d, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]))
             .expect("the starting form is under the ray");
+        self.dab_at(tool, at);
+    }
+
+    /// One dab at a point, for a layer with nothing on it yet to pick.
+    fn dab_at(&mut self, tool: ToolKind, at: [f32; 3]) {
         self.sculpt
             .dispatch(Command::SelectTool(tool))
             .expect("the tool");
@@ -149,6 +289,66 @@ fn the_first_stroke_after_a_switch_uses_the_new_layers_brush() {
         app.sculpt.brush().get().size,
         0.4,
         "the field layer's brush did not come back; it is showing {on_the_grid}"
+    );
+}
+
+/// The radius a stroke is *made at* follows the layer it lands on.
+///
+/// The test above reads the options bar; this reads the call the engine was
+/// handed, across a field and a grid set to different sizes, there and back
+/// twice. A grid dab made at the field's size is the metre-wide dab of the
+/// report, and it is the stroke — not the bar — that makes it.
+#[test]
+fn the_stamp_radius_used_is_the_target_layers_setting() {
+    let Some(mut app) = Switching::new() else {
+        eprintln!("no backend on this machine; skipping");
+        return;
+    };
+    let field = app.keys()[0];
+    app.sculpt
+        .dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("Padrão is on both");
+    app.sculpt
+        .dispatch(Command::SetBrushSize(0.4))
+        .expect("a field-sized brush");
+
+    app.apply(Command::AddLayer(Representation::Voxel));
+    let grid = *app.keys().last().expect("the grid layer");
+    assert_eq!(
+        app.sculpt.brush().get().size,
+        BrushSettings::default_for(Representation::Voxel).size,
+        "a grid nothing has been set on starts at the grid's own default"
+    );
+    app.sculpt
+        .dispatch(Command::SetBrushSize(0.1))
+        .expect("a grid-sized brush");
+
+    let at = [0.0, 0.0, 1.0];
+    for _ in 0..2 {
+        app.dab_at(ToolKind::Padrao, at);
+        app.apply(Command::SelectLayer(field));
+        app.dab_at(ToolKind::Padrao, at);
+        app.apply(Command::SelectLayer(grid));
+    }
+
+    let stamps = app.stamps.borrow();
+    assert!(!stamps.is_empty(), "no stroke reached the document");
+    for (on, radius) in stamps.iter() {
+        let expected = match on {
+            Representation::Voxel => 0.1,
+            _ => 0.4,
+        };
+        assert_eq!(
+            *radius,
+            expected,
+            "a stroke on a {} layer was made at {radius}, the other layer's size",
+            on.label()
+        );
+    }
+    let layers: Vec<_> = stamps.iter().map(|(on, _)| *on).collect();
+    assert!(
+        layers.contains(&Representation::Voxel) && layers.contains(&Representation::Sdf),
+        "the strokes did not land on both layers, so this measured one: {layers:?}"
     );
 }
 

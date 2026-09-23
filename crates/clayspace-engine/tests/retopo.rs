@@ -353,3 +353,79 @@ fn a_retopologised_subtool_and_a_triangle_one_keep_their_own_wireframes() {
         "the authored faces are on the subtool that was not retopologised"
     );
 }
+
+/// The mean angle, in degrees, between each drawn vertex normal and the
+/// triangles it is drawn with.
+///
+/// What lighting reads. A surface drawn with one normal everywhere — what a
+/// retopology was drawn with, having come back with none — scores near ninety
+/// on a closed form, and one lit by its own shape scores in single digits.
+fn shading_error(positions: &[[f32; 3]], normals: &[[f32; 3]], indices: &[u32]) -> f32 {
+    let (mut total, mut samples) = (0.0f32, 0u32);
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(|i| positions[i as usize]);
+        let (u, v) = (
+            [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+            [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+        );
+        let face = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let length = (face[0] * face[0] + face[1] * face[1] + face[2] * face[2]).sqrt();
+        if length < 1e-12 {
+            continue;
+        }
+        for &corner in triangle {
+            let n = normals[corner as usize];
+            let cos = (n[0] * face[0] + n[1] * face[1] + n[2] * face[2]) / length;
+            total += cos.clamp(-1.0, 1.0).acos().to_degrees();
+            samples += 1;
+        }
+    }
+    total / samples.max(1) as f32
+}
+
+/// A retopology is drawn lit, and so is a hierarchy built over it.
+///
+/// Both came back flat: `clay_mesh_from_triangles` takes no normals, so the
+/// layer a retopology lands in holds none, and a hierarchy exports a level's
+/// normals only where its cage had them — the one absence, inherited at every
+/// level. The viewport's stand-in was a single `+y` for every vertex, which
+/// lights the whole form as one colour. Measured here as what the lighting
+/// reads: how far the drawn normals sit from the triangles they light.
+#[test]
+fn a_retopology_and_a_hierarchy_built_from_it_are_lit() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document
+        .retopologise(RetopoSettings {
+            target_quads: 600,
+            ..RetopoSettings::default()
+        })
+        .expect("the retopology runs");
+    let (positions, normals, _, indices, _) = document.visible_mesh_geometry();
+    let retopology = shading_error(&positions, &normals, &indices);
+    assert!(
+        retopology < 20.0,
+        "the retopology's drawn normals sit {retopology:.1} degrees off its \
+         triangles on average, which is a surface lit as one colour"
+    );
+
+    let settings = clayspace_model::ConversionSettings::default();
+    document
+        .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
+        .expect("a quad retopology of a closed form is a cage");
+    document
+        .apply_multires_level_op(clayspace_model::MultiresLevelOp::AddLevel)
+        .expect("one level over it");
+    let (positions, normals, _, indices, _) = document.visible_mesh_geometry();
+    let hierarchy = shading_error(&positions, &normals, &indices);
+    assert!(
+        hierarchy < 20.0,
+        "the hierarchy over the retopology draws its level {hierarchy:.1} \
+         degrees off its triangles on average — unlit, like the cage it came from"
+    );
+}
