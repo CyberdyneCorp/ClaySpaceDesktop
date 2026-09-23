@@ -1185,12 +1185,13 @@ impl App {
         let written = |channel: usize| now[channel] != before[channel];
         let refusals = self.refusal_channels();
         let remarks = self.remark_channels();
+        let substitution = self.sculpt.substitution().map(|s| s.describe());
         notices_written(
             std::array::from_fn(|channel| (written(channel), refusals[channel].get().as_deref())),
             std::array::from_fn(|remark| {
                 (
                     written(NOTICE_REFUSAL_CHANNELS + remark),
-                    remarks[remark].get().as_deref(),
+                    remark_for_an_agent(remarks[remark].get().as_deref(), substitution.as_deref()),
                 )
             }),
         )
@@ -6270,6 +6271,24 @@ fn notices_written(
     (refusal, notices)
 }
 
+/// A remark as an agent is told it.
+///
+/// The swap marker is for the shell, which localises it into "tool changed:
+/// this layer has no verb for that one" — true, and all an artist looking at
+/// the shelf needs, since the shelf shows which tool is in hand. An agent sees
+/// no shelf. Handed the bare marker it learned that *something* was swapped
+/// and not what for what, so the sentence it gets names both tools by the keys
+/// it chooses them with.
+fn remark_for_an_agent<'a>(
+    said: Option<&'a str>,
+    substitution: Option<&'a str>,
+) -> Option<&'a str> {
+    match said {
+        Some(clayspace_vm::TOOL_SUBSTITUTED) => substitution.or(said),
+        other => other,
+    }
+}
+
 fn next_matcap(current: MatCap) -> MatCap {
     let all = MatCap::ALL;
     let index = all.iter().position(|m| *m == current).unwrap_or(0);
@@ -6442,6 +6461,7 @@ impl App {
                 // switch reported where it decides nothing is a switch an
                 // agent will act on.
                 self.rigging.then(|| *self.armature.symmetric().get()),
+                self.sculpt.substitution(),
             ));
         }
         if query.brush {
@@ -7262,9 +7282,9 @@ mod double_press {
 #[cfg(test)]
 mod tests {
     use super::{
-        gizmo_geometry_update, notices_written, refusal_for, stroke_needs_a_gesture, tool_status,
-        AgentGesture, GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS,
-        NOTICE_REMARK_CHANNELS,
+        gizmo_geometry_update, notices_written, refusal_for, remark_for_an_agent,
+        stroke_needs_a_gesture, tool_status, AgentGesture, GizmoGeometryUpdate, ToolStatusSources,
+        NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_mcp::RefusalCode;
     use clayspace_model::{ModelError, Representation, Unavailable};
@@ -7632,6 +7652,33 @@ mod tests {
         );
         assert_eq!(refused, None);
         assert_eq!(notices, vec!["Padrão no lugar de Raspar".to_string()]);
+    }
+
+    /// The swap reaches an agent as which tool stood in for which, not as the
+    /// shell's marker; every other remark passes through as written.
+    #[test]
+    fn a_substitution_is_named_to_an_agent() {
+        let described = clayspace_model::Substitution {
+            chosen: clayspace_model::ToolKind::Raspar,
+            standing_in: clayspace_model::ToolKind::Planar,
+            representation: clayspace_model::Representation::Sdf,
+        }
+        .describe();
+        assert_eq!(
+            remark_for_an_agent(Some(clayspace_vm::TOOL_SUBSTITUTED), Some(&described)),
+            Some(described.as_str())
+        );
+        assert_eq!(
+            remark_for_an_agent(Some("a máscara não congelou nada"), Some(&described)),
+            Some("a máscara não congelou nada"),
+            "only the swap marker is rewritten"
+        );
+        // A marker with nothing held behind it is still said, rather than
+        // dropped: a swap nobody names is better than one nobody reports.
+        assert_eq!(
+            remark_for_an_agent(Some(clayspace_vm::TOOL_SUBSTITUTED), None),
+            Some(clayspace_vm::TOOL_SUBSTITUTED)
+        );
     }
 
     /// Every remark written by one command is its own sentence.

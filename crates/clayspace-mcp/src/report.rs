@@ -190,6 +190,7 @@ pub fn tool_state(
     representation: Representation,
     smooth_mode: clayspace_model::SmoothFrequency,
     rig_mirror: Option<bool>,
+    substitution: Option<clayspace_model::Substitution>,
 ) -> ToolState {
     ToolState {
         tool: tool.key().to_string(),
@@ -215,6 +216,9 @@ pub fn tool_state(
         // reporting the first alone told an agent symmetry was off on a rig
         // that was mirroring every sphere it added.
         rig_mirror,
+        // By key, as `tool` is, so the answer is a name the caller can hand
+        // straight back to `tool` to choose it again.
+        stands_in_for: substitution.map(|substitution| substitution.chosen.key().to_string()),
     }
 }
 
@@ -887,6 +891,7 @@ mod tests {
             Representation::Sdf,
             clayspace_model::SmoothFrequency::default(),
             None,
+            None,
         );
         assert_eq!(state.tool, "clay");
         assert_eq!(state.falloff, "gaussian");
@@ -901,6 +906,38 @@ mod tests {
 
     /// And on the one representation that has three of them, the mode is
     /// there, in the word the action takes back.
+    /// A tool a layer switch handed over says which tool it stands in for,
+    /// and a chosen one says nothing.
+    #[test]
+    fn a_substituted_tool_names_the_tool_it_stands_in_for() {
+        let given = tool_state(
+            ToolKind::Planar,
+            &BrushSettings::default(),
+            [false; 3],
+            Representation::Sdf,
+            clayspace_model::SmoothFrequency::default(),
+            None,
+            Some(clayspace_model::Substitution {
+                chosen: ToolKind::Raspar,
+                standing_in: ToolKind::Planar,
+                representation: Representation::Sdf,
+            }),
+        );
+        assert_eq!(given.tool, ToolKind::Planar.key());
+        assert_eq!(given.stands_in_for.as_deref(), Some(ToolKind::Raspar.key()));
+
+        let chosen = tool_state(
+            ToolKind::Planar,
+            &BrushSettings::default(),
+            [false; 3],
+            Representation::Sdf,
+            clayspace_model::SmoothFrequency::default(),
+            None,
+            None,
+        );
+        assert_eq!(chosen.stands_in_for, None);
+    }
+
     #[test]
     fn a_hierarchy_reports_which_frequency_a_smooth_would_act_on() {
         let state = tool_state(
@@ -909,6 +946,7 @@ mod tests {
             [false; 3],
             Representation::Multires,
             clayspace_model::SmoothFrequency::DetailOnly,
+            None,
             None,
         );
         assert_eq!(state.smooth_mode.as_deref(), Some("detail_only"));
@@ -1223,6 +1261,7 @@ mod tests {
             Representation::Sdf,
             clayspace_model::SmoothFrequency::default(),
             Some(true),
+            None,
         );
         assert!(rigging.symmetry.is_empty(), "the brush's own mirror is off");
         assert_eq!(
@@ -1237,6 +1276,7 @@ mod tests {
             [false; 3],
             Representation::Sdf,
             clayspace_model::SmoothFrequency::default(),
+            None,
             None,
         );
         assert_eq!(sculpting.rig_mirror, None);

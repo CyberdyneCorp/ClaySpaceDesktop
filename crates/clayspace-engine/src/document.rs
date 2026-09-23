@@ -10385,6 +10385,16 @@ impl SceneModel for ClayDocument {
         if let Some(refusal) = self.layers[index].protection.refusal() {
             return Err(ModelError::engine(refusal));
         }
+        // What the document holds before the level is built, every layer and
+        // every surface beside it — the figure a level is priced on top of.
+        // Asked only for the one operation that allocates, and asked before
+        // the hierarchy is borrowed, because the ledger walks every layer. A
+        // ledger the engine will not answer prices the level alone, which is
+        // what this did before it asked.
+        let held = match op {
+            Op::AddLevel => self.memory().map_or(0, |report| report.total),
+            _ => 0,
+        };
         let hierarchy = self.layers[index]
             .multires
             .as_mut()
@@ -10393,7 +10403,7 @@ impl SceneModel for ClayDocument {
             Op::SetSculptLevel(level) => hierarchy.set_sculpt_level(level)?,
             Op::SetDisplayLevel(level) => hierarchy.set_display_level(level)?,
             Op::AddLevel => {
-                let level = hierarchy.add_level()?;
+                let level = hierarchy.add_level(held, crate::multires::LEVEL_BUDGET)?;
                 // What an artist means by subdividing is to work finer, so
                 // both numbers move to the level that arrived — which is also
                 // what the engine does, so a host that left the display where

@@ -199,6 +199,7 @@ impl Session for FakeSession {
                 smooth_mode: (self.representation == "hierarchy")
                     .then(|| "form_with_detail".to_string()),
                 rig_mirror: None,
+                stands_in_for: None,
             });
         }
         if query.camera {

@@ -243,10 +243,11 @@ impl Hierarchy {
             self.drawn = Some(Drawn {
                 level,
                 watched,
-                normals: mesh
-                    .normals()
-                    .map(<[[f32; 3]]>::to_vec)
-                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; count]),
+                // The engine exports a level's normals only where the cage
+                // carried its own, and a cage that came from a retopology
+                // carries none — so derived here, or every level of that
+                // hierarchy is drawn with one normal and reads as unlit.
+                normals: mesh.normals_or_derived(),
                 colors: mesh
                     .colors()
                     .map(<[[f32; 3]]>::to_vec)
@@ -306,7 +307,8 @@ impl Hierarchy {
         })
     }
 
-    /// One more level, priced before it is attempted.
+    /// One more level, priced before it is attempted against `budget_bytes`,
+    /// on top of the `held_bytes` the document already holds.
     ///
     /// The price is taken from the engine and the refusal is stated in the
     /// domain's own vocabulary, so what a sculptor reads is what is wrong
@@ -314,9 +316,15 @@ impl Hierarchy {
     /// is not belt and braces: `add_level` reports one refusal for every
     /// reason it has, and the two a sculptor can act on — the budget and the
     /// ceiling — are different sentences.
-    pub fn add_level(&mut self) -> Result<u32, ModelError> {
+    ///
+    /// `held_bytes` is the caller's because only the document can answer it:
+    /// a hierarchy knows its own levels and nothing about the layers beside
+    /// it, and the engine's preflight prices the new level alone. Priced
+    /// alone, a level fitted an empty machine and was admitted on a full one.
+    pub fn add_level(&mut self, held_bytes: u64, budget_bytes: u64) -> Result<u32, ModelError> {
         if let Some(cost) = self.subdivision_cost() {
-            cost.within(LEVEL_BUDGET).map_err(ModelError::Conversion)?;
+            cost.within(held_bytes, budget_bytes)
+                .map_err(ModelError::Conversion)?;
         }
         if self.levels().count > MultiresLevels::DEEPEST {
             return Err(ModelError::Conversion(Refusal::DepthLimit {
@@ -555,6 +563,18 @@ impl Hierarchy {
 
         let engine = |id: MultiresSculptLayerId| claycore::SculptLayerId::from_raw(id.raw());
         let refused = |refusal: claycore::MultiresRefusal| ModelError::engine(refusal.to_string());
+        // Stated here rather than left to the engine, which refuses too — but
+        // with its own result code, and that code was the one pass refusal a
+        // sculptor read raw. The sentence says what the bottom pass *can* do,
+        // because the operation they wanted exists under another name.
+        if let Op::MergeDown { id } = op {
+            if self.state().nothing_beneath(*id) {
+                return Err(ModelError::engine(
+                    "o passe mais baixo não tem outro passe por baixo onde se \
+                     fundir; «Fundir na forma» é o que o leva para a forma",
+                ));
+            }
+        }
         match op {
             Op::Add { name } => {
                 let name = name.trim();
@@ -816,5 +836,183 @@ pub fn read_hierarchies(path: &std::path::Path) -> SideCar {
     SideCar {
         records: saved,
         faults,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A grid of `divisions`² quads rising `slope` in y per unit of x, as the
+    /// triangles a mesh layer holds it in — two to a quad, which is what a
+    /// cage built from a layer is. No normals, because
+    /// `clay_mesh_from_triangles` takes none: exactly what a retopology
+    /// leaves in a layer.
+    fn triangle_cage(divisions: u32, slope: f32) -> claycore::Mesh {
+        let stride = divisions + 1;
+        let positions: Vec<[f32; 3]> = (0..stride)
+            .flat_map(|z| (0..stride).map(move |x| [x as f32, x as f32 * slope, z as f32]))
+            .collect();
+        let indices: Vec<u32> = (0..divisions)
+            .flat_map(|z| (0..divisions).map(move |x| z * stride + x))
+            .flat_map(|a| [a, a + stride, a + stride + 1, a, a + stride + 1, a + 1])
+            .collect();
+        claycore::Mesh::from_triangles(&positions, &indices).expect("a grid of triangles")
+    }
+
+    fn hierarchy(divisions: u32, slope: f32) -> Hierarchy {
+        let surface = Multires::from_mesh(&triangle_cage(divisions, slope), Hierarchy::desc())
+            .expect("a grid is a cage");
+        Hierarchy::holding(surface)
+    }
+
+    fn cross(u: [f32; 3], v: [f32; 3]) -> [f32; 3] {
+        [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ]
+    }
+
+    fn unit(v: [f32; 3]) -> [f32; 3] {
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12);
+        v.map(|x| x / length)
+    }
+
+    /// A level that fits beside what the document holds is built, and the next
+    /// one — which does not — is refused, naming all three figures and leaving
+    /// the hierarchy as deep as it was.
+    ///
+    /// The budget is the fixture's lever rather than the document's contents,
+    /// because the arithmetic is the property: a level is admitted against a
+    /// budget of exactly `held + peak` and refused one byte under it.
+    #[test]
+    fn a_level_over_budget_is_refused() {
+        let mut surface = hierarchy(4, 0.0);
+        let held = 64 * 1024 * 1024;
+
+        let first = surface.subdivision_cost().expect("the engine prices it");
+        surface
+            .add_level(held, held + first.peak_bytes)
+            .expect("a level that exactly fits is built");
+        assert_eq!(surface.levels().count, 2);
+
+        let second = surface.subdivision_cost().expect("and the next one");
+        let budget = held + second.peak_bytes - 1;
+        let refused = surface
+            .add_level(held, budget)
+            .expect_err("one byte over is over");
+        assert!(
+            matches!(
+                refused,
+                ModelError::Conversion(Refusal::LevelOverBudget {
+                    held_bytes,
+                    peak_bytes,
+                    budget_bytes,
+                }) if held_bytes == held
+                    && peak_bytes == second.peak_bytes
+                    && budget_bytes == budget
+            ),
+            "priced on top of what is held, and refused in the domain's own \
+             words rather than with the engine's code: {refused}"
+        );
+        assert_eq!(
+            surface.levels().count,
+            2,
+            "a refusal costs nothing: the hierarchy is as deep as it was"
+        );
+        assert!(
+            surface.add_level(0, budget).is_ok(),
+            "and the same level against the same budget fits an empty document, \
+             which is the only thing the level used to be priced against"
+        );
+    }
+
+    /// The faces quoted for a level are the cage's own faces times the factor
+    /// the rule gives them: three for a triangle's first step, four after.
+    ///
+    /// The audit read a 1,240-quad retopology quoting 7,440 faces at level one
+    /// as the price being wrong. It was the price of the cage the hierarchy is
+    /// built over, which is the mesh layer's triangulation — 2,480 triangles.
+    #[test]
+    fn a_level_is_quoted_from_the_faces_the_cage_holds() {
+        let mut surface = hierarchy(4, 0.0);
+        let (_, cage_faces) = surface.surface.level_counts(0).expect("the cage");
+        assert_eq!(cage_faces, 32, "sixteen quads held as thirty-two triangles");
+        for steps in 1..=3 {
+            let quoted = surface.subdivision_cost().expect("priced").faces;
+            assert_eq!(
+                quoted,
+                SubdivisionCost::faces_after_triangles(cage_faces, steps),
+                "level {steps} quoted {quoted} faces from a cage of {cage_faces}"
+            );
+            surface.add_level(0, LEVEL_BUDGET).expect("a small level");
+            let (_, built) = surface.surface.level_counts(steps).expect("built");
+            assert_eq!(built, quoted, "and the level built is the one quoted");
+        }
+    }
+
+    /// Merging the bottom pass down is refused with a sentence, and the stack
+    /// is left as it was.
+    #[test]
+    fn merging_the_bottom_pass_is_refused() {
+        let mut surface = hierarchy(2, 0.0);
+        surface
+            .add_level(0, LEVEL_BUDGET)
+            .expect("a level to hold passes");
+        for name in ["Baixo", "Alto"] {
+            surface
+                .apply_sculpt_layer_op(&MultiresSculptLayerOp::Add { name: name.into() })
+                .expect("a pass");
+        }
+        let stack = surface.state().sculpt_layers;
+        let (bottom, top) = (stack[0].id, stack[1].id);
+
+        let refused = surface
+            .apply_sculpt_layer_op(&MultiresSculptLayerOp::MergeDown { id: bottom })
+            .expect_err("nothing is under the bottom pass");
+        let sentence = refused.to_string();
+        assert!(
+            sentence.contains("passe mais baixo") && sentence.contains("Fundir na forma"),
+            "the refusal says why and what to do instead, not an engine code: {sentence}"
+        );
+        assert_eq!(surface.state().sculpt_layers.len(), 2, "and both are there");
+
+        surface
+            .apply_sculpt_layer_op(&MultiresSculptLayerOp::MergeDown { id: top })
+            .expect("the pass above it still merges down");
+        assert_eq!(surface.state().sculpt_layers.len(), 1);
+    }
+
+    /// A level of a hierarchy whose cage carries no normals is still drawn
+    /// with normals that follow the surface.
+    ///
+    /// The engine exports a level's normals only where the cage had its own,
+    /// and the constant `+y` that stood in for them drew every level of such a
+    /// hierarchy as one flat colour. The fixture is a plane tilted about 63
+    /// degrees off level, so the constant is that far off every face and the
+    /// surface's own normal is the same everywhere.
+    #[test]
+    fn a_hierarchy_over_a_cage_without_normals_is_drawn_with_them() {
+        let mut surface = hierarchy(3, 2.0);
+        surface.add_level(0, LEVEL_BUDGET).expect("a level");
+        let (positions, normals, _, indices) = surface.level_mesh().expect("drawn");
+        assert_eq!(positions.len(), normals.len());
+        for triangle in indices.chunks_exact(3) {
+            let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(|i| positions[i as usize]);
+            let face = unit(cross(
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            ));
+            for &corner in triangle {
+                let n = normals[corner as usize];
+                let agreement = n[0] * face[0] + n[1] * face[1] + n[2] * face[2];
+                assert!(
+                    agreement > 0.99,
+                    "a drawn normal {n:?} is {:.0} degrees off the plane it lights",
+                    agreement.clamp(-1.0, 1.0).acos().to_degrees()
+                );
+            }
+        }
     }
 }
