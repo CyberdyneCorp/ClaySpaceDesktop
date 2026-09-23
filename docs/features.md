@@ -2960,6 +2960,24 @@ which is nothing, so it is refused rather than made into an empty subtool. The
 scene is left exactly as it was in every one of those cases, the borrowed
 visibility included.
 
+**What an operand *is* is checked when it is chosen, not a bake later.** A
+subdivision hierarchy (its layer holds the cage, not the sculpted form — bake a
+level to a mesh first), an empty subtool, a subtool that is no longer there, or
+the same subtool as both base and tool is refused the moment it is picked, with
+the sentence on the panel and the pair it already held left standing. Whether
+it is ghosted or locked is left to the run, because that is a flag the sculptor
+may lift between choosing and confirming; the run re-checks everything anyway.
+
+**A subtool holding only relief strokes has no form of its own, and is refused
+as such.** A brush stroke on a field subtool is a *relief* unless Combinar says
+otherwise, and relief offsets a surface rather than making one. On a subtool of
+its own there is nothing to offset, so the subtool has an extent — every stroke
+has a box — and sampled alone it is nothing. This is what the audit met: a
+boolean between two freshly added field subtools with a few strokes on each ran
+for over a minute and produced no layer. It is now refused by name (*«…» não
+tem forma própria*) before anything is sampled; sculpt such a subtool with
+Combinar set to **Unir** and it is an operand like any other.
+
 ## When a subtool has become costly to evaluate
 
 A chain of edits steepens the field it produces: each bake resamples what the

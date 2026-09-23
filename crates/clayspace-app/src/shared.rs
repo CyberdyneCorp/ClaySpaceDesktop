@@ -700,6 +700,10 @@ impl ObjectModel for SharedDocument {
         self.document.borrow_mut().boolean_operands()
     }
 
+    fn admit_boolean_operand(&mut self, operand: LayerKey) -> Result<(), ModelError> {
+        self.document.borrow_mut().admit_boolean_operand(operand)
+    }
+
     fn boolean_cell(&mut self, base: LayerKey, tool: LayerKey) -> Option<f32> {
         self.document.borrow_mut().boolean_cell(base, tool)
     }
