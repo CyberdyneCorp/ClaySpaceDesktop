@@ -15,6 +15,9 @@ pub mod args;
 pub mod table;
 pub mod tags;
 
+#[cfg(test)]
+mod contract_tests;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -115,6 +118,7 @@ impl Catalogue {
 
         let args = Args::new(group, action, arguments);
         let command = actions::build(group, action, &args)?;
+        let clamped = args.clamped();
         let capture = capture_of(arguments)?;
 
         if let Some(gate) = gate::gate_of(&command) {
@@ -170,6 +174,13 @@ impl Catalogue {
 
             let applied = session.apply(command)?;
             let mut value = serde_json::to_value(&applied).unwrap_or(json!({}));
+            // What the application brought into range, beside the answer
+            // rather than instead of it: the command was applied, at these
+            // values, and an agent that asked for others is owed the ones it
+            // got.
+            if !clamped.is_empty() {
+                value["clamped"] = json!(clamped);
+            }
 
             let frame = match capture {
                 None => None,
@@ -1180,6 +1191,37 @@ mod tests {
             .unwrap_err();
         assert_eq!(refusal.code, RefusalCode::BadArgument);
         assert!(refusal.message.contains("large"), "{}", refusal.message);
+        assert!(bench.applied().is_empty());
+    }
+
+    /// The clamp travels with the answer, and the command still applies: a
+    /// value brought into range is not a refusal.
+    #[test]
+    fn a_clamped_value_is_reported_in_the_answer() {
+        let bench = Bench::new();
+        let result = bench
+            .call(
+                "view",
+                json!({ "action": "set_surface_opacity", "opacity": 5.0 }),
+            )
+            .unwrap();
+        let answer = structured(&result);
+        assert_eq!(
+            answer["clamped"],
+            json!([{ "argument": "opacity", "asked": 5.0, "used": 1.0 }]),
+            "{answer}"
+        );
+        assert_eq!(bench.applied().len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_key_changes_nothing() {
+        let bench = Bench::new();
+        let refusal = bench
+            .call("brush", json!({ "action": "set_size", "sizee": 0.5 }))
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::BadArgument);
+        assert!(refusal.message.contains("sizee"), "{}", refusal.message);
         assert!(bench.applied().is_empty());
     }
 

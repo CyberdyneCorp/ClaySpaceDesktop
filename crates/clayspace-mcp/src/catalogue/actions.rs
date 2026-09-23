@@ -13,10 +13,10 @@
 //! two-hundred-verb application has.
 
 use clayspace_model::{
-    BooleanSettings, Colour, CombineSettings, ConversionSettings, DeformSettings, ExportSettings,
-    ExtrudeSettings, GizmoHandle, GizmoTarget, ImportSettings, LayerKey, MaskOp, MultiresLevelOp,
-    MultiresSculptLayerId, MultiresSculptLayerOp, ObjectId, OutlineFrame, ReferenceSettings,
-    RemeshSettings, SculptLayerOp, SmoothBlur, StrokeModifiers, SurfaceOpacity,
+    BooleanSettings, BrushSettings, Colour, CombineSettings, ConversionSettings, DeformSettings,
+    ExportSettings, ExtrudeSettings, GizmoHandle, GizmoTarget, ImportSettings, LayerKey, MaskOp,
+    MultiresLevelOp, MultiresSculptLayerId, MultiresSculptLayerOp, ObjectId, OutlineFrame,
+    ReferenceSettings, RemeshSettings, SculptLayerOp, SmoothBlur, StrokeModifiers, SurfaceOpacity,
 };
 use clayspace_vm::Command;
 
@@ -351,34 +351,116 @@ pub fn actions_of(group: &str) -> Vec<&'static str> {
     found
 }
 
+/// What a group call carries besides its action's own arguments: the action's
+/// name, and the capture that may ride along with the answer.
+const ENVELOPE: &[&str] = &["action", "capture", "width", "height"];
+
+/// Refuses a key the action's row does not declare.
+///
+/// The row is the contract rather than whatever the builder below happens to
+/// read, because the row is what `describe` and the schema told the agent —
+/// and `every_argument_the_builder_reads_is_declared` holds the two together.
+///
+/// An action with no row is let through unchecked. That is the retopology,
+/// UV, conform and bake verbs, which no group offers and only `measure` can
+/// reach; they have no declared list to check against, and inventing one here
+/// would be a second table to drift.
+fn accept_declared(group: &str, action: &str, args: &Args<'_>) -> Result<(), Refusal> {
+    let Some(spec) = super::table::TABLE
+        .iter()
+        .find(|spec| spec.group == group && spec.name == action)
+    else {
+        return Ok(());
+    };
+    let declared: Vec<&str> = spec.arguments.iter().map(|arg| arg.name).collect();
+    args.accept_only(&declared, ENVELOPE)
+}
+
 /// One tool call, as a command.
 pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refusal> {
     use Command as C;
+    accept_declared(group, action, args)?;
     let command = match (group, action) {
         // -- tool -----------------------------------------------------------
         ("tool", "select") => C::SelectTool(args.choice("tool", &tags::tools())?),
 
         // -- brush ----------------------------------------------------------
-        ("brush", "set_size") => C::SetBrushSize(args.number("size")?),
-        ("brush", "set_intensity") => C::SetBrushIntensity(args.number("intensity")?),
-        ("brush", "set_flow") => C::SetBrushFlow(args.number("flow")?),
-        ("brush", "set_noise") => C::SetBrushNoise(args.number("noise")?),
-        ("brush", "set_pressure_size") => C::SetBrushPressureSize(args.number("amount")?),
-        ("brush", "set_pressure_strength") => C::SetBrushPressureStrength(args.number("amount")?),
-        ("brush", "set_pressure_curve") => C::SetBrushPressureCurve(args.number("exponent")?),
-        ("brush", "set_taper_start") => C::SetBrushTaperStart(args.number("fraction")?),
-        ("brush", "set_taper_end") => C::SetBrushTaperEnd(args.number("fraction")?),
+        ("brush", "set_size") => {
+            C::SetBrushSize(brush(args, "size", |b, v| b.size = v, |b| b.size)?)
+        }
+        ("brush", "set_intensity") => C::SetBrushIntensity(brush(
+            args,
+            "intensity",
+            |b, v| b.intensity = v,
+            |b| b.intensity,
+        )?),
+        ("brush", "set_flow") => {
+            C::SetBrushFlow(brush(args, "flow", |b, v| b.flow = v, |b| b.flow)?)
+        }
+        ("brush", "set_noise") => C::SetBrushNoise(brush(
+            args,
+            "noise",
+            |b, v| b.shaping.noise = v,
+            |b| b.shaping.noise,
+        )?),
+        ("brush", "set_pressure_size") => C::SetBrushPressureSize(brush(
+            args,
+            "amount",
+            |b, v| b.dynamics.pressure_size = v,
+            |b| b.dynamics.pressure_size,
+        )?),
+        ("brush", "set_pressure_strength") => C::SetBrushPressureStrength(brush(
+            args,
+            "amount",
+            |b, v| b.dynamics.pressure_strength = v,
+            |b| b.dynamics.pressure_strength,
+        )?),
+        ("brush", "set_pressure_curve") => C::SetBrushPressureCurve(brush(
+            args,
+            "exponent",
+            |b, v| b.dynamics.pressure_curve = v,
+            |b| b.dynamics.pressure_curve,
+        )?),
+        ("brush", "set_taper_start") => C::SetBrushTaperStart(brush(
+            args,
+            "fraction",
+            |b, v| b.dynamics.taper_start = v,
+            |b| b.dynamics.taper_start,
+        )?),
+        ("brush", "set_taper_end") => C::SetBrushTaperEnd(brush(
+            args,
+            "fraction",
+            |b, v| b.dynamics.taper_end = v,
+            |b| b.dynamics.taper_end,
+        )?),
         ("brush", "set_rake") => C::SetBrushRake(args.boolean("rake")?),
         ("brush", "set_drag_falloff") => {
             C::SetBrushDragFalloff(args.choice("falloff", tags::DRAG_FALLOFFS)?)
         }
         ("brush", "set_front_only") => C::SetBrushFrontOnly(args.boolean("front_only")?),
-        ("brush", "set_azimuth") => C::SetBrushAzimuth(args.number("azimuth")?),
+        // Degrees on the wire, as `describe` says and as the panel's dial
+        // shows; radians in the command, as the panel converts before pushing
+        // it. This passed the degrees straight through, so 45 was taken as 45
+        // radians — seven turns and a bit, which the brush reads as 1.02.
+        ("brush", "set_azimuth") => C::SetBrushAzimuth(
+            brush(
+                args,
+                "azimuth",
+                |b, v| b.shaping.azimuth = v.to_radians(),
+                |b| b.shaping.azimuth.to_degrees(),
+            )?
+            .to_radians(),
+        ),
         ("brush", "set_falloff") => C::SetBrushFalloff(args.choice("falloff", tags::FALLOFFS)?),
         ("brush", "set_accumulate") => C::SetBrushAccumulate(args.boolean("accumulate")?),
         ("brush", "set_alpha") => C::SetBrushAlpha(args.boolean("alpha")?),
         ("brush", "set_colour") => C::SetBrushColour(Colour::new(args.vec3("rgb")?)),
-        ("brush", "set_smoothing") => C::SetBrushSmoothing(args.number("smoothing")?),
+        ("brush", "set_smoothing") => C::SetBrushSmoothing(brush(
+            args,
+            "smoothing",
+            |b, v| b.shaping.smoothing = v,
+            |b| b.shaping.smoothing,
+        )?),
         ("brush", "pick_recent_colour") => C::PickRecentColour(args.index("index")?),
         ("brush", "clear_alpha") => C::ClearAlpha,
         ("brush", "toggle_symmetry") => C::ToggleSymmetry(args.choice("axis", tags::AXES)?),
@@ -416,7 +498,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("mask", "toggle_painting") => C::ToggleMaskPainting,
         ("mask", "apply") => C::ApplyMaskOp(mask_op(args)?),
         ("mask", "set_gesture") => C::SetMaskGesture(args.choice("gesture", tags::GESTURES)?),
-        ("mask", "set_steps") => C::SetMaskSteps(args.integer("steps")? as i32),
+        ("mask", "set_steps") => C::SetMaskSteps(args.count("steps")?),
         ("mask", "begin_outline") => {
             C::BeginMaskOutline(args.vec2("at")?, args.boolean_or("invert", false)?)
         }
@@ -490,13 +572,18 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
 
         // -- boolean --------------------------------------------------------
         ("boolean", "toggle_panel") => C::ToggleBoolean,
-        ("boolean", "set") => C::SetBoolean(BooleanSettings {
-            base: args.optional_layer("base")?.map(LayerKey),
-            tool: args.optional_layer("tool")?.map(LayerKey),
-            op: args.choice_or("op", &tags::booleans(), BooleanSettings::default().op)?,
-            cell_size: args.number_or("cell_size", BooleanSettings::default().cell_size)?,
-            consume: args.boolean_or("consume", BooleanSettings::default().consume)?,
-        }),
+        ("boolean", "set") => C::SetBoolean(noted(
+            args,
+            BooleanSettings {
+                base: args.optional_layer("base")?.map(LayerKey),
+                tool: args.optional_layer("tool")?.map(LayerKey),
+                op: args.choice_or("op", &tags::booleans(), BooleanSettings::default().op)?,
+                cell_size: args.number_or("cell_size", BooleanSettings::default().cell_size)?,
+                consume: args.boolean_or("consume", BooleanSettings::default().consume)?,
+            },
+            BooleanSettings::sanitized,
+            &[("cell_size", |s| f64::from(s.cell_size))],
+        )),
         ("boolean", "run") => C::RunBoolean,
 
         // -- layer ----------------------------------------------------------
@@ -509,20 +596,23 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("layer", "remove") => C::RemoveLayer(LayerKey(args.layer("layer")?)),
         ("layer", "optimize") => C::OptimizeLayer(LayerKey(args.layer("layer")?)),
         ("layer", "remesh") => C::RemeshLayer(LayerKey(args.layer("layer")?)),
-        ("layer", "set_remesh") => C::SetRemeshSettings(RemeshSettings {
-            resolution: args
-                .integer_or("resolution", RemeshSettings::default().resolution as i64)?
-                as u32,
-            sharp: args.boolean_or("sharp", RemeshSettings::default().sharp)?,
-            remove_loose_pieces: args.boolean_or(
-                "remove_loose_pieces",
-                RemeshSettings::default().remove_loose_pieces,
-            )?,
-            follow_the_source: args.boolean_or(
-                "follow_the_source",
-                RemeshSettings::default().follow_the_source,
-            )?,
-        }),
+        ("layer", "set_remesh") => C::SetRemeshSettings(noted(
+            args,
+            RemeshSettings {
+                resolution: args.whole_or("resolution", RemeshSettings::default().resolution)?,
+                sharp: args.boolean_or("sharp", RemeshSettings::default().sharp)?,
+                remove_loose_pieces: args.boolean_or(
+                    "remove_loose_pieces",
+                    RemeshSettings::default().remove_loose_pieces,
+                )?,
+                follow_the_source: args.boolean_or(
+                    "follow_the_source",
+                    RemeshSettings::default().follow_the_source,
+                )?,
+            },
+            RemeshSettings::sanitized,
+            &[("resolution", |s| f64::from(s.resolution))],
+        )),
         ("layer", "begin_rename") => C::BeginRenameLayer(LayerKey(args.layer("layer")?)),
         ("layer", "edit_name") => C::EditLayerName(args.text("name")?),
         ("layer", "commit_rename") => C::CommitRenameLayer,
@@ -551,22 +641,14 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
                 ImportSettings::default().becomes,
             )?,
             scale: args.number_or("scale", ImportSettings::default().scale)?,
-            max_vertices: args.integer_or(
-                "max_vertices",
-                ImportSettings::default().max_vertices as i64,
-            )? as u64,
-            max_triangles: args.integer_or(
-                "max_triangles",
-                ImportSettings::default().max_triangles as i64,
-            )? as u64,
+            max_vertices: args.whole_or("max_vertices", ImportSettings::default().max_vertices)?,
+            max_triangles: args
+                .whole_or("max_triangles", ImportSettings::default().max_triangles)?,
         }),
         ("exchange", "set_export") => C::SetExportSettings(ExportSettings {
             mesher: args.choice_or("mesher", tags::MESHERS, ExportSettings::default().mesher)?,
             resolution: args.number_or("resolution", ExportSettings::default().resolution)?,
-            decimate_to: match args.number_or("decimate_to", f32::NAN)? {
-                value if value.is_nan() => None,
-                value => Some(value),
-            },
+            decimate_to: args.optional_number("decimate_to")?,
         }),
         ("exchange", "run_import") => C::RunImport,
         ("exchange", "run_export") => C::RunExport,
@@ -578,29 +660,36 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
 
         // -- convert --------------------------------------------------------
         ("convert", "toggle_panel") => C::ToggleConvert,
-        ("convert", "set") => C::SetConversion(ConversionSettings {
-            direction: args.choice_or(
-                "direction",
-                tags::DIRECTIONS,
-                ConversionSettings::default().direction,
-            )?,
-            cell_size: args.number_or("cell_size", ConversionSettings::default().cell_size)?,
-            blur: args.integer_or("blur", ConversionSettings::default().blur as i64)? as i32,
-            in_place: args.boolean_or("in_place", ConversionSettings::default().in_place)?,
-        }),
+        ("convert", "set") => C::SetConversion(noted(
+            args,
+            ConversionSettings {
+                direction: args.choice_or(
+                    "direction",
+                    tags::DIRECTIONS,
+                    ConversionSettings::default().direction,
+                )?,
+                cell_size: args.number_or("cell_size", ConversionSettings::default().cell_size)?,
+                blur: args.count_or("blur", ConversionSettings::default().blur)?,
+                in_place: args.boolean_or("in_place", ConversionSettings::default().in_place)?,
+            },
+            ConversionSettings::sanitized,
+            &[
+                ("cell_size", |s| f64::from(s.cell_size)),
+                ("blur", |s| f64::from(s.blur)),
+            ],
+        )),
         ("convert", "run") => C::RunConversion,
         ("retopo", "set") => C::SetRetopoSettings(clayspace_model::RetopoSettings {
-            target_quads: args.integer_or(
+            target_quads: args.whole_or(
                 "target_quads",
-                clayspace_model::RetopoSettings::default().target_quads as i64,
-            )? as u32,
-            method: match args.text_or("method", "quadcover")?.as_str() {
-                "zremesher" => clayspace_model::QuadMethod::ZRemesher,
-                "field_aligned" => clayspace_model::QuadMethod::FieldAligned,
-                "instant_meshes" => clayspace_model::QuadMethod::InstantMeshes,
-                "integer" => clayspace_model::QuadMethod::Integer,
-                _ => clayspace_model::QuadMethod::QuadCover,
-            },
+                clayspace_model::RetopoSettings::default().target_quads,
+            )?,
+            // A method nobody offers used to become quadcover, silently.
+            method: args.choice_or(
+                "method",
+                QUAD_METHODS,
+                clayspace_model::QuadMethod::QuadCover,
+            )?,
             sharp_edge_degrees: args.number_or(
                 "sharp_edge_degrees",
                 clayspace_model::RetopoSettings::default().sharp_edge_degrees,
@@ -624,10 +713,10 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
                 "pack_margin",
                 clayspace_model::UvSettings::default().pack_margin,
             )?,
-            texture_size: args.integer_or(
+            texture_size: args.whole_or(
                 "texture_size",
-                clayspace_model::UvSettings::default().texture_size as i64,
-            )? as u32,
+                clayspace_model::UvSettings::default().texture_size,
+            )?,
             reorient_charts: args.boolean_or(
                 "reorient_charts",
                 clayspace_model::UvSettings::default().reorient_charts,
@@ -651,30 +740,16 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("conform", "run") => C::RunConform,
         ("conform", "cancel") => C::CancelConform,
         ("bake", "set") => C::SetBakeSettings(clayspace_model::BakeSettings {
-            maps: args
-                .optional_text("maps")?
-                .map(|list| {
-                    list.split(',')
-                        .filter_map(|name| match name.trim() {
-                            "normal" => Some(clayspace_model::BakeMap::Normal),
-                            "ao" => Some(clayspace_model::BakeMap::AmbientOcclusion),
-                            "curvature" => Some(clayspace_model::BakeMap::Curvature),
-                            "cavity" => Some(clayspace_model::BakeMap::Cavity),
-                            _ => None,
-                        })
-                        .collect()
-                })
-                .unwrap_or_else(|| clayspace_model::BakeSettings::default().maps),
-            size: args.integer_or("size", clayspace_model::BakeSettings::default().size as i64)?
-                as u32,
+            maps: bake_maps(args)?,
+            size: args.whole_or("size", clayspace_model::BakeSettings::default().size)?,
             cage_distance: args.number_or(
                 "cage_distance",
                 clayspace_model::BakeSettings::default().cage_distance,
             )?,
-            ao_samples: args.integer_or(
+            ao_samples: args.whole_or(
                 "ao_samples",
-                clayspace_model::BakeSettings::default().ao_samples as i64,
-            )? as u32,
+                clayspace_model::BakeSettings::default().ao_samples,
+            )?,
             ao_radius: args.number_or(
                 "ao_radius",
                 clayspace_model::BakeSettings::default().ao_radius,
@@ -686,14 +761,25 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
 
         // -- deform ---------------------------------------------------------
         ("deform", "toggle_panel") => C::ToggleDeform,
-        ("deform", "set") => C::SetDeform(DeformSettings {
-            verb: args.choice_or("verb", tags::DEFORM_VERBS, DeformSettings::default().verb)?,
-            axis: args.vec3_or("axis", DeformSettings::default().axis)?,
-            span: args.number_or("span", DeformSettings::default().span)?,
-            scale_start: args.number_or("scale_start", DeformSettings::default().scale_start)?,
-            scale_end: args.number_or("scale_end", DeformSettings::default().scale_end)?,
-            degrees: args.number_or("degrees", DeformSettings::default().degrees)?,
-        }),
+        ("deform", "set") => C::SetDeform(noted(
+            args,
+            DeformSettings {
+                verb: args.choice_or("verb", tags::DEFORM_VERBS, DeformSettings::default().verb)?,
+                axis: args.vec3_or("axis", DeformSettings::default().axis)?,
+                span: args.number_or("span", DeformSettings::default().span)?,
+                scale_start: args
+                    .number_or("scale_start", DeformSettings::default().scale_start)?,
+                scale_end: args.number_or("scale_end", DeformSettings::default().scale_end)?,
+                degrees: args.number_or("degrees", DeformSettings::default().degrees)?,
+            },
+            DeformSettings::sanitized,
+            &[
+                ("span", |s| f64::from(s.span)),
+                ("scale_start", |s| f64::from(s.scale_start)),
+                ("scale_end", |s| f64::from(s.scale_end)),
+                ("degrees", |s| f64::from(s.degrees)),
+            ],
+        )),
         ("deform", "run") => C::RunDeform,
 
         // -- armature -------------------------------------------------------
@@ -703,30 +789,24 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("armature", "toggle_skin_preview") => C::ToggleSkinPreview,
         ("armature", "toggle_negative") => C::ToggleZsphereNegative,
         ("armature", "set_skin_thickness") => C::SetSkinThickness(args.number("thickness")?),
-        ("armature", "select") => C::SelectZsphere(match args.integer_or("sphere", -1)? {
-            index if index < 0 => None,
-            index => Some(index as u32),
-        }),
+        ("armature", "select") => C::SelectZsphere(args.optional_whole("sphere")?),
         ("armature", "add") => C::AddZsphere {
-            parent: args.integer("parent")? as u32,
+            parent: args.whole("parent")?,
             at: args.vec3("at")?,
-            radius: match args.number_or("radius", f32::NAN)? {
-                radius if radius.is_nan() => None,
-                radius => Some(radius),
-            },
+            radius: args.optional_number("radius")?,
         },
-        ("armature", "insert") => C::InsertZsphere(args.integer("sphere")? as u32),
+        ("armature", "insert") => C::InsertZsphere(args.whole("sphere")?),
         ("armature", "move") => C::MoveZsphere {
-            index: args.integer("sphere")? as u32,
+            index: args.whole("sphere")?,
             to: args.vec3("to")?,
         },
         ("armature", "resize") => C::ResizeZsphere {
-            index: args.integer("sphere")? as u32,
+            index: args.whole("sphere")?,
             radius: args.number("radius")?,
         },
         ("armature", "reparent") => C::ReparentZsphere {
-            index: args.integer("sphere")? as u32,
-            parent: args.integer("parent")? as u32,
+            index: args.whole("sphere")?,
+            parent: args.whole("parent")?,
         },
 
         // -- history --------------------------------------------------------
@@ -745,31 +825,16 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("view", "toggle_shadows") => C::ToggleShadows,
         ("view", "set_grid_display") => C::SetVoxelDisplay(
             args.choice("display", tags::VOXEL_DISPLAYS)?,
-            SmoothBlur::new(args.integer_or("blur_passes", 0)? as i32),
+            smooth_blur(args)?,
         ),
-        ("view", "set_surface_opacity") => {
-            C::SetSurfaceOpacity(SurfaceOpacity::new(args.number("opacity")?))
-        }
+        ("view", "set_surface_opacity") => C::SetSurfaceOpacity(surface_opacity(args)?),
 
         // -- reference ------------------------------------------------------
         ("reference", "toggle_panel") => C::ToggleReferences,
         ("reference", "clear") => C::ClearReference(args.choice("plane", &tags::planes())?),
-        ("reference", "set") => C::SetReferenceSettings(
-            args.choice("plane", &tags::planes())?,
-            ReferenceSettings {
-                visible: args.boolean_or("visible", ReferenceSettings::default().visible)?,
-                opacity: args.number_or("opacity", ReferenceSettings::default().opacity)?,
-                height: args.number_or("height", ReferenceSettings::default().height)?,
-                offset: {
-                    let fallback = ReferenceSettings::default().offset;
-                    match args.vec2("offset") {
-                        Ok(offset) => offset,
-                        Err(_) => fallback,
-                    }
-                },
-                depth: args.number_or("depth", ReferenceSettings::default().depth)?,
-            },
-        ),
+        ("reference", "set") => {
+            C::SetReferenceSettings(args.choice("plane", &tags::planes())?, reference(args)?)
+        }
 
         // -- session --------------------------------------------------------
         ("session", "set_language") => C::SetLocale(args.choice("language", &tags::locales())?),
@@ -783,9 +848,117 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
 }
 
 fn optional_index(args: &Args<'_>, name: &str) -> Result<Option<usize>, Refusal> {
-    match args.integer_or(name, -1)? {
-        value if value < 0 => Ok(None),
-        value => Ok(Some(value as usize)),
+    args.optional_whole(name)
+}
+
+/// One of the brush's numbers, with what the brush will make of it reported.
+///
+/// The brush clamps each of its numbers on its own, whatever the others hold,
+/// so a default brush with only this one changed answers what the sculptor's
+/// brush will: `BrushSettings::sanitized` is the rule the ViewModel applies,
+/// asked here rather than restated.
+fn brush(
+    args: &Args<'_>,
+    name: &str,
+    set: fn(&mut BrushSettings, f32),
+    get: fn(&BrushSettings) -> f32,
+) -> Result<f32, Refusal> {
+    let asked = args.number(name)?;
+    let mut settings = BrushSettings::default();
+    set(&mut settings, asked);
+    args.note_clamp(
+        name,
+        f64::from(asked),
+        f64::from(get(&settings.sanitized())),
+    );
+    Ok(asked)
+}
+
+/// One field of a settings block: the argument that sets it, and how to read
+/// it as a number.
+type Field<T> = (&'static str, fn(&T) -> f64);
+
+/// A settings block, with every field its `sanitized` moves reported.
+///
+/// The block goes out as asked: the ViewModel sanitizes it with the same
+/// function, so sending the sanitized one would change nothing but where the
+/// rule is applied. `fields` names the ones a clamp can move, by the argument
+/// that sets them.
+fn noted<T: Copy>(args: &Args<'_>, asked: T, sanitized: fn(T) -> T, fields: &[Field<T>]) -> T {
+    let used = sanitized(asked);
+    for (name, read) in fields {
+        args.note_clamp(name, read(&asked), read(&used));
+    }
+    asked
+}
+
+fn smooth_blur(args: &Args<'_>) -> Result<SmoothBlur, Refusal> {
+    let asked = args.count_or("blur_passes", 0)?;
+    let used = SmoothBlur::new(asked);
+    args.note_clamp("blur_passes", f64::from(asked), f64::from(used.passes()));
+    Ok(used)
+}
+
+fn surface_opacity(args: &Args<'_>) -> Result<SurfaceOpacity, Refusal> {
+    let asked = args.number("opacity")?;
+    let used = SurfaceOpacity::new(asked);
+    args.note_clamp("opacity", f64::from(asked), f64::from(used.get()));
+    Ok(used)
+}
+
+/// A reference's placement.
+///
+/// The offset was read with its refusal thrown away, so `"bad"` and `[1]`
+/// both became the default offset and answered success.
+fn reference(args: &Args<'_>) -> Result<ReferenceSettings, Refusal> {
+    let fallback = ReferenceSettings::default();
+    let asked = ReferenceSettings {
+        visible: args.boolean_or("visible", fallback.visible)?,
+        opacity: args.number_or("opacity", fallback.opacity)?,
+        height: args.number_or("height", fallback.height)?,
+        offset: args.vec2_or("offset", fallback.offset)?,
+        depth: args.number_or("depth", fallback.depth)?,
+    };
+    Ok(noted(
+        args,
+        asked,
+        ReferenceSettings::sanitized,
+        &[
+            ("opacity", |s| f64::from(s.opacity)),
+            ("height", |s| f64::from(s.height)),
+            ("offset", |s| f64::from(s.offset[0])),
+            ("offset", |s| f64::from(s.offset[1])),
+            ("depth", |s| f64::from(s.depth)),
+        ],
+    ))
+}
+
+const QUAD_METHODS: &[(&str, clayspace_model::QuadMethod)] = &[
+    ("quadcover", clayspace_model::QuadMethod::QuadCover),
+    ("zremesher", clayspace_model::QuadMethod::ZRemesher),
+    ("field_aligned", clayspace_model::QuadMethod::FieldAligned),
+    ("instant_meshes", clayspace_model::QuadMethod::InstantMeshes),
+    ("integer", clayspace_model::QuadMethod::Integer),
+];
+
+/// The maps a bake writes, as a comma-separated list.
+///
+/// A name nobody offers used to be dropped, so `"normal,a0"` baked one map and
+/// answered success.
+fn bake_maps(args: &Args<'_>) -> Result<Vec<clayspace_model::BakeMap>, Refusal> {
+    use clayspace_model::BakeMap;
+    const MAPS: &[(&str, BakeMap)] = &[
+        ("normal", BakeMap::Normal),
+        ("ao", BakeMap::AmbientOcclusion),
+        ("curvature", BakeMap::Curvature),
+        ("cavity", BakeMap::Cavity),
+    ];
+    match args.optional_text("maps")? {
+        None => Ok(clayspace_model::BakeSettings::default().maps),
+        Some(list) => list
+            .split(',')
+            .map(|name| args.choose("maps", name.trim(), MAPS))
+            .collect(),
     }
 }
 
@@ -794,7 +967,7 @@ fn optional_object(args: &Args<'_>) -> Result<Option<ObjectId>, Refusal> {
         None => Ok(None),
         Some(layer) => Ok(Some(ObjectId {
             layer: LayerKey(layer),
-            node: args.integer("node")? as u32,
+            node: args.whole("node")?,
         })),
     }
 }
@@ -805,7 +978,7 @@ fn gizmo_target(args: &Args<'_>) -> Result<Option<GizmoTarget>, Refusal> {
         0 => Ok(None),
         1 => Ok(Some(GizmoTarget::Object(ObjectId {
             layer: LayerKey(args.layer("layer")?),
-            node: args.integer("node")? as u32,
+            node: args.whole("node")?,
         }))),
         2 => Ok(Some(GizmoTarget::Layer(LayerKey(args.layer("layer")?)))),
         _ => Ok(Some(GizmoTarget::Curve)),
@@ -832,7 +1005,7 @@ fn mask_op(args: &Args<'_>) -> Result<MaskOp, Refusal> {
         ("smooth", 4),
         ("invert_within_bounds", 5),
     ];
-    let steps = || args.integer_or("steps", 1).map(|value| value as i32);
+    let steps = || args.count_or("steps", 1);
     Ok(match args.choice("op", OPS)? {
         0 => MaskOp::Invert,
         1 => MaskOp::Clear,
@@ -845,21 +1018,37 @@ fn mask_op(args: &Args<'_>) -> Result<MaskOp, Refusal> {
 
 fn extrude(args: &Args<'_>) -> Result<ExtrudeSettings, Refusal> {
     let fallback = ExtrudeSettings::default();
-    Ok(ExtrudeSettings {
+    let asked = ExtrudeSettings {
         thickness: args.number_or("thickness", fallback.thickness)?,
         side: args.choice_or("side", tags::EXTRUDE_SIDES, fallback.side)?,
         border_round: args.number_or("border_round", fallback.border_round)?,
-        border_smooth: args.integer_or("border_smooth", fallback.border_smooth as i64)? as i32,
-    })
+        border_smooth: args.count_or("border_smooth", fallback.border_smooth)?,
+    };
+    Ok(noted(
+        args,
+        asked,
+        ExtrudeSettings::sanitized,
+        &[
+            ("thickness", |s| f64::from(s.thickness)),
+            ("border_round", |s| f64::from(s.border_round)),
+            ("border_smooth", |s| f64::from(s.border_smooth)),
+        ],
+    ))
 }
 
 fn combine(args: &Args<'_>) -> Result<CombineSettings, Refusal> {
     let fallback = CombineSettings::default();
-    Ok(CombineSettings {
+    let asked = CombineSettings {
         op: args.choice_or("op", &tags::combines(), fallback.op)?,
         blend: args.choice_or("blend", &tags::blends(), fallback.blend)?,
         radius: args.number_or("radius", fallback.radius)?,
-    })
+    };
+    Ok(noted(
+        args,
+        asked,
+        CombineSettings::sanitized,
+        &[("radius", |s| f64::from(s.radius))],
+    ))
 }
 
 fn sculpt_layer_op(args: &Args<'_>) -> Result<SculptLayerOp, Refusal> {
@@ -906,8 +1095,8 @@ fn level_op(args: &Args<'_>) -> Result<MultiresLevelOp, Refusal> {
         ("remove_highest", 3),
     ];
     Ok(match args.choice("op", OPS)? {
-        0 => MultiresLevelOp::SetSculptLevel(args.integer("level")? as u32),
-        1 => MultiresLevelOp::SetDisplayLevel(args.integer("level")? as u32),
+        0 => MultiresLevelOp::SetSculptLevel(args.whole("level")?),
+        1 => MultiresLevelOp::SetDisplayLevel(args.whole("level")?),
         2 => MultiresLevelOp::AddLevel,
         _ => MultiresLevelOp::RemoveHighestLevel,
     })
