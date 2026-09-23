@@ -10,7 +10,7 @@
 //! carried beside them, so the figures on screen and the operation the button
 //! would run cannot come to disagree.
 
-use clayspace_model::{BooleanSettings, Cost, LayerKey, ObjectModel};
+use clayspace_model::{BooleanRefusal, BooleanSettings, Cost, LayerKey, ModelError, ObjectModel};
 
 use crate::command::Command;
 use crate::observable::Observable;
@@ -117,7 +117,7 @@ impl BooleanViewModel {
                     self.notice.set_if_changed(None);
                 }
             }
-            Command::SetBoolean(settings) => self.settle(*settings),
+            Command::SetBoolean(settings) => self.choose(*settings),
             Command::RunBoolean => self.run(),
             _ => {}
         }
@@ -149,6 +149,37 @@ impl BooleanViewModel {
         // Through `settle` rather than set directly, so a price quoted for a
         // subtool nobody can see any more goes with it.
         self.settle(settings);
+    }
+
+    /// Takes a choice the sculptor made, once each operand can be one.
+    ///
+    /// Refused here rather than left for the run: a pair that can only be
+    /// refused was otherwise accepted, priced and shown as ready, and the
+    /// sentence arrived a whole bake later — in the audit, after a minute. A
+    /// refused choice leaves the panel as it was, so the pair on screen is
+    /// still one that can run.
+    fn choose(&mut self, settings: BooleanSettings) {
+        match self.admit(&settings) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+                self.settle(settings);
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
+    /// Whether each chosen operand can be one, and the two are two.
+    ///
+    /// Only what is chosen is asked about: a panel half filled in is a panel
+    /// being filled in, not a refusal.
+    fn admit(&mut self, settings: &BooleanSettings) -> Result<(), ModelError> {
+        if settings.base.is_some() && settings.base == settings.tool {
+            return Err(ModelError::Boolean(BooleanRefusal::NotAPair));
+        }
+        for operand in [settings.base, settings.tool].into_iter().flatten() {
+            self.model.admit_boolean_operand(operand)?;
+        }
+        Ok(())
     }
 
     /// Takes the panel's new settings and re-prices them.

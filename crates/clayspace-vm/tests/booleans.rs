@@ -32,6 +32,9 @@ struct FakeBooleans {
     detail: Vec<(LayerKey, f32)>,
     /// Set to refuse the next run, as a ghosted operand would.
     refuse: Option<BooleanRefusal>,
+    /// Operands the document will not take at all, and why — a hierarchy,
+    /// say. Asked when the panel is set, not only when it runs.
+    inadmissible: Vec<(LayerKey, BooleanRefusal)>,
     /// The layer the next result arrives on.
     next: u64,
 }
@@ -53,12 +56,20 @@ impl FakeBooleans {
                 (LayerKey(3), 0.005),
             ],
             refuse: None,
+            inadmissible: Vec::new(),
             next: 90,
         }
     }
 }
 
 impl ObjectModel for FakeBooleans {
+    fn admit_boolean_operand(&mut self, operand: LayerKey) -> Result<(), ModelError> {
+        match self.inadmissible.iter().find(|(key, _)| *key == operand) {
+            Some((_, refusal)) => Err(ModelError::Boolean(refusal.clone())),
+            None => Ok(()),
+        }
+    }
+
     fn boolean_operands(&mut self) -> Vec<(LayerKey, String)> {
         self.operands.borrow().clone()
     }
@@ -330,4 +341,129 @@ fn a_closed_panel_asks_the_document_nothing() {
         4,
         "opening the panel did not re-read what is in the scene"
     );
+}
+
+/// An operand the document will not take is refused when it is chosen, by
+/// name, and the panel keeps the pair it had.
+///
+/// The audit's hierarchy was accepted by the panel, priced, shown as ready,
+/// and refused a minute later by a run nobody heard. Refused at the choice,
+/// the sentence arrives while the sculptor is still choosing.
+#[test]
+fn an_invalid_operand_is_refused_at_set() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeBooleans::new(calls.clone());
+    model.inadmissible = vec![(
+        LayerKey(3),
+        BooleanRefusal::Hierarchy {
+            operand: "Cabeça".into(),
+        },
+    )];
+    let mut vm = BooleanViewModel::new(Box::new(model));
+    vm.dispatch(&Command::ToggleBoolean);
+    vm.dispatch(&Command::SetBoolean(a_pair(BooleanOp::Subtract)));
+    let chosen = *vm.settings().get();
+
+    vm.dispatch(&Command::SetBoolean(BooleanSettings {
+        tool: Some(LayerKey(3)),
+        ..chosen
+    }));
+
+    let notice = vm
+        .notice()
+        .get()
+        .clone()
+        .expect("a hierarchy chosen as an operand said nothing");
+    assert!(
+        notice.contains("Cabeça"),
+        "the refusal named nobody: {notice}"
+    );
+    assert_eq!(
+        *vm.settings().get(),
+        chosen,
+        "the refused operand was taken into the panel anyway"
+    );
+
+    vm.dispatch(&Command::RunBoolean);
+    assert_eq!(
+        calls.borrow().run[0].tool,
+        Some(LayerKey(2)),
+        "the run was over the refused operand rather than the pair left standing"
+    );
+}
+
+/// The same subtool as base and tool is refused when it is chosen, rather than
+/// silently leaving a panel with no pair.
+#[test]
+fn the_same_subtool_twice_is_refused_at_set() {
+    let (mut vm, calls) = panel();
+    vm.dispatch(&Command::SetBoolean(a_pair(BooleanOp::Union)));
+    let priced = calls.borrow().priced;
+
+    vm.dispatch(&Command::SetBoolean(BooleanSettings {
+        tool: Some(LayerKey(1)),
+        ..*vm.settings().get()
+    }));
+
+    assert!(
+        vm.notice().get().is_some(),
+        "choosing one subtool for both roles said nothing"
+    );
+    assert_eq!(vm.settings().get().tool, Some(LayerKey(2)));
+    assert!(
+        vm.is_ready(),
+        "a refused choice took the standing pair away"
+    );
+    assert_eq!(
+        calls.borrow().priced,
+        priced,
+        "a refused choice was priced as though it had been taken"
+    );
+}
+
+/// A choice that is taken clears the refusal the last one raised, so the line
+/// on the panel is about the pair on the panel.
+#[test]
+fn a_good_choice_clears_the_last_refusal() {
+    let (mut vm, _) = panel();
+    vm.dispatch(&Command::SetBoolean(BooleanSettings {
+        base: Some(LayerKey(1)),
+        tool: Some(LayerKey(1)),
+        ..BooleanSettings::default()
+    }));
+    assert!(vm.notice().get().is_some());
+
+    vm.dispatch(&Command::SetBoolean(a_pair(BooleanOp::Union)));
+    assert!(
+        vm.notice().get().is_none(),
+        "a refusal about a pair nobody holds any more is still on the panel"
+    );
+    assert!(vm.is_ready());
+}
+
+/// A refused run reports on the notice channel every time it is asked, not
+/// only the first: the door counts writes, and a second identical refusal that
+/// did not write would read as a success.
+#[test]
+fn a_refused_boolean_reports() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeBooleans::new(calls);
+    model.refuse = Some(BooleanRefusal::Formless {
+        operand: "Relevo".into(),
+    });
+    let mut vm = BooleanViewModel::new(Box::new(model));
+    vm.dispatch(&Command::ToggleBoolean);
+    vm.dispatch(&Command::SetBoolean(a_pair(BooleanOp::Subtract)));
+
+    for attempt in 1..=2 {
+        let before = vm.notice().occurrences();
+        vm.dispatch(&Command::RunBoolean);
+        assert!(
+            vm.notice().occurrences() > before,
+            "attempt {attempt} was refused without writing the channel the door reads"
+        );
+        let notice = vm.notice().get().clone().unwrap_or_default();
+        assert!(notice.contains("Relevo"), "attempt {attempt}: {notice}");
+    }
+    assert_eq!(vm.take_result(), None);
 }
