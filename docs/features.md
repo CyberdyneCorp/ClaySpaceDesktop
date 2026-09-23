@@ -23,8 +23,9 @@ mesh one.
 
 A fourth representation — a subdivision hierarchy — is left out of the Layers
 column below rather than written into every row, because its column is stated
-against the mesh's rather than as a list: fifteen of the twenty-one name a verb
-on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
+against the mesh's rather than as a list: sixteen of the twenty-one name a verb
+on it — the sixteen mesh brushes less Pintar and Borrar, plus Apagar, which on a
+hierarchy takes the selected pass's detail back toward zero, plus Máscara. See
 [Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
 | Tool | Engine verb | Layers | What it does |
@@ -32,7 +33,7 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal. On a field the tooltip says what the relief op costs it: each point moves along its *own* normal, so a feature narrower than the brush thickens instead of taking the mark |
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges. The engine binds both to relief, and that is the right way round: relief moves **each** point of the surface along its own normal, which is the Inflate frame — it is Padrão that is approximated by it |
 | Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax_from` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
-| Mover | `clay_sdf_move_*` / `clay_layer_move_surface_regions` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
+| Mover | `clay_sdf_move_*` (`clay_layer_move_surface_regions` when held) / `clay_voxel_sculpt_grab` / `clay_mesh_sculptor_stamp (GRAB)` | all three | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
 | Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
 | Pinçar | `clay_layer_magnify_surface`, negative / `clay_voxel_sculpt_pinch` | all three | Moves the surface toward the brush centre. On a field it is the engine's radial scale of the assembled surface at a negative strength — no stroke op gathers — with the dab left **on** the surface, which is what makes the scale a gather: the line under the stroke stands proud and the flanks fall away. It resolves against every item of a blended form, which is why it can be a field brush at all — a per-item magnify gathers one contributor of a smooth union and leaves the rest |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
@@ -379,6 +380,14 @@ radius, long past where the bulge has saturated.
 
 The field keeps climbing toward its radius (0.3702 at a drag of 6.4). The grid
 moves in whole cells, which is the only difference left between the columns.
+
+What backs each column differs, and is worth knowing before quoting either. The
+grid's is held by `voxel_grab_taper.rs`, which drags a slab at this brush size
+and cell and asserts that a drag cannot outrun its radius. The field's was
+measured once, during the investigation recorded in the `grid-brush-radius`
+change, and no test holds it; it does agree to four places with the inverse
+map's closed form for a linear taper, `drag x radius / (radius + drag)`, which
+is the better reason to trust it.
 
 **This table was not always true.** Until the footprint fix below, a grid brush
 reached half as far as the same brush on a field, and this page compared the two
@@ -1301,7 +1310,8 @@ The transaction's own commit is *not* used. It installs the working volume as
 the layer's one item, consolidating the whole subtool on every stroke — heavy
 everywhere, since it discards the edit list and re-samples at the cache's cell
 size, and measurably damaging on Metal (roughness 7.82 against a ceiling of
-6.00, where the same stroke leaves 5.74 here; ClayCore#379). The stroke is laid
+6.00, where the same stroke leaves 5.74 here; ClayCore#379, since closed
+upstream — the choice below has not been re-measured against the fix). The stroke is laid
 down by the bake that was always used, which reproduces the old numbers exactly
 on every backend. The preview and the result are therefore different
 computations of the same smoothing, and they land 0.09 apart in roughness —
@@ -1315,9 +1325,15 @@ lattice and cannot be made to, since one padding cannot align three axes whose
 bounds have different remainders. So the preview is **relabelled rather than
 resampled**: it keeps a cache of its own, preview brick *K* is stored as that
 cache's brick *K*, and the constant translation between the two lattices is
-undone on the vertices. Nothing is interpolated, and
-`live_smooth::what_the_preview_showed_is_what_the_commit_installs` is what
-holds that to being exact rather than close.
+undone on the vertices. Nothing is interpolated in the picture itself. What a
+test holds is the comparison a sculptor can see:
+`live_smooth::the_stroke_lands_where_the_preview_showed_it` requires the
+committed surface to reach within a hundredth of a unit of where the preview
+did — compared as reach rather than vertex for vertex, because the commit is
+meshed from the cache's lattice and a preview vertex has no partner in it — and
+`claycore/tests/live_transactions.rs` holds the shape of the preview the
+relabelling rests on. An earlier version of this page named a test holding the
+two to being *exact*; it was written on a branch that never merged.
 
 One condition: the layer has to be an editable field, because the transaction
 refuses a protected one.
@@ -2232,9 +2248,12 @@ since nothing stops a new field layer standing beside a grid.
 The layer and the form in it are **one undo step**. They are two engine edits,
 and without the group one ⌘Z would take the form away and leave an empty
 subtool standing. Names are derived rather than asked for, and made unique:
-a voxel layer's grid is reachable only by name (ClayCore
-[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365)), so two subtools
-sharing one shadow each other's grid and a stroke lands on the wrong one. Every
+this application reaches a voxel layer's grid by name, so two subtools sharing
+one would shadow each other's grid and a stroke would land on the wrong one.
+The engine answered that with a lookup by layer id
+(`clay_document_voxel_layer_by_id`, which closed ClayCore
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365)); nothing here
+calls it yet, so the unique name is still what keeps two grids apart. Every
 route that creates a layer derives its name that way — the crossing included,
 which is the route that actually makes most voxel layers.
 
@@ -2254,10 +2273,10 @@ a boolean. A mesh subtool therefore moves, turns and scales as a whole like any
 other, and sculpting it lands where it is drawn.
 
 **Copiar subtool** takes a subtool already in the scene and makes another. The
-word is *copiar* and not *instanciar* deliberately: the engine has no
-instancing (ClayCore
-[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364)), so what this
-does is bake the source alone into a volume of its own — the other layers
+word is *copiar* and not *instanciar* deliberately. The engine now offers
+instancing — `clay_document_instance_layer`, which closed ClayCore
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364) — and this
+application has not taken it up, so what this does is bake the source alone into a volume of its own — the other layers
 hidden around the sampling, exactly as the subtool boolean bakes its operands,
 and the visibility the sculptor set restored on every exit path including the
 one where the bake refuses. The consequence is the point: **sculpting the copy
@@ -2571,7 +2590,7 @@ something would be the worse error.
 ### Retopology, UV and baking: the second half of the pipeline
 
 The pipeline is `sculpt -> retopo -> UV -> bake`. This application owns the
-first stage; **CyberRemesher v0.8.0** owns the rest, vendored beside ClayCore as
+first stage; **CyberRemesher v0.9.0** owns the rest, vendored beside ClayCore as
 a second engine with its own `-sys` crate and safe wrapper. Neither engine knows
 the other's types — both state that as a rule about themselves — so this
 application is the only place the correspondence exists.
@@ -2902,9 +2921,10 @@ swapping them changes it.
 
 **It is a resolved boolean, not a live one, and the interface says so.** The
 engine composes the layers of a document by hard union
-(`clay/scene/tape.h`) — a live layer-level boolean is ClayCore
-[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), filed and open —
-so what this does is sample each operand into a volume and combine the two in a
+(`clay/scene/tape.h`). A layer-level combine operation is in the pinned header
+now — `clay_document_set_layer_composition`, which closed ClayCore
+[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321) — and is not yet
+used here, so what this does is sample each operand into a volume and combine the two in a
 new layer. Moving an operand afterwards does not update the result.
 
 **Which is why the operands are kept.** They stay in the scene, hidden, and one
@@ -3160,10 +3180,11 @@ of supplanted originals nobody meant to keep.
 
 Either way it is **one undo**. The result keeps its derived name — `Forma ·
 voxel` rather than `Forma` — because that name says what the layer now holds,
-and because a voxel grid is reachable only by name (ClayCore
-[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365)): handing the
-result the source's name would put two layers through one grid for as long as
-an undo kept both in the document.
+and because this application reaches a voxel grid by name (the lookup by id
+that closed ClayCore
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365) is not adopted
+yet): handing the result the source's name would put two layers through one
+grid for as long as an undo kept both in the document.
 
 The removal and the reorder are engine entries of their own — a group does not
 swallow them — so the crossing records how many it left and steps over all of
@@ -3524,7 +3545,7 @@ Lateral and Superior under the viewport, Dura and Suave on the edge chips, and
 `label()` rather than from the string table. The four views, the four edge
 profiles, the three reference planes, the curve's joins and profiles, the six
 mask operations and the two detail notes are in the table now, in all three
-languages; the shell's untranslated-label ratchet (`LABELS_STILL_DRAWN`) stands
+languages; the shell's untranslated-label ratchet (`DOMAIN_STRINGS_STILL_DRAWN`) stands
 at ten, all of them identifiers — SDF, mm, a mesh's own name — rather than
 words.
 
@@ -4572,11 +4593,14 @@ collapsed — see [Interface](#interface); this line said otherwise until
 `the-regions-move-and-are-remembered` built it.
 
 **The rest of the domain's vocabulary, in more than one language.** The brush
-names go through the string tables now. The other 62 label arms across 14 enums
-— `Combine`, `BlendProfile`, `ViewPresetKind`, `RefPlane`, `MaskOp`,
-`GizmoMode`, `ExtrudeSide`, `Falloff` and the rest — are still Portuguese
-literals returned from `clayspace-model`, so the option bar and the viewport bar
-stay Portuguese whatever the menu says. `Strings::tool` is the shape the rest should follow.
+names go through the string tables, and so, since this paragraph was first
+written, do the combine picker, the blend profiles, the views, the falloffs,
+the mask operations and the extrude sides (`Strings::combine_name`,
+`falloff_name`, `mask_op_name` and their neighbours). What the shell still draws
+straight from a domain `label()` is counted rather than listed: the
+`DOMAIN_STRINGS_STILL_DRAWN` ratchet in `crates/clayspace-view/src/design.rs`
+stands at ten and may only go down. `Strings::tool` is the shape the rest should
+follow.
 
 **Bezier handles on a curve.** The curve tool offers three of the engine's four
 joins. The fourth is a cubic shaped by handles, which needs two more draggable
@@ -4608,13 +4632,19 @@ centre: anywhere on or inside the 0.35 template — `[0, 0, 0]`, `[0, 0, 0.2]`,
 while `[0, 0, 0.7]` and `[0, 0, 1.0]`, which mean nothing in that frame, lift
 the whole path evenly instead of leaving the mark the stamp carries.
 `claycore/tests/alpha_deformer.rs` measures it. Upstream, as
-[ClayCore#392](https://github.com/CyberdyneCorp/ClayCore/issues/392).
+[ClayCore#392](https://github.com/CyberdyneCorp/ClayCore/issues/392) — closed
+there, and still reproducing here: the test written to fail once a stroke
+carries its alpha into each stamp still passes at v0.120.0, so the refusal
+stands and the defect needs raising again.
 
 **A live preview under a voxel drag.** A grab composes destructively — the same
 total drag split into eight one-cell emissions moves nothing — so Mover on a
 grid holds the whole gesture and lands at pointer-up rather than following the
 pointer. [ClayCore#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)
-asks for the transactional shape the SDF drag already has.
+asked for the transactional shape the SDF drag already has, and is closed: the
+pinned header carries it as `clay_voxel_grab_begin`, `_update`, `_live`,
+`_commit` and `_cancel`. This application does not use it yet, which is why the
+drag still lands at pointer-up.
 
 **Exporting a hierarchy exports its cage.** The engine combines a document's
 mesh layers on the way out, and a hierarchy's layer is a mesh layer holding the
