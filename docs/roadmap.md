@@ -1,45 +1,61 @@
 # Roadmap
 
-Where the project stands, what is left, and what is still undecided. Task
-counts come from the tasks files under `openspec/changes/`, which are the
-authority.
+Where the project stands, what is left, and what is still undecided. The tasks
+files under `openspec/changes/` are the authority on what is done, and
+`openspec list` reports each open change with its ticked and total tasks. This
+page deliberately does not copy those counts: it carried "thirty-three changes,
+twenty-five complete" for a week in which both numbers moved and the first
+change it described had been archived.
 
-**Thirty-three changes, twenty-five of them with every task ticked.**
-`add-clayspace-desktop` stands at **107 of 109 tasks** — milestones 1 to 4
-delivered, milestone 5 all but closed.
-`make-representations-first-class` is **complete**, and is what took the
-application from one vocabulary to three; its own summary is below.
-`place-and-transform-objects` is **complete**: a shape placed in the scene
-stays an addressable item, with a manipulator on it and a boolean that follows
-it. `benchmark-every-operation` stands at **45 of 46** — the table went from
-one brush to every brush, operation, conversion and bake.
-`upgrade-engine-0-52-2` stands at **12 of 13**, and both remainders are the
-same task: re-recording the macOS baseline, which needs a macOS machine.
-`subtools` stands at **37 of 38**: a scene is now a list of separate forms,
-each activated by clicking it, each with its own mask, symmetry and rig, each
-movable whole, and any two of them resolvable into a third by a boolean.
-Switching onto a carried mesh subtool used to hold the interface thread for
-160 ms against a 16 ms bound; the document holds a sculptor per mesh now
-instead of one, and it is 0.00 ms — the last open budget in the suite, closed.
-Its one remainder — the per-layer mask reaching the engine's own — is closed by
-`close-brush-integration-gaps`, which also bound the brush verbs the engine had
-and the shelf did not reach: a brush colour and a Pintar that changes a pixel,
-Mover and Planar on a grid, Argila and Vinco on a field, and Mover Topológico
-as a tool of its own.
+**The first change is done.** `add-clayspace-desktop` — milestones 1 to 5 — was
+archived in #220, together with every change that was complete by then, when
+`openspec/specs/` became the living specification. What it left open is one
+product decision, the default representation, recorded under *Open decisions*.
+`make-representations-first-class`, `subtools`, the hierarchy changes and the
+engine upgrades that followed are delivered; their summaries below are kept for
+the reasoning in them rather than as status.
 
-And a fourth vocabulary. `a-hierarchy-the-domain-can-describe`,
-`a-hierarchy-that-is-sculpted-and-saved` and `a-stack-of-passes-on-a-hierarchy`
-are **complete** between them: the engine's subdivision hierarchy is a
-representation like the other three — crossed into from a mesh that becomes its
-cage, sculpted at a level independent of the one being drawn, carrying a stack
-of named passes whose strengths stay dialable, and saved in a side-car beside
-the document because the container carries the cage and nothing standing on it.
-`a-subtool-stretches-per-axis`, `a-preview-that-holds-the-whole-scene`,
-`memory-that-says-which-part` and `maintenance-between-strokes` are the rest of
-what the v0.78.0 pin made reachable.
+**In flight.** These changes are open, each with its own tasks file:
+
+| change | what is left |
+|---|---|
+| `retopology-uv-and-baking` | the seam tool and UV view, the retopology benchmark group, and the release checks; one task is blocked upstream, since CyberRemesher reports no solver |
+| `bound-the-chain-by-region` | all of it: consolidate a gesture's region with `clay_layer_consolidate_region`, which is wrapped and tested in `claycore` and called by nothing in the application |
+| `route-layer-reorder-and-protection` | all of it: the specification promises reordering and protecting a layer from the stack, and no command reaches `SceneViewModel::reorder` or `set_protection` |
+| `a-cut-drawn-on-the-view` | a perspective-error bound and an inversion modifier, both deferred with their reasons in the tasks file |
+| `gates-that-can-fail` | the macOS baseline and a hard refusal once it exists, wiring the remaining ViewModels, the untranslated-label ratchet, and splitting `App` and `ClayDocument` |
+| `grid-brush-radius` | re-recording the benchmark baseline the wider grid dab moved |
+| `benchmark-every-operation` | the macOS baseline, the same task `gates-that-can-fail` carries |
+
+**Left for later, and kept visible here.** Three changes finished what they set
+out to do and were archived with follow-ups deliberately unticked. This is where
+those stay on the list:
+
+- *Pricing a form* (#241): price a curve that grows by having points added far
+  apart, which reaches the same region by a path the change does not cover; and
+  price a stroke's region the same way, once a measurement says it needs it.
+- *Reusing GPU buffers* (#243): a long-session harness that records the memory
+  footprint's floor at intervals and asserts it does not ratchet; the reported
+  `in_use` against the real footprint, which belongs with memory reporting; and
+  the 192 `Validation Error` lines from the audited session, which may or may
+  not share the cause that was fixed.
+- *A refill with a budget* (#245): a per-layer sampler in the engine, so a bake
+  reads its operand instead of hiding the scene around it; the refill itself on
+  the engine's worker pool, which would bring a whole refill rather than one
+  command under a frame; a figure in the interface for a refill spanning several
+  frames, which an agent already reads as `outstanding_work`; and benchmarks for
+  a curve cancel and a large boolean, each with an interface-thread budget.
+
+**What the engine pin already offers and nothing here calls** is its own list,
+under *Upstream: released, not yet taken up here*. It is now the larger part of
+what is left, and none of it waits on anyone but this repository.
 
 Engine pinned at ClayCore **0.120.0**, at the tag rather than at `main` — the
-tag is a release, `main` is where they are still working. On the reference
+tag is a release, `main` is where they are still working. The pins before it
+were v0.116.0 (#140), which repaired a drag and stopped losing a pull; v0.113.0
+(#126), which removed the whole-field re-mesh on every stroke release and gave
+the coarse level gradient normals; and v0.84.0 (#87). `git log --
+vendor/ClayCore` lists every move. On the reference
 scene a dab is 2.1 ms median against a 50 ms budget and startup to first
 document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The twenty-three
 figures the v0.78.0 pin added — the hierarchy's own group, the deferred normal
@@ -56,7 +72,7 @@ and nothing since has been re-measured on that machine. See *What is slow and wh
 | M2 | Viewport | Delivered | Window, wgpu device, MatCap, camera, overlays, gizmo, device-loss recovery |
 | M3 | Sculpt loop | Delivered | Live strokes, incremental re-mesh, brush cursor, undo as one action per gesture |
 | M4 | Interface shell | Delivered | Panels, scene tree, layer stack, inspectors, design system |
-| M5 | Vocabulary, I/O, packaging | **In progress** | Masks and armatures, documents, performance gates, bundles |
+| M5 | Vocabulary, I/O, packaging | Delivered | Masks and armatures, documents, performance gates, bundles. Archived in #220 with one product decision open |
 
 ## Task groups
 
@@ -72,11 +88,11 @@ and nothing since has been re-measured on that machine. See *What is slow and wh
 | 8. Document lifecycle | M5 | 8/8 |
 | 9. Interface shell and design system | M4 | 16/16 |
 | 10. Performance and packaging | M5 | 13/13 |
-| 11. Close-out | M5 | 1/3 |
+| 11. Close-out | M5 | Archived in #220; the default-representation question in 11.1 is still open |
 
 ## The second change: three representations, first-class
 
-`make-representations-first-class` is complete and ready to archive. It began
+`make-representations-first-class` is complete and was archived in #220. It began
 as a shell that followed the active layer and grew into most of what the
 application now offers beyond the first change's sculpt loop.
 
@@ -121,11 +137,18 @@ meshed. ClayCore 0.30.0 added `clay_brick_cache_mesh_lod` (#93) and 3.9 closed
 on it — see *Level of detail, as delivered*. What is left on the list is
 waiting on a decision rather than on an engine.
 
-Seven upstream findings are open, and none of them blocks anything. Five carry
-numbers, and three of those were filed from the subtools work.
+**Every upstream issue this section tracks is closed.** Each entry below says
+what that means here, and it is not always the same thing: most were answered
+with an entry point that is in the pinned v0.120.0 header and **not yet adopted**
+by this application, one was adopted, and one — #392 — is closed upstream while
+the defect this repository measured still reproduces at the pin. The entries
+keep the reasoning that was written while they were open, because it is the
+design this application owes when it adopts each one.
 
-[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321) — **a layer carries
-no combine operation.** The document composes its layers by hard union
+[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321) — **closed upstream;
+`clay_document_set_layer_composition` is in the pinned header and not yet
+adopted.** When it was filed a layer carried no combine operation: the document
+composed its layers by hard union
 (`clay/scene/tape.h`), so there is no way to say that one layer *subtracts* from
 another. This is what a **live** subtool boolean waits on. What is built instead
 is a *resolved* one: each operand is sampled into a volume, the two are combined
@@ -256,10 +279,10 @@ proportional and gives it up. Naming it here because it is not visible from
 either the engine's side or the interface's, only from the seam.
 
 Either way the layer classifies GENERAL while it carries a soft join with a
-positive radius, once ClayCore #321 lands the predicate for it — `placement.cpp`
-reads a layer's *items* and not its composition today, so a scaled cutter with a
-smooth join currently reports SIMILARITY and would take the cheap invalidation
-it has not earned.
+positive radius, which is the predicate #321 promised — when this was written
+`placement.cpp` read a layer's *items* and not its composition, so a scaled
+cutter with a smooth join reported SIMILARITY and would have taken the cheap
+invalidation it had not earned. Check that before adopting the composition.
 
 So the engine folds and probes whether the operator actually reads an absence as
 a change; a union skips and an intersect does not. The artist-facing rule —
@@ -269,13 +292,13 @@ subtools "because there is nothing in them to combine". **When a layer
 composition is adopted here, the same filter has to reach it**, or the same two
 subtools give different answers depending on which route the sculptor took.
 
-**#321 is in implementation upstream and carries two things this application
-owes when it lands.** It was ordered last in its phase and moved to P0 on this
+**#321 has landed upstream and carries two things this application owes when it
+adopts it.** It was ordered last in its phase and moved to P0 on this
 repository's argument: a subtool *is* a layer here, so a subtractive **item**
 inside one does not reach the workflow — the artist wants to drag the cutter and
 watch the cut follow.
 
-*The container goes to minor 18, and a document using layer booleans will have
+*The container went to minor 18 for it, and a document using layer booleans has
 no downgrade path at all.* That is deliberate and was settled on a point this
 repository raised: every earlier minor degraded by losing something no artist
 authored — 16 → 17 costs "the payload deduplication and nothing an artist
@@ -293,45 +316,52 @@ minor a document was written at, plus "this document uses layer booleans and
 will not open in an older build". **No downgrade is to be offered**, because an
 offered one that quietly welded the cutter on would be worse than none.
 
-*A C-ABI host still cannot choose the minor it writes*, which is now a named row
-on ClayCore's own roadmap rather than a thing this repository re-discovers each
-pin. `clay_document_save` takes a path and `clay_document_save_memory` takes a
-blob; neither takes a version, and the parameter lives on the C++
-`serialize_document`. Three releases of upgrade notes have advised writing at an
-older minor for interchange and no C-ABI host has been able to take that advice.
-It cost nothing while the loss was deduplication. See `Document::FORMAT`.
+*A C-ABI host can now choose the minor it writes*, and this one does not yet.
+`clay_document_save_at_minor` and `clay_document_save_memory_at_minor` closed
+the gap in ABI 0.93.0, and the header says what each older minor loses — and
+refuses the two writes that would come back as a different sculpture, a
+composition below 18 and a hierarchy with detail below 19. Neither is wrapped
+in `claycore`. It is worth doing with the composition rather than before it:
+until a document can carry a composition, writing down loses only what no
+artist authored. See `Document::FORMAT`.
 
-[#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — `clay_document_undo`
-does not report what it changed, so an undo has to dirty the whole layer. Undo
-works and is correct; it costs far more than the edit it reverses. See *Undo,
-which costs far more than the edit it takes back*. Subtools made it cost a
-little more again: solo has no journal pause to hide behind, so its visibility
-commands land on the engine's stack and undo steps over them before it reaches
-the edit underneath — measured, a ⌘Z after a released solo on a three-subtool
-document is 203 ms against the 87 ms an undo costs alone, and every millisecond
-of the difference is a hop paying #210's whole-layer refill.
+[#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — **closed, and
+adopted.** `clay_document_undo_bound` / `_redo_bound` report the box a step
+applied, and `ClayDocument::undo` refills that rather than the whole layer —
+see *Undo, which cost far more than the edit it takes back*. The solo figure
+this entry used to quote, 203 ms for a ⌘Z after a released solo, was measured
+while every visibility hop still paid a whole-layer refill; #239 since refills
+only the layers whose eye a hop actually moved, and the figure has not been
+re-taken.
 
-[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364) — **instance layers
-are specified and have no constructor.** The header describes a layer that
-shares another's content under its own transform; nothing in the ABI creates
-one. This is what a *cheap* duplicate waits on. What is built instead is an
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364) — **closed;
+`clay_document_instance_layer` is in the pinned header and not yet adopted.**
+When filed, the header described a layer that shares another's content under its
+own transform and nothing in the ABI created one. That constructor is what a
+*cheap* duplicate needed. What is built instead is an
 honest copy: the source is sampled into a volume of its own, so sculpting the
 copy cannot reach the original, and the control says **copiar** rather than
 naming something this cannot do. Measured, a copy of the reference form is
-4.3 s — the whole of which is the sampling an instance would not do. Filed from
-this work.
+4.3 s — the whole of which is the sampling an instance would not do. Adopting it
+is a design question as much as a call: an instance that follows its source is a
+different tool from a copy that does not, and both are worth offering.
 
-[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365) — **a voxel grid is
-reachable only by name.** `clay_document_voxel_layer` takes a string, so two
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365) — **closed;
+`clay_document_voxel_layer_by_id` is in the pinned header and not yet
+adopted.** When filed a voxel grid was reachable only by name —
+`clay_document_voxel_layer` takes a string, so two
 layers sharing a name shadow each other's grid and a stroke lands on the wrong
 one. Harmless while a document held one grid; a scene of subtools is exactly
-where two layers come to share a name. Until it lands, every insertion derives a
-unique default name — `unique_layer_name`, which the mesh import and the stack's
-add control go through as well, since a collision made after the fact shadows a
-grid just as surely. Filed from this work.
+where two layers come to share a name. Every insertion still derives a unique
+default name — `unique_layer_name`, which the mesh import and the stack's add
+control go through as well — because this application still reaches a grid by
+name. Adopting the id lookup retires that as a correctness rule; a rename could
+then collide harmlessly.
 
-[#368](https://github.com/CyberdyneCorp/ClayCore/issues/368) — **a mesh
-sculptor cannot be built off the interface thread.** `clay_mesh_sculptor_create`
+[#368](https://github.com/CyberdyneCorp/ClayCore/issues/368) — **closed; the
+pinned header now documents building a sculptor as a read that may run off the
+interface thread, and nothing here does yet.** When filed, a mesh sculptor could
+not be built off the interface thread. `clay_mesh_sculptor_create`
 is a weld and an adjacency pass — 160 ms over the reference form's 296,216
 triangles — and a mesh layer has no other route to its surface, since the pick
 that follows an activation is answered by `clay_mesh_sculptor_raycast`. Holding
@@ -339,8 +369,11 @@ a sculptor per mesh took the *repeated* cost out; what is left is the first weld
 of each mesh, and it has nowhere to go on this side. The call resolves its mesh
 through a mutable path into the document and the ABI's only threading contract
 is the brick cache's, so the ask is either that contract extended to this call
-or a split between an off-thread adjacency build and a cheap adopt. Filed from
-this work. See *Subtools: what switching costs*.
+or a split between an off-thread adjacency build and a cheap adopt. The answer
+was the first: `clay_mesh_sculptor_create`, `_refresh` and `_refit` are reads
+on the brick cache's footing, and the header's advice is to call `_refresh` on
+the worker too, so the tree is warm for the first pick. `Sculptors` still builds
+on the interface thread. See *Subtools: what switching costs*.
 
 [#394](https://github.com/CyberdyneCorp/ClayCore/issues/394) — **`clay_item_set_gate`
 was accepted and inert, and is fixed in the 0.73.0 pin.** The entry point that
@@ -364,20 +397,22 @@ turned around to hold the protection, and measured through the application an
 unmasked subtracting stroke takes the centre of the starting form from 1.0 to
 0.825 where a masked one leaves it at 1.0.
 
-**A mesh layer's geometry revision does not move when history replaces its
-triangles**, and this one is ours to file. `clay_document_mesh_layer_revision`
-is documented as bumped "every time a layer's triangles are replaced wholesale",
-and the reason given for it existing is the cache a wholesale replacement
-invalidates — an adjacency, a BVH, a live sculptor, "wrong in a way nothing else
-detects". Measured on 0.73.0: a layer attached at revision 1 and rebuilt to
-revision 2 comes back to its original 119,100 triangles under undo and to the
-rebuilt 37,752 under redo, at revision 2 throughout. The one moment the number
-was added for is the one moment it is silent — and it is not theoretical, since
-a sculptor who rebuilds, undoes and keeps working gets a refused stroke on the
-next dab. `ClayDocument` records the engine depth each rebuild sits at and drops
-the sculptor when history stands on either side of one;
-`claycore/tests/voxel_remesh.rs` holds the gap as an equality that fails the day
-the engine closes it.
+**A mesh layer's geometry revision did not move when history replaced its
+triangles** — fixed in v0.113.0, and kept here for how it was found.
+`clay_document_mesh_layer_revision` is documented as bumped "every time a
+layer's triangles are replaced wholesale", and the reason given for it existing
+is the cache a wholesale replacement invalidates — an adjacency, a BVH, a live
+sculptor, "wrong in a way nothing else detects". Measured on 0.73.0: a layer
+attached at revision 1 and rebuilt to revision 2 comes back to its original
+119,100 triangles under undo and to the rebuilt 37,752 under redo, at revision 2
+throughout. The one moment the number was added for is the one moment it is
+silent — and it is not theoretical, since a sculptor who rebuilds, undoes and
+keeps working gets a refused stroke on the next dab. `ClayDocument` used to
+record the engine depth each rebuild sat at, to drop the sculptor when history
+stood on either side of one; `claycore/tests/voxel_remesh.rs` held the gap as an
+equality written to fail the day the engine closed it. It failed on v0.113.0 —
+the revision now moves on every history step — and the depth record came out
+with it.
 
 **A placed node's transform, parameters and operation could be set and never
 read** — [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317), and as
@@ -424,15 +459,19 @@ scaled by 1.25 reports a box 1.0 wide, and an object placed at 0.9 in a
 mirrored layer reports its bound centred at the origin.
 
 Asked for as `clay_layer_node_transform`, `clay_layer_node_params` and
-`clay_layer_node_op_blend`, which is #317. `clayspace-app/tests/claycore_repros.rs`
-holds the gap as it stands today and fails when it closes, which is when
-`clayspace_engine::objects`'s table comes out rather than being adapted. That
-the issue is closed and the readers are absent from the pinned header is the
-reason the tripwire is a test rather than a note: a changelog says a thing is
-done, and a test says whether this build can call it.
+`clay_layer_node_op_blend`, which is #317 — and, as above, all three are in the
+pinned header. The only callers are `clayspace-app/tests/claycore_repros.rs`;
+`clayspace_engine::objects`'s side-car table is still what a reopened document
+reads its placed shapes from. Retiring it is a change of its own, and the
+readers are why it can now be written.
 
-[#392](https://github.com/CyberdyneCorp/ClayCore/issues/392) — **a stroke's
-template alpha is not resolved into each stamp's frame.**
+[#392](https://github.com/CyberdyneCorp/ClayCore/issues/392) — **closed upstream,
+and the stroke half still reproduces here.** A stroke's template alpha is not
+resolved into each stamp's frame: `alpha_deformer.rs`'s tripwire,
+`a_stroke_does_not_carry_the_chain_into_each_stamp`, still passes at v0.120.0,
+which is what it does for as long as the defect stands. The fix that closed the
+issue is about a *placed* item's stamp (see above), so this needs raising again
+as its own issue.
 `clay_layer_apply_stroke` documents its item as "the stamp template scaled to
 each stamp's radius", and `clay_item_add_alpha` puts the stamp's centre, extent
 and radius in the *item's own* space — so a caller places the alpha on the
@@ -561,10 +600,27 @@ Taken up here, each one flipping a test rather than being read about.
 
 ### Upstream: released, not yet taken up here
 
-**Twenty-nine entry points, added by ClayCore v0.84.0, of which this
-application calls none.** That is a deliberate line rather than a backlog: a pin
-move should be separable from what the pin enables, so that a bisect over an
-upgrade lands on the upgrade. Two of them are worth real work.
+**What the pinned v0.120.0 header offers and this application does not call.**
+Keeping a pin move separate from what the pin enables is a deliberate line — a
+bisect over an upgrade should land on the upgrade — but it only works if what was
+left behind stays listed. Each entry below was checked against the header and
+against a search of the workspace for a caller outside the `-sys` crates.
+
+*Answers to issues this repository filed*, each discussed under *What is
+blocked, and what is not*:
+
+| entry point | answers | what adopting it buys |
+|---|---|---|
+| `clay_document_set_layer_composition` | [#321](https://github.com/CyberdyneCorp/ClayCore/issues/321) | a live subtool boolean on field subtools, in place of the resolved one |
+| `clay_document_instance_layer` | [#364](https://github.com/CyberdyneCorp/ClayCore/issues/364) | a duplicate that follows its source, beside the copy that does not |
+| `clay_document_voxel_layer_by_id` | [#365](https://github.com/CyberdyneCorp/ClayCore/issues/365) | grids reached by id, so a name collision stops being a correctness hazard |
+| sculptor build off the interface thread | [#368](https://github.com/CyberdyneCorp/ClayCore/issues/368) | the first weld of a mesh — ~165 ms — off the click |
+| `clay_voxel_grab_begin` / `_update` / `_live` / `_commit` / `_cancel` | [#393](https://github.com/CyberdyneCorp/ClayCore/issues/393) | a grid drag that follows the pointer instead of landing at pointer-up |
+| `clay_document_save_at_minor`, `_memory_at_minor` | ABI 0.93.0 | writing for an older build, which matters once a composition exists |
+| `clay_layer_node_transform`, `_params`, `_op_blend` | [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) | retiring the placed-shape side-car in `clayspace_engine::objects` |
+| `clay_layer_remove_deformer` | — | taking a deformer off without an undo, which the live Move preview spends two edits a segment on |
+
+*Offered without being asked for:*
 
 **The layer placement gesture** — `clay_layer_placement_begin` / `_update` /
 `_commit`. `place_layer` writes a transform and refills the union of the old and
@@ -589,9 +645,10 @@ Smaller and unclaimed: stamp assets (`clay_layer_place_stamps` and its capture),
 and two diagnostics that would sit beside the ones already exported —
 `clay_document_extent_stats` and `clay_layer_warp_cost_get`.
 
-Every *issue* filed from this work has been released and taken up; what is
-listed above was never filed from here, because it was never a gap this
-application had reported.
+Also wrapped in `claycore` and not yet offered by the application: the adaptive
+surface, `clay_dynamic_*`, wrapped in #219; and `clay_layer_consolidate_region`
+with its plan, which `bound-the-chain-by-region` is built around. And
+`clay_mesh_concat`, which a voxel export that keeps its grids would use.
 
 ### Upstream: available and not needed
 
@@ -607,17 +664,10 @@ shape a mesh layer has always had. The next step is a per-chunk slot layout in
 that buffer, which is what `SurfaceGeometry` already does for the field side;
 it is not owed until a document holds a grid past about two million triangles.
 
-**Four numbered upstream issues are open:**
-[#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that
-cannot say what it changed;
-[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), a layer with no
-combine operation, which is what a live subtool boolean waits on;
-[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364), instance layers
-with no constructor, which is what a cheap duplicate waits on; and
-[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365), a voxel grid
-reachable only by name. Each costs latency or a cheaper implementation and none
-of them blocks anything — see *What is blocked, and what is not*. Every other
-issue filed from this work has been released.
+**No upstream issue filed from this work is open.** #210 is adopted; #321,
+#364 and #365 are answered in the pinned header and listed above as not yet
+taken up; #392 is closed and still reproduces, and needs filing again. See *What
+is blocked, and what is not*.
 [#378](https://github.com/CyberdyneCorp/ClayCore/issues/378) — a live brush
 preview that could not be composed with the rest of the document, which is why
 a live Suavizar used to open only where the layer being smoothed was the only
@@ -625,21 +675,22 @@ visible field subtool — was released in 0.78.0 and is now adopted: the documen
 is evaluated over every visible SDF layer *except* the one under the brush,
 once at pointer-down, and the preview is composed with it by a minimum. See
 `crates/clayspace-engine/src/live.rs`.
-[#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is released and
-now linked: the readers it promised arrived with the 0.60.0 pin and the
-sidecar they retire is still here, which is a change of its own.
+[#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is released: the
+readers it promised arrived with the 0.60.0 pin and the side-car they retire is
+still here, which is a change of its own.
 
 ## What is left
 
-**11.1, the open decisions.** Four of them, below. They gate archiving the
-change and nobody but the product owner can settle them.
+Milestone 5 landed — masks and armatures, document lifecycle including
+autosave and recovery, mesh import and export, diagnostics, units,
+instrumentation, bundles and attribution, backend parity and the cross-platform
+document check — and the change was archived in #220. Of its close-out, the one
+thing left is the default-representation decision under *Open decisions*, which
+nobody but the product owner can settle.
 
-**11.3, archive.** After 11.1.
-
-That is the whole list. Everything else in milestone 5 landed: masks and
-armatures, document lifecycle including autosave and recovery, mesh import and
-export, diagnostics, units, instrumentation, bundles and attribution, backend
-parity and the cross-platform document check.
+What is left beyond it is the *In flight* table at the top of this page, the
+follow-ups listed beside it, and the entry points under *Upstream: released,
+not yet taken up here*.
 
 ### Brush coverage, as delivered
 
@@ -665,9 +716,10 @@ by its falloff, so a one-cell step moves the middle of the region and not its
 rim — which inside solid material is no change at all. Measured on a slab with
 a 0.35 drag, delivered whole it moved material at every brush size tried, and
 delivered as the eight segments a pointer makes, seven changed nothing. So it
-joins the tools that land at pointer-up, at the cost of a live preview, and the
-ask for one back is
-[#393](https://github.com/CyberdyneCorp/ClayCore/issues/393) — which carries the
+joins the tools that land at pointer-up, at the cost of a live preview. The ask
+for one back was
+[#393](https://github.com/CyberdyneCorp/ClayCore/issues/393), answered upstream
+with a grab transaction this application does not use yet — which carried the
 sharper measurement: the same total drag split 1 / 2 / 4 / 8 ways moves 59 / 61
 / 0 / 0 cells at a 24-cell footprint, and the coarser splits *inflate* the form
 (2109 occupied cells becoming 2371) rather than translating it. And **the mask
@@ -692,9 +744,10 @@ stack, where before it wrote into a field beside the document and recorded
 nothing. Nine hundredths of a millisecond, against a fifty-millisecond dab
 budget, for a mask that survives the file and undoes as one gesture.
 
-What is still upstream, with the measurement behind each: SDF stroke alphas
-need the stamp resolver to carry the template's deformer chain;
-`clay_item_set_gate` is accepted and inert. The radial scale's own gap is
+What is still upstream, with the measurement behind it: SDF stroke alphas need
+the stamp resolver to carry the template's deformer chain (#392, closed and
+still reproducing). `clay_item_set_gate` is no longer on this list — it was
+fixed in the 0.73.0 pin and `stroke_sdf` gates with it. The radial scale's own gap is
 closed — `clay_layer_magnify_surface` is the assembled-surface resolver SDF
 Pinçar needed, and Pinçar goes through it. A faithful SDF Standard is measured
 upstream and deliberately not shipped, at nine times relief's cost for a stroke
@@ -713,11 +766,12 @@ it visibly worse.
 
 Three things the coarse path does deliberately:
 
-- **It is face-shaded.** Level 1 refuses gradient normals rather than
-  downgrading them — a coarse vertex sits on the mip's surface rather than the
-  field's, where a per-brick culled tape and the whole document's stop
-  agreeing. `claycore_lod.rs` pins that refusal, because the host draws face
-  normals *because* of it.
+- **It is gradient-shaded, since v0.113.0.** Level 1 used to refuse gradient
+  normals rather than downgrade them, so the coarse surface was face-shaded by
+  construction — and face normals on a coarse lattice measure up to 84.78
+  degrees off the field. ClayCore #550 answers a gradient at a level, the
+  coarse path asks for one (`SurfaceGeometry::level_for`), and
+  `claycore_lod.rs`'s `level_one_answers_gradient_normals` holds it.
 - **It falls back rather than failing.** A coarse key with no mip is refused by
   the engine, and one dirty child is enough, so the adapter hands over only the
   keys that have one. With none, the request draws the full surface: slow beats
@@ -729,15 +783,29 @@ Three things the coarse path does deliberately:
 Switching level is a full re-mesh. It is affordable only because the hysteresis
 band makes it rare; incremental syncing happens at full resolution only.
 
+**Coarse during a drag is unblocked, and deliberately not scheduled.** It was
+refused for the shading reason above: a coarse surface drawn under a moving
+brush would have been visibly worse, not merely cheaper. That reason went with
+v0.113.0. What it would be worth now depends on what a drag costs now that
+v0.113.0 removed the whole-field re-mesh on every stroke release, and this
+workspace cannot yet say:
+`timed()` spans are nested and `FrameLog` keeps a worst and a count per
+operation but never a sum, so there is no flat profile to read a drag's share
+from. One structural limit stays whatever that shows — a *live* gesture draws
+from the preview's own cache, which builds no mips, so `level_for` never goes
+coarse while one is open. Recorded from `upgrade-engine-0-113-0`, which left it
+here as its one open note.
+
 On the reference form the drop takes 283,612 triangles to 86,130, and the share
 of the frame that can tell falls from 2.1% filling the screen to 1.3% at the
 distance it actually drops at. Two things the coarse surface does not do well,
 both looked at rather than assumed — see `visual_lod.rs` and the
 [known-degraded table](features.md#known-degraded):
 
-- It is faintly speckled, because level 1 forces face normals and degenerate
-  triangles shade badly under them. Not an LOD defect: level 0 with face
-  normals speckles identically, and with gradient normals it does not.
+- It was faintly speckled while level 1 forced face normals, because
+  degenerate triangles shade badly under them — level 0 with face normals
+  speckled identically. With gradient normals at level 1 that cause is gone;
+  `visual_lod.rs` has not been re-read against it since.
 - It has no mip for coarse blocks on the edge of the surface band, because one
   needs all eight children evaluated and the cache evaluates only surface
   bricks — 70 of 242 on the reference form, and no amount of settling fixes it.
@@ -764,6 +832,35 @@ subtractive item placed beside the rig, which carved a ball but left the
 membrane along its links drawn, lost the sign on reload, and forced negatives
 to be leaves. The sign is now the node's own, so all three go away and the rig
 is a single item again — `armature_signs.rs` holds each of the three.
+
+### Refusals, and a table that says what a tool is
+
+Delivered since the v0.120.0 pin, and worth recording together because they are
+one idea: **what the application knows about an operation has to reach whoever
+asked, in a form they can act on.**
+
+- **A refusal reaches its caller.** About ten command families run by the
+  composition root wrote their refusal to stderr and returned nothing, so a
+  repair refused on an SDF layer was a button that did nothing, and the agent
+  door answered success over a byte-identical document (#222). The door then
+  read five of the application's fifteen notice channels, so a boolean over a
+  hierarchy answered success and produced no layer (#226). Every channel is now
+  read, from one list the tests hold against the ViewModels.
+- **The guards live in the model**, so every caller meets them: the door could
+  apply `layer/add` and `history/undo` mid-stroke while an agent held a
+  gesture, and begin a stroke on a caged layer (#240).
+- **The capability table is checked against the linked engine**: every entry
+  point it names is looked up in the symbols `claycore-sys` actually generated,
+  in `clayspace-engine/tests/table_truth.rs` (#223, #230). And each cell is a
+  typed binding — the call, what the tool means by it, its family, and a
+  fidelity of `Native`, `Specialized`, `Approximation` or `Recipe` — so "two
+  tools that differ only in name" is a failing test rather than an audit
+  finding (#247). Two such pairs exist today, on a grid and on a field, and are
+  named rather than hidden.
+- **A value that was clamped says so.** A shape parameter is bounded by what the
+  brick cache can hold, a placement is priced as a whole, and a clamp comes back
+  on a remark channel rather than as a refusal, because the change happened
+  (#241).
 
 ## What is slow and why
 
@@ -815,6 +912,28 @@ current parallel mesher, the same release-mode gesture stays inside the frame
 budget while using gradient normals immediately, so the deferred refinement
 queue was removed. `gesture_end.rs` guards the latency, and the visual tests
 hold the live SDF result against a full rebuild.
+
+### What was slow and nobody was sculpting
+
+Everything above is the cost of an edit. The worst costs found since the
+v0.120.0 pin were not, and each was reported from a real session rather than a
+benchmark — which is the point worth keeping, since no figure in the baseline
+would have moved for any of them:
+
+| found | cause | now |
+|---|---|---|
+| an idle document at 185–200% CPU | the status area's memory meter walked the whole brick cache every frame (`BrickCache::surface_bricks`) | read once a second (#238) |
+| a display change over hidden grids costing a tenth of a second | every grid's smooth surface was rebuilt, seen or not | hidden grids are built on the frame that draws them (#239) |
+| an undo of a solo leaving subtools undrawn | a visibility hop refilled the *active* layer, not the ones whose eye moved | the hop refills the layers it wrote (#239) |
+| a session climbing to 26 GB and staying there | a fresh vertex and index buffer per settle, a staging buffer per key write, and nothing polling the device to free them | buffers grow and are kept, writes merge, the device is polled once a frame (#243) |
+| cancelling a thick tube held the window for over thirty minutes | a refill drained the cache to empty on the interface thread | a `RefillBudget` of half a frame, the rest pumped on later frames (#245) |
+| an autosave of a soloed document freezing for 146 s, twice | the save wrote the sculptor's visibility into the live scene and back, refilling it both times | the visibility is lent through the bracket #245 added, and nothing is refilled (#246) |
+
+What they share is a cost proportional to the *sculpture* paid on a path that
+was proportional to *nothing* — a meter, a hidden layer, a save — so a small
+test document never showed it. Most of their regression tests hold counts —
+bricks dirtied, grids built, reads of the engine — rather than durations, which
+is what lets them hold on a shared runner.
 
 ### Where the frame time is not
 
@@ -1274,7 +1393,29 @@ active layer's whole bound. Measured on the same fixture, moments apart —
 It also fixed a bug rather than only a cost: the old fallback was the *active
 layer's* bound, so undoing an edit made on a different subtool re-meshed the
 wrong one and left the changed surface stale — the undo looked like it had done
-nothing. The section below is what that was.
+nothing. The section after next is what that was.
+
+### Undo, which took back the wrong thing
+
+Cost was half of it. The other half was that one ⌘Z did not reliably take back
+one thing, and none of it showed in a figure — each was reproduced as a
+sequence of commands and the wrong result at the end of it. The history a
+sculptor presses is the sculpting ViewModel's stack of how many engine entries
+each action spent; a command that banked nothing left the next undo to spend
+the *previous* command's count on entries that were not its own.
+
+| found | now |
+|---|---|
+| two history records made at one engine depth could not be ordered, and a depth reached again matched a record whose future had been overwritten | the document keeps a sequence of its own and orders every record by it (#221) |
+| a mask edit banked nothing, so two undos walked back seven entries | every mask edit is one action (#225) |
+| cancelling a mesh stroke took back the gestures underneath it, and on a fresh layer the layer | a cancel reverts to the depth its gesture opened at, never past it (#227) |
+| a subtool added, a shape inserted and a cage applied, then one undo — which deleted the subtool | every command that changes the document measures its cost and banks it as one action (#234) |
+| a rebuild banked nothing, and a grid pass is no engine entry at all | a rebuild is one action and a pass change is recorded by the document itself; a rebuild mid-stroke is refused (#236) |
+| a rig or curve went out of step with the document after a history step, and a rig's radii halved each cycle | both are read back after every step (#235) |
+| an agent could not tell which step an undo would take | `state` names `next_undo` and `next_redo` (#244) |
+
+What is still outside the history is the engine's to say: removing a grid's
+pass and merging one down are not steps, because `clay.h` records neither.
 
 ### Undo, which cost far more than the edit it takes back — as it was
 
@@ -1346,11 +1487,13 @@ the trade deserves a decision rather than a commit.
 because each half is dilated by a ring of its own. That is now affordable; it
 was not before the shading split.
 
-**Offer consolidation.** `clay_layer_consolidation_cost` already reports
+**~~Offer consolidation.~~ Taken.** `clay_layer_consolidation_cost` reports
 `advises_consolidation: true` at 203 items, and consolidating takes a dab from
-56 ms back to 13 ms. Nothing surfaces it. It costs 6.4 s on that layer, so it
-belongs on a deliberate action, not mid-stroke. The specification requires it
-never run unasked; it does not require us to keep quiet about it.
+56 ms back to 13 ms. It costs 6.4 s on that layer, so it belongs on a deliberate
+action, not mid-stroke — and the field-health row under the layer stack now
+offers it when the engine advises it and the cure fits
+(`field_health_control` in `clayspace-view/src/shell/left.rs`), and never acts
+on its own.
 
 ### Subtools: what switching costs, and what a boolean costs
 
@@ -1362,7 +1505,7 @@ suite:
 | `subtool.activate.sdf` | **0.00 ms** | making a field subtool the sculpt target |
 | `subtool.activate.mesh` | **0.00 ms** | making a *carried mesh* subtool the sculpt target, once its mesh has been welded |
 | `subtool.solo` | 14 ms mean, 21 ms p95 | showing one subtool alone and putting the scene back |
-| `subtool.solo_undo` | 203 ms | a ⌘Z after a released solo, against the 87 ms an undo costs alone |
+| `subtool.solo_undo` | 203 ms | a ⌘Z after a released solo, against the 87 ms an undo costs alone — measured before #239 narrowed a visibility hop's refill, and not re-taken |
 | `subtool.copy` | 4.3 s | one subtool sampled into a subtool of its own |
 | `subtool.boolean` | 10.2 s | two operands sampled and combined into a third subtool |
 
@@ -1402,12 +1545,14 @@ document above costs 44.8 ms, and warming its sculptors there would make it
 about 395 ms — a nine-fold regression on open, paid whether or not the sculptor
 is ever used, to save a one-time cost on a click.
 
-Where it could go is a worker thread, and that is an engine question rather
-than a host one: `clay_mesh_sculptor_create` resolves its mesh through a
-mutable path into the document, and the ABI's only threading contract is the
-brick cache's. Asked upstream as
-[#368](https://github.com/CyberdyneCorp/ClayCore/issues/368), which quotes that
-contract as the shape the answer could take.
+Where it could go is a worker thread. That was an engine question when this
+was measured — `clay_mesh_sculptor_create` resolved its mesh through a mutable
+path into the document, and the ABI's only threading contract was the brick
+cache's — and it has been answered:
+[#368](https://github.com/CyberdyneCorp/ClayCore/issues/368) is closed, and the
+pinned header documents building, refreshing and refitting a sculptor as reads
+that may run on a worker. So it is a host question now, and not yet taken up:
+`Sculptors` still builds on the interface thread.
 
 **A boolean is two of a copy, and a copy is one sampling.** 4.3 s for one
 operand at the brick cache's 0.02 cell over the reference form's box; 10.2 s for
@@ -1419,16 +1564,21 @@ sculptor's, and it is the term these figures scale with.
 
 ## Continuous integration
 
-Eleven jobs. Green: Linux CPU-only, Linux Vulkan, format/lint/audit, layering,
-packaging, OpenSpec strict, the performance gate, and the Linux half of the
-document-bytes matrix.
+The jobs are the ones `.github/workflows/ci.yml` names, and a run's page lists
+them; this page stopped counting them after quoting eleven while there were
+more. The test matrix runs debug and release on Linux CPU-only, Linux Vulkan,
+macOS CPU-only and macOS Metal, with the Metal visual tests as a shard of their
+own; beside it run format/lint/audit, layering, packaging, OpenSpec, the
+document-bytes pair and the agreement between them, and Performance, on
+`macos-14`. `Record a baseline` runs only when dispatched by hand.
 
-The four macOS rows — CPU-only, Metal, the macOS half of document-bytes, and
-the digest comparison that waits on it — were red on
-[#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which **shipped in
-0.29.0**. Nothing here has confirmed them green since: it takes a run on the
-macOS runners, and the pin moved two releases without one. Treat them as
-unknown rather than as blocked.
+The macOS rows are no longer unknown. They were red on
+[#71](https://github.com/CyberdyneCorp/ClayCore/issues/71) until 0.29.0 shipped
+it, and every macOS row has since been green on `main` — the last complete run
+before this was written, on #245, was green on all eighteen jobs that ran. The
+one known weakness is a timing budget: `gesture_end`'s frame bound has failed
+once on the macOS CPU-only release row and passed on a re-run of the same
+commit, which is the runner rather than the code (#160).
 
 ### Six ways a gate can be real and unenforced
 
@@ -1459,8 +1609,9 @@ taken.
 **A gate compiled but never run.** `agent_end_to_end` sits behind the
 `agent-e2e` feature, and the lint job builds it without running it under a
 comment that says *"It is still compiled and linted here, where the runner is
-cheap and the link is fast, so it cannot rot unnoticed."* It has rotted — the
-target fails, and failed before the v0.84.0 pin moved. This is the worst of the
+cheap and the link is fast, so it cannot rot unnoticed."* It had rotted when
+this was written — the target failed, and failed before the v0.84.0 pin moved —
+and has not been re-checked since. This is the worst of the
 three, because a compile is not a run and a comment claiming otherwise converts
 an unknown into a false known.
 
@@ -1499,35 +1650,38 @@ and engine produced it. Budget breaches are printed but not enforced without
 `--enforce-budgets`: the specification gates on a change *raising* latency, and
 a gate that is red the day it is installed is one people learn to ignore.
 
-The Linux baseline reads engine 0.52.2 and the pin is at 0.60.0. It was left
-there deliberately when the pin moved: everything that moved across that
-upgrade moved *downward* — a dab's p95 1.88x, solo's p95 1.61x, the locality
-dab 1.40x, undo 1.13x, over two full runs — and re-recording would spend a
-baseline whose only purpose is to catch the next thing that goes up. Two runs
-rather than one because the first reported a 53% regression on a live boolean
-drag that the second put back inside the spread; the machine was shared during
-the first. A filtered `bench-only` run is not evidence either way: asked for
-the dab group alone it reports a median of 5.56 ms where the full run reports
-1.62, which is the reason the recipe refuses to record a baseline from one.
+The Linux baseline reads engine 0.52.2; the pin is at 0.120.0. It was left there
+deliberately when the pin moved to 0.60.0, and the reasoning then was that
+everything that moved across that upgrade moved *downward* — a dab's p95 1.88x,
+solo's p95 1.61x, the locality dab 1.40x, undo 1.13x, over two full runs — and
+re-recording would spend a baseline whose only purpose is to catch the next
+thing that goes up. Two runs rather than one because the first reported a 53%
+regression on a live boolean drag that the second put back inside the spread;
+the machine was shared during the first. A filtered `bench-only` run is not
+evidence either way: asked for the dab group alone it reports a median of 5.56
+ms where the full run reports 1.62, which is the reason the recipe refuses to
+record a baseline from one.
 
 The figures below are that baseline's own conditions: engine 0.52.2,
 CUDA, 1280×800, at 0.13 load per core, with a dab median of 2.10 ms against a
 50 ms budget and a locality key ratio of 0.75 against a budget of 2. The macOS
-baseline still reads engine 0.29.1 and cannot be re-recorded from here — it
-takes a run on that hardware, the same condition the macOS CI rows are waiting
-on.
+baseline still reads engine 0.29.1. It no longer needs a Mac nobody has: the
+`Record a baseline` job runs the same recording on `macos-14` when dispatched,
+and what is left is committing its artifact — task 1.5 of `gates-that-can-fail`
+— after which the Performance job's refusal becomes a failure.
 
 ## Open decisions
 
-These change what gets built, and are better settled early than late. They are
-task 11.1, and they gate archiving the change.
+These change what gets built, and are better settled early than late. They
+were task 11.1 of `add-clayspace-desktop`, which was archived in #220 with the
+last of them still open.
 
 **One is still open.**
 
 **Default representation — open.** A new document currently opens SDF-first.
 Several verbs exist on one representation only, so this decides what the first
 minute of the application feels like. Nobody but the product owner can settle
-it, and 11.3 waits on it.
+it.
 
 The other three are settled, kept here because the reasoning is what makes them
 stay settled:
@@ -1584,7 +1738,8 @@ edge and nothing else. A region larger than the ceiling is refused rather than
 coarsened.
 
 A bulk cell write, a mask step a host could hold open across several calls, or a
-footprint the caller could orient would each close this; none exists in 0.60.0.
+footprint the caller could orient would each close this; none exists at v0.120.0
+either.
 Worth filing upstream, and not blocking: see
 [features.md](features.md#freezing-a-region-by-drawing-round-it).
 
@@ -1594,7 +1749,7 @@ That file was recorded against ClayCore 0.52.2, and `bench-compare` on this tree
 is already red without any of this work: run on a clean checkout of `main` it
 reports regressions across the SDF brushes, the crossings, locality and startup,
 which is the engine pin moving rather than anything a change did. The figure
-goes in when the baseline is re-recorded for 0.60.0. A figure the baseline lacks
+goes in when the baseline is re-recorded. A figure the baseline lacks
 is reported as `new` and does not fail the gate, so nothing is hidden by leaving
 it out.
 
@@ -1672,10 +1827,14 @@ from the accumulation and cannot insulate its own endpoints.
 
 The other option the ABI offers is `clay_sdf_smooth_commit`, which installs the
 volume as the layer's *one* item — consolidating the whole subtool on every
-stroke, and measurably worse on Metal (ClayCore#379). What is missing is the
-middle: merge a baked region into the layer and leave the parametric items
-outside it alone, which would make repeated work on one patch O(1) in gestures
-rather than O(n). Filed upstream.
+stroke, and measurably worse on Metal (ClayCore#379, since closed). What was
+missing is the middle: merge a baked region into the layer and leave the
+parametric items outside it alone, which would make repeated work on one patch
+O(1) in gestures rather than O(n). The engine has it now —
+`clay_layer_consolidate_region`, with `clay_layer_plan_region_merge` to show
+what it would absorb first — wrapped and tested in `claycore`
+(`consolidate_region.rs`) and not yet called by the application. Adopting it is
+`bound-the-chain-by-region`.
 
 **The Move transaction's preview is not carried by the C ABI.** ClayCore's C++
 `SdfMoveTransaction` exposes `preview_layer()` — a private copy of the layer
@@ -1690,9 +1849,10 @@ holds the three facts it rests on — a written grab moves the surface, each is
 one undo entry, and a commit accepts a layer that was edited and restored,
 because its stamp is derived from content. But it spends two document edits per
 pointer event to draw something the engine already has in hand, and it would be
-a plain `preview_layer()` read if the ABI carried one. Worth asking upstream for
-alongside a remove-deformer call, which the ABI also lacks: `add` has no
-inverse but undo.
+a plain `preview_layer()` read if the ABI carried one, which it still does not.
+A remove-deformer call, which this paragraph used to list beside it as missing,
+is in the pinned header — `clay_layer_remove_deformer` — and is not used here:
+the preview still takes its grabs back by undo.
 
 **The live Smooth's commit is not used, and that is a decision to revisit.**
 `clay_sdf_smooth_commit` installs the working volume as the layer's one item,
@@ -1703,9 +1863,9 @@ platforms as the control (ClayCore#379) — and it is heavy everywhere, since it
 discards the edit list and re-samples the subtool at the cache's cell size. So
 the transaction draws the preview and the stroke is laid down by the bake that
 was always used. The cost is that the two are different computations of the
-same smoothing; measured, they land 0.09 apart in roughness. If #379 is
-answered, taking the commit would make the preview exact and is worth
-re-measuring then.
+same smoothing; measured, they land 0.09 apart in roughness. #379 is closed
+upstream, so taking the commit — which would make the preview exact — is worth
+re-measuring now; it has not been.
 
 **A live smoothing gesture costs 186 ms when the pointer goes down.** That is
 the transaction sampling the whole layer once, and it is the trade the design
@@ -1716,15 +1876,16 @@ cache draws at — which would cost resolution at the commit, so it is not taken
 while the number sits where it does. `clayspace-engine`'s `live` module holds
 the measurements.
 
-**Move still leaves one grab per segment.** Measured, a ten-segment drag leaves
-a deformer chain of ten where `clay_sdf_move_*` would leave one, and a long
-session's chains are what the complexity policy eventually collapses. The
-transaction is wrapped and tested (`claycore/tests/live_transactions.rs`) and
-deliberately not adopted: it writes nothing to the document until it commits
-and, unlike Smooth, hands over no samples a host can draw — only grab
-parameters to reproduce. Taking it would cost Move the live picture it already
-has, which is the wrong trade. It becomes takeable if ClayCore grows a preview
-for Move that a host can draw, or a forward point warp for a grab.
+**~~Move leaves one grab per segment.~~ Taken.** A ten-segment drag used to leave
+a deformer chain of ten. The transaction was held back because it hands over no
+samples a host can draw, only grab parameters, and taking it looked like costing
+Move its live picture. It was taken anyway, with the picture drawn the other way
+the header invites — `LiveMove` in `clayspace-engine/src/live.rs` wraps
+`MoveTransaction`, writes each preview grab onto the layer, samples it into the
+brick cache and undoes it inside the same segment, and commits one grab for the
+gesture. That is the one-grab-per-gesture figure under *A Move drag costs the
+field one grab* above; what it still spends is the two document edits per
+pointer event described two paragraphs up.
 
 **~~The mesh upload is a full memcpy.~~ Taken.** It was 2.7 ms and grew with
 the model rather than with the edit. Each key now owns a span of both buffers

@@ -4,7 +4,9 @@
 The document as a sculptor navigates it — the scene tree, the layer stack, what
 each layer costs, what protection means and what it forbids, and what a mesh
 layer or an SDF layer's objects can and cannot be asked to do.
+
 ## Requirements
+
 ### Requirement: The scene is presented as a navigable tree
 The application SHALL present the document's objects and groups as a tree reflecting the engine's node structure, showing each entry's name and visibility, and allowing entries to be expanded, collapsed and selected.
 
@@ -41,6 +43,12 @@ The application SHALL expose the engine's three protection states: visible, ghos
 ### Requirement: Selection is driven by engine picking
 Clicking in the viewport SHALL select through the engine's attributed raycast, resolving to the layer and item under the pointer, honoring ghost and lock states. Selection SHALL be reflected consistently in the viewport, the scene tree and the layer stack.
 
+Selecting a layer — by clicking its geometry in the viewport or its row in the
+stack — SHALL make it the active sculpt target: subsequent brush strokes land
+on that layer, and tool availability follows its representation. The two ways
+of selecting SHALL agree; there is one active layer, not a picked one and a
+sculpted one.
+
 #### Scenario: A click identifies layer and item
 - **WHEN** the user clicks on a surface
 - **THEN** the layer and item the engine attributes to that hit become the selection
@@ -48,6 +56,17 @@ Clicking in the viewport SHALL select through the engine's attributed raycast, r
 #### Scenario: Clicking empty space clears the selection
 - **WHEN** the user clicks where the ray hits nothing
 - **THEN** the selection is cleared rather than left on the previous target
+
+#### Scenario: Clicking a subtool makes it the sculpt target
+- **WHEN** two layers each hold geometry, the first is active, and the user
+  clicks the second layer's geometry and then sculpts on it
+- **THEN** the dab lands on the second layer and the first is unchanged
+
+#### Scenario: A ghosted subtool does not take the activation
+- **WHEN** the user clicks where a ghosted layer's geometry stands in front of
+  an ordinary layer's
+- **THEN** the ordinary layer behind it becomes active, as the pick already
+  passes through ghosts
 
 ### Requirement: Layer visibility and transform are directly editable
 The user SHALL be able to toggle a layer's visibility and set its transform, applied through the engine's layer operations. A hidden layer SHALL contribute nothing to the displayed surface and SHALL NOT be pickable.
@@ -61,9 +80,35 @@ the plane where the local coordinate is zero, and the layer transform carries
 that plane with it, so a mirrored layer that is moved stays mirrored about
 itself rather than about where it used to be.
 
+Changing a layer's visibility SHALL re-evaluate the field only where the field
+can have changed. The surface cache holds the fold of the visible field layers
+and nothing else; a grid's and a carried mesh's visibility is honoured where
+the drawn geometry is assembled. So showing or hiding a layer that is not a
+field layer SHALL re-evaluate nothing, however much material it holds, and
+SHALL still leave it out of what is drawn.
+
+Stepping through the history over a visibility change SHALL re-evaluate the
+layers whose visibility that change moved, and SHALL NOT stand in for them with
+the active layer. A subtool that a step gives back to the document SHALL be
+given back to the drawn surface in the same step.
+
 #### Scenario: Hiding removes contribution
 - **WHEN** the user hides a layer that contributes to the surface
 - **THEN** the viewport shows the surface without that layer's contribution
+
+#### Scenario: Showing a layer again restores the same surface
+- **WHEN** a field subtool is hidden and shown again
+- **THEN** the surface over it is the one it had before it was hidden
+
+#### Scenario: A grid's eye costs no field work
+- **WHEN** a grid or mesh subtool is hidden or shown
+- **THEN** no brick of the field is re-evaluated
+- **AND** the subtool leaves, or returns to, the geometry handed to the viewport
+
+#### Scenario: Undoing a solo brings back every subtool it hid
+- **WHEN** a subtool is soloed and the sculptor then undoes
+- **THEN** every subtool the solo hid is both back in the stack and back on the
+  drawn surface, not only the one that was active
 
 #### Scenario: A transform is undoable as one step
 - **WHEN** the user sets a layer transform and undoes it
@@ -190,3 +235,82 @@ is deciding.
 - **WHEN** the user collapses the subtool
 - **THEN** the layer reports itself collapsed and the offer is no longer made
 
+### Requirement: Changing the active layer takes effect at once
+Moving the sculpt target SHALL be atomic: when the command returns, every part
+of the interface that describes the active subtool SHALL describe the new one.
+The shelf, the active tool, the brush settings, the symmetry toggles and the
+mask state SHALL all have followed before the next command is handled, so that
+the **first** stroke after a switch is made with the new subtool's settings.
+
+Commands that move the sculpt target SHALL include choosing a layer, adding one
+and removing one. A new layer arrives active, and a removal hands the target to
+whatever layer is left, which may hold a different representation.
+
+A newly added layer SHALL NOT inherit brush settings from another
+representation. Settings are held per tool and per representation, and the size
+shown for the new layer SHALL be the size its next stroke uses.
+
+A subtool that carries no mask SHALL report none as soon as it becomes active,
+rather than continuing to report the mask of the subtool left behind. Moving
+the sculpt target is not an edit, so this SHALL NOT depend on any later
+document change to be observed.
+
+A new armature layer SHALL start with its own symmetry rather than the previous
+subtool's. The rig places its own reflected nodes, so the layer it is given is
+created with its mirror off, and the interface SHALL show and use that mirror
+from the moment the layer exists.
+
+#### Scenario: The first stroke after a switch uses the new layer's brush
+- **WHEN** a brush size is set on one subtool, another subtool is selected, and
+  a stroke is made
+- **THEN** the stroke is made with the newly selected subtool's brush size,
+  tool and symmetry, not the previous subtool's
+
+#### Scenario: A new layer does not inherit a brush size
+- **WHEN** a grid layer is added while a field layer with its own brush size is
+  active
+- **THEN** the brush size reported for the new grid layer is the grid's own,
+  and it is the size the next dab is made at
+
+#### Scenario: Mask state follows the active subtool
+- **WHEN** a mask is painted on one subtool and another subtool with no mask
+  becomes active
+- **THEN** the mask state reports no mask immediately, without any further
+  command
+
+#### Scenario: A new rig layer is not mirrored
+- **WHEN** a rig is started while the active subtool has symmetry on
+- **THEN** the new armature layer reports symmetry off, and the first ZSphere
+  is placed unmirrored
+
+### Requirement: A new layer declares its representation
+Creating a layer SHALL offer the three representations — SDF, voxel and mesh
+where a mesh source is at hand — and the resulting layer SHALL carry the
+chosen representation's vocabulary from its first edit. The choice SHALL be
+stated at creation rather than requiring a conversion afterwards.
+
+#### Scenario: A voxel subtool is created directly
+- **WHEN** the user adds a layer and chooses voxel
+- **THEN** the new layer is voxel-backed and the voxel tools are available on
+  it without a conversion step
+
+#### Scenario: The default stays what it was
+- **WHEN** the user adds a layer without engaging the choice
+- **THEN** an SDF layer is created, as before
+
+### Requirement: A subtool can be shown alone
+The application SHALL offer a solo gesture on a layer: one action shows only
+that layer, and releasing the solo restores the visibility each layer had
+before it. Solo SHALL be a viewing convenience — it SHALL NOT change which
+layer is active or add entries to the undo history.
+
+#### Scenario: Solo isolates and restores
+- **WHEN** three layers are visible, one is hidden, and the user solos a layer
+  then releases the solo
+- **THEN** during the solo only that layer is shown, and afterwards the three
+  are visible and the fourth hidden, exactly as before
+
+#### Scenario: Solo leaves history alone
+- **WHEN** the user solos a layer, releases it, and undoes once
+- **THEN** the undo applies to the last edit before the solo, not to
+  visibility

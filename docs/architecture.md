@@ -47,13 +47,14 @@ written.
 
 ## The engine underneath
 
-ClayCore is a headless C++20 library with a stable C ABI — 610 entry points at
-the pin this builds against, covering document and layer authoring, the stroke
-engine, voxel grids and their sculpting verbs, fixed-topology mesh sculpting,
-subdivision hierarchies and their pass stacks, mask fields, the brick cache,
-one chunked transport shared by three surface kinds, a memory ledger, a
-maintenance queue, picking, meshing, evaluation and file I/O. Three of its
-properties shape everything above.
+ClayCore is a headless C++20 library with a stable C ABI — 708 `clay_*` function
+declarations in `bindings/c/clay.h` at v0.120.0, the pin this builds against
+(610 when this page was first written, at v0.78.0), covering document and layer
+authoring, the stroke engine, voxel grids and their sculpting verbs,
+fixed-topology mesh sculpting, subdivision hierarchies and their pass stacks,
+mask fields, the brick cache, one chunked transport shared by three surface
+kinds, a memory ledger, a maintenance queue, picking, meshing, evaluation and
+file I/O. Three of its properties shape everything above.
 
 **Backends are runtime-registered and parity-gated.** CPU is compiled in
 unconditionally and *defines correctness*; Metal, Vulkan, CUDA and OpenCL
@@ -99,6 +100,8 @@ graph TD
     ENGINE["clayspace-engine"]
     SAFE["claycore"]
     SYS["claycore-sys"]
+    RSAFE["cyberremesh"]
+    RSYS["cyberremesh-sys"]
 
     APP --> VIEW
     APP --> MCP
@@ -106,12 +109,15 @@ graph TD
     MCP --> MODEL
     APP --> ENGINE
     APP --> VM
+    APP --> MODEL
     VIEW --> VM
     VIEW --> MODEL
     VM --> MODEL
     ENGINE --> MODEL
     ENGINE --> SAFE
+    ENGINE --> RSAFE
     SAFE --> SYS
+    RSAFE --> RSYS
 
     style MODEL fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style APP fill:#D9744A,stroke:#D9744A,color:#23262B
@@ -121,16 +127,28 @@ graph TD
 |---|---|---|
 | `claycore-sys` | Generated FFI. No hand-written declarations | — |
 | `claycore` | Safe wrapper: ownership, errors, threading | — |
-| `clayspace-model` | The domain: tools, interfaces, types | ClayCore |
-| `clayspace-engine` | ClayCore-backed implementations | — |
-| `clayspace-vm` | ViewModels: observable state and commands | egui, wgpu, winit, ClayCore |
-| `clayspace-view` | Widgets and the renderer | ClayCore, directly or transitively |
-| `clayspace-mcp` | The agent-facing door: protocol, tool surface, gates | ClayCore, egui, wgpu, winit, `clayspace-view` |
+| `cyberremesh-sys` | Generated FFI to CyberRemesher | — |
+| `cyberremesh` | Safe wrapper: retopology, UV layout, baking | — |
+| `clayspace-model` | The domain: tools, interfaces, types | egui, wgpu, `cyberremesh`, `serde` — and ClayCore, see below |
+| `clayspace-engine` | ClayCore- and CyberRemesher-backed implementations | — |
+| `clayspace-vm` | ViewModels: observable state and commands | egui, wgpu, winit, `claycore`, both `cyberremesh` crates, `serde` |
+| `clayspace-view` | Widgets and the renderer | `claycore`, `claycore-sys`, both `cyberremesh` crates, `serde_json` |
+| `clayspace-mcp` | The agent-facing door: protocol, tool surface, gates | `claycore`, `claycore-sys`, both `cyberremesh` crates, `clayspace-engine`, `clayspace-view`, egui, wgpu, winit |
 | `clayspace-app` | Composition root, window, event loop | — |
 
-`unsafe` exists in the two bridge crates and nowhere else. Every other crate
-declares `#![forbid(unsafe_code)]`, and `tools/check_layering.py` fails if one
-drops the declaration or if any forbidden dependency edge appears.
+The column is the `FORBIDDEN` list in `tools/check_layering.py`, which checks
+the resolved dependency graph, so a forbidden crate reached transitively fails
+as surely as a direct one. One entry is held by construction rather than by
+that list: nothing forbids `clayspace-model → claycore` by name, and the rule
+holds because `clayspace-model` declares no dependencies at all. A dependency
+added there would be checked for egui, wgpu, `cyberremesh` and `serde`, and not
+for the engine.
+
+`unsafe` exists in the four bridge crates — `claycore-sys`, `claycore`,
+`cyberremesh-sys` and `cyberremesh` — and nowhere else, as the top of this page
+says. Every other crate declares `#![forbid(unsafe_code)]`, and
+`tools/check_layering.py` fails if one drops the declaration or if any
+forbidden dependency edge appears.
 
 The same tool holds one more rule, and it is about a table rather than a
 dependency: **where a tool applies is decided in one place**, the capability
@@ -147,8 +165,10 @@ which is how such a decision is written and how the model itself writes it.
 commands, and it is held to every constraint the View is held to, for the
 View's reason: a tool surface that can only be exercised with a window and a
 compiled C++ engine is a tool surface nobody tests. It has no `egui`, no
-`wgpu`, no `winit` and no ClayCore, so a hundred and thirty command mappings,
-the whole protocol and every gate are covered by tests that run in the
+`wgpu`, no `winit` and no ClayCore, so every command mapping — 157 offered
+and 9 refused by name, the arms of `home_of` in
+`crates/clayspace-mcp/src/catalogue/actions.rs` — the whole protocol and every
+gate are covered by tests that run in the
 ViewModel suite's feedback loop.
 
 The seam is a trait the composition root implements:
@@ -786,7 +806,7 @@ the answer looks like a picture.
 
 ## Decisions recorded elsewhere
 
-`openspec/changes/add-clayspace-desktop/design.md` carries the full decision
+`openspec/changes/archive/2026-09-17-add-clayspace-desktop/design.md` carries the full decision
 record, including the alternatives considered. The ones most likely to be
 revisited:
 

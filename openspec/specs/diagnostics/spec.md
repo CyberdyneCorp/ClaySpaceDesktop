@@ -4,7 +4,9 @@
 What the application can say about itself when something is slow or large: where
 a document's memory has gone, which side of the engine boundary a re-mesh spent
 its time on, and the evidence behind the decisions the maintenance path took.
+
 ## Requirements
+
 ### Requirement: The report says where the document's memory is, not only how much
 The diagnostics report SHALL carry the document's memory broken down by what
 releasing it would cost: the user's work, which is never released; what
@@ -132,3 +134,57 @@ yet been measured rather than reporting it as costing nothing.
 - **THEN** the report says that backend has not been measured, and does not
   report a cost for it
 
+### Requirement: The report says which binding the tool in hand reaches
+The diagnostics report SHALL carry the tool in hand, the representation of the
+active layer, and the binding the two resolve to — its entry point, intent,
+family and fidelity.
+
+One word on the shelf stands for up to four different engine calls, and which
+one ran depends on a layer the person writing the report is not thinking about.
+"Padrão did something I did not expect" is therefore the same sentence for a
+relief stroke on a field and a cell deposit on a grid, and without the binding
+behind it the report cannot be acted on at all.
+
+The report SHALL read the binding from the capability table rather than being
+handed a rendered sentence, so there is no second place where a tool's binding
+is described and no way for the line to say something the shelf does not.
+
+Where the tool in hand has no binding on the active layer, the report SHALL say
+so rather than omitting the line: the shelf does not offer such a tool, so
+meeting one means something upstream of the shelf put it in hand.
+
+#### Scenario: The same tool on two representations
+- **WHEN** a report is taken with Padrão in hand on an SDF layer, and again on a
+  voxel layer
+- **THEN** the two reports name different entry points and different fidelities
+  under the same tool name
+
+#### Scenario: A tool the shelf would not offer
+- **WHEN** a report is taken with a tool in hand that the active layer has no
+  verb for
+- **THEN** the line names the tool, the representation and the absence
+
+### Requirement: The report says what a mesh stroke's seed cost
+A stamp handed a seed naming a numbering that has been retired is refused by the
+engine and falls back to a scan. That is the correct outcome and it is invisible:
+nothing on screen changes, and the only difference is one stamp's cost. The
+diagnostics report SHALL carry the count of those refusals, so that a reader can
+tell a working fallback from a fallback that has started happening on every
+stamp.
+
+The count SHALL be reported **beside the number of mesh sculpting sessions the
+document is holding**, and not on its own. Zero refusals over no sessions and
+zero refusals over four are the same number and different facts, and a reader
+given only the first cannot tell which they are looking at.
+
+Both figures SHALL appear in the report that is copied to the clipboard, not only
+in the window, because the report is what a sculptor pastes into an issue.
+
+#### Scenario: The two figures are shown together
+- **WHEN** the diagnostics window is opened
+- **THEN** the number of held mesh sculpting sessions and the number of refused
+  seeds are both shown
+
+#### Scenario: The pasted report carries them
+- **WHEN** the diagnostics report is copied
+- **THEN** the copied text contains both figures
