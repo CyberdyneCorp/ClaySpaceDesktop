@@ -5,7 +5,9 @@ The boundary between this workspace and the vendored ClayCore engine: where the
 engine is pinned, how its FFI is generated, and the rules that keep `unsafe`,
 raw handles and the size-query protocol on the engine side of the line rather
 than spread through the application.
+
 ## Requirements
+
 ### Requirement: ClayCore is vendored at a pinned commit
 The application SHALL vendor ClayCore as a git submodule at `vendor/ClayCore`, pinned to an explicit commit at or after the 0.26.0 ABI, which is the first to carry subset meshing, the brick apron and colour lattice, layout-directed vertex copy, tape export and device adoption. The pinned revision SHALL be recorded in the repository, and advancing it SHALL be a reviewed change rather than an automatic update.
 
@@ -55,15 +57,53 @@ The `claycore-sys` crate SHALL contain only `bindgen` output generated from `ven
 - **THEN** the build of that crate fails on its `forbid(unsafe_code)` declaration
 
 ### Requirement: Every fallible engine call becomes a Rust Result
-The safe wrapper SHALL map every `clay_result` code to `Result<_, ClayError>`. On failure it SHALL capture the engine's thread-local detail message via `clay_last_error` at the point of failure, before any further engine call can overwrite it, and SHALL carry that message in the error value.
+The safe wrapper SHALL map every `clay_result` code to `Result<_, ClayError>`. On
+failure it SHALL capture the engine's thread-local detail message via
+`clay_last_error` at the point of failure, before any further engine call can
+overwrite it, and SHALL carry that message in the error value.
+
+**Every code the engine's header declares SHALL become a kind that names it**, and
+no two kinds SHALL print the same sentence. A code carried as an opaque number is
+a refusal a caller cannot branch on and a reader cannot understand, and the
+failure is silent: the call still returns an error, it simply says nothing useful.
+A code the header does not declare SHALL be carried verbatim rather than
+flattened into a neighbouring kind.
+
+This SHALL be held by a check against the pinned header itself rather than by
+review. The wrapper SHALL fail its own tests when the engine declares a result
+code the table does not name, and SHALL skip that check — rather than failing it —
+where the vendored source is not present, since a packaged build has the generated
+bindings and not the engine's source tree.
+
+Codes that are not `clay_result` values SHALL NOT be folded into the same kind.
+The engine has refusal enumerations of its own, returned beside a result rather
+than in place of one, and a refusal that means "this hierarchy has no such pass"
+is not the same statement as "this call was malformed".
 
 #### Scenario: Detail message is captured at the failure site
-- **WHEN** an engine call fails and the application makes further engine calls before inspecting the error
-- **THEN** the error still reports the detail message belonging to the original failure
+- **WHEN** an engine call fails and the application makes further engine calls
+  before inspecting the error
+- **THEN** the error still reports the detail message belonging to the original
+  failure
 
 #### Scenario: No panic across the boundary
 - **WHEN** any engine call returns a failure code
-- **THEN** the wrapper returns an error value and does not panic, abort, or unwind through the C boundary
+- **THEN** the wrapper returns an error value and does not panic, abort, or unwind
+  through the C boundary
+
+#### Scenario: Every declared code has a kind of its own
+- **WHEN** each code the engine's result enumeration declares is mapped
+- **THEN** each becomes a distinct kind with a sentence no other kind prints
+
+#### Scenario: A code the wrapper does not know is carried, not flattened
+- **WHEN** a result code arrives that the wrapper's table does not name
+- **THEN** the error carries the code itself rather than reporting a neighbouring
+  kind
+
+#### Scenario: A code added upstream fails the wrapper's own tests
+- **WHEN** the pinned engine's header declares a result code the wrapper does not
+  name
+- **THEN** the wrapper's tests fail, naming the code
 
 ### Requirement: Handle ownership is expressed in the type system
 Owned handles SHALL be released exactly once by RAII wrappers. Borrowed handles
@@ -172,3 +212,158 @@ Neither number SHALL be read back from the library it checks.
 - **THEN** the check fails rather than the workspace linking and finding out
   later
 
+### Requirement: The pinned ABI and the container minor are constants a test holds
+The safe wrapper SHALL name the engine ABI it was written against, and the
+`.clayspace` container minor this build writes, as constants that a test checks
+against the linked engine rather than against themselves.
+
+Neither SHALL be derived from the linked engine. A constant read back from the
+thing it is meant to check makes the check assert that a number equals itself,
+and the whole value of both is that moving the submodule without moving them
+**fails**.
+
+The container minor SHALL carry, beside it, why this build writes that minor —
+including that across a multi-release jump the minor may move in steps that no
+single release's notes describe, so a reader meets the reasoning rather than
+reconstructing it from one set of notes.
+
+#### Scenario: The pin moves and the constants do not
+- **WHEN** the vendored engine is pointed at a release whose ABI minor or
+  container minor differs from the constants
+- **THEN** the wrapper's own tests fail, naming both numbers and saying which
+  one moved
+
+#### Scenario: A file says what the build claims
+- **WHEN** this build writes a `.clayspace`
+- **THEN** the minor in the file's own header is the minor the constant claims
+
+### Requirement: A document written now is refused by an older build, not misread
+The container format SHALL fail in the direction that cannot corrupt work: a
+build predating the pinned engine SHALL refuse a document this build writes
+rather than read it as something else.
+
+The application SHALL record which minor it writes where a person can find it,
+because the consequence — a document that will not open elsewhere — is one a
+sculptor meets and not one a maintainer does.
+
+#### Scenario: An older build meets a newer document
+- **WHEN** a build older than the pinned engine opens a document this build
+  wrote
+- **THEN** it refuses the file rather than reading the records out of step
+
+### Requirement: The assembled surface's radial scale is reachable
+The wrapper SHALL bind the engine's magnify of a layer's **assembled** surface,
+with the centre, the signed strength, the region's radius and the easing the
+engine's descriptor takes, and SHALL bind the preview that answers which nodes
+it would warp without touching the document.
+
+It is the radial counterpart to the assembled drag and exists for the same
+reason: the per-item magnify deformer takes its centre in one item's local
+frame, so on a form blended from several items it scales that item's field and
+leaves the rest, with no error to show for it.
+
+The strength SHALL be passed through signed and unscaled. It is a **total from
+the start of a gesture** rather than an increment on the last frame — the
+engine replaces its own last frame at a centre and radius it already holds —
+and a wrapper that accumulated or rescaled it would break that idempotence.
+
+The descriptor SHALL carry the radius and the easing and nothing else: a radial
+scale has no direction to gate a half-space on, and no gesture identity to fold
+on beyond the region itself.
+
+#### Scenario: A blended form scales as one surface
+- **WHEN** a magnify is applied at the join of two smooth-unioned items
+- **THEN** both items take a warp and the surface moves on both sides of the
+  blend
+
+#### Scenario: The sign is the verb
+- **WHEN** the same region is magnified at a positive strength and at a
+  negative one
+- **THEN** the surface swells away from the centre in the first case and
+  gathers toward it in the second
+
+#### Scenario: The frames of one gesture do not stack
+- **WHEN** a gesture sends a growing total at one centre and radius over
+  several frames
+- **THEN** the field and the deformer chain are what a single call at the final
+  total leaves
+
+#### Scenario: Resolving is pure
+- **WHEN** the preview is asked which nodes a magnify would warp
+- **THEN** it names them and the document is unchanged, and the gesture
+  afterwards warps the items it named
+
+#### Scenario: What is not a gesture is refused
+- **WHEN** a magnify is asked for at a strength of zero, which scales by one,
+  or at a radius of zero, which is not a region
+- **THEN** the call returns an error rather than recording a deformer that does
+  nothing
+
+### Requirement: Every result code the pinned header declares reaches a named kind
+The wrapper SHALL name every `clay_result` code the pinned header declares, and
+a test SHALL compare that vocabulary against the header on disk rather than
+against itself.
+
+A code the wrapper does not name SHALL still be carried verbatim rather than
+guessed at, so an unknown result is reported as the number it was.
+
+#### Scenario: The engine gains a result code
+- **WHEN** a pinned engine declares a code the vocabulary does not name
+- **THEN** the wrapper's own test fails and names the codes it found
+
+#### Scenario: A replay refusal that changed nothing is told apart
+- **WHEN** a journal is replayed onto a document that is not the snapshot it
+  continues from
+- **THEN** the refusal is reported as its own kind rather than as an unknown
+  code, because it is the one replay refusal that leaves the document
+  byte-identical and is therefore the one worth retrying with a different
+  document
+
+### Requirement: The full validation report is available, not only two bits of it
+The wrapper SHALL expose the engine's whole mesh validation pass — the counts
+as well as the booleans — and not only the watertight and manifold flags.
+
+A caller told that a mesh is not manifold and not told **by how much** cannot
+decide what to do about it: a handful of pinched edges in a large mesh and
+thousands of them are different outcomes that the two-bit call reports
+identically.
+
+#### Scenario: A caller asks what is wrong rather than whether
+- **WHEN** a mesh is validated
+- **THEN** the number of non-manifold edges, boundary edges, degenerate and
+  sliver triangles, and the Euler characteristic are available alongside the
+  flags
+
+### Requirement: A drag reports the region it invalidated
+The wrapper SHALL offer the drag entry point that reports **where the gesture
+reached**, and the host SHALL use it in place of reconstructing a region from
+the brush size and the distance travelled.
+
+A reconstruction cannot know what a layer fold above the layer can move, nor
+what layers sharing an instanced edit list also change — both of which are
+*under*-invalidation, which leaves stale surface on screen with nothing to
+correct it.
+
+The buffer MAY be sized from the layer's symmetry and re-asked on refusal,
+because a buffer too small is refused before the first edit is recorded and
+there is therefore no half-applied drag to unpick.
+
+#### Scenario: A short buffer is refused rather than half-applied
+- **WHEN** a drag is issued with a region buffer smaller than the gesture needs
+- **THEN** the call is refused, the document is unchanged, and the count needed
+  is reported
+
+### Requirement: A layer's mirror is read rather than remembered
+The host SHALL ask the engine what mirror a layer carries rather than keeping
+its own account of what it last set.
+
+A history step moves the engine's symmetry without telling the host, so a cache
+can only be abandoned when it *might* be wrong — which costs an unnecessary
+write on the next stroke and, where the answer is used to decide what to
+re-fill, an unknown mirror that must be treated as all three axes.
+
+#### Scenario: A layer that cannot carry a mirror
+- **WHEN** the engine declines to answer for a layer whose representation
+  cannot express a mirror
+- **THEN** the host falls back to the safe over-invalidating answer rather than
+  reading a refusal as "no mirror"

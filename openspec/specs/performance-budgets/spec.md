@@ -5,7 +5,9 @@ The numbers the application is held to — brush latency, frame rate, startup,
 memory, and the rule that edit cost follows the region edited — together with
 how they are measured in CI rather than asserted, and when work that is not
 needed for correctness is allowed to run.
+
 ## Requirements
+
 ### Requirement: A reference scene defines what the budgets are measured against
 The project SHALL define a reference document and a reference machine configuration for each supported platform, and every performance budget SHALL be stated and measured against them. Budgets SHALL NOT be asserted against an unspecified scene.
 
@@ -38,12 +40,50 @@ The viewport SHALL sustain at least 60 frames per second while orbiting the refe
 ### Requirement: Edit cost is proportional to the region edited
 The work performed for an edit SHALL be bounded by the region the edit's influence bound reaches, and SHALL NOT grow with the size of the rest of the document.
 
+Taking an edit back SHALL be bounded the same way as making it. Retiring a
+placed sweep SHALL re-evaluate the region the sweep occupied — the engine's own
+bound for that item, asked for while the document still holds it — and SHALL
+NOT re-evaluate the subtool the sweep was laid on, nor the box that subtool
+occupied before the removal.
+
+An operation that borrows a visibility pattern for its own length — sampling
+one subtool alone, writing a file under a solo — SHALL re-evaluate nothing for
+the flags it writes, because it restores the pattern before anything reads the
+surface and the field is therefore the same field on both sides of it. Where a
+restore does not complete, the layers left off the sculptor's pattern SHALL be
+re-evaluated after all.
+
 #### Scenario: A local edit in a large scene
 - **WHEN** the same small edit is applied to the reference scene and to a scene ten times larger in surface area
 - **THEN** the bricks re-evaluated and re-meshed are equivalent in both cases, and the measured cost does not scale with the larger scene
 
+#### Scenario: Cancelling a curve costs the tube
+- **WHEN** a curve is laid on a worked subtool and then cancelled
+- **THEN** the bricks re-evaluated are the tube's own, the subtool's surface is
+  left as it was, and no brick is left holding a sweep that is gone
+
+#### Scenario: A boolean does not re-evaluate the subtools it never named
+- **WHEN** a boolean runs over two subtools in a document holding others
+- **THEN** no brick belonging to a subtool the boolean did not name is
+  re-evaluated, and every subtool's visibility is what it was before
+
 ### Requirement: Interface responsiveness is independent of engine work
 The application SHALL remain responsive to input while engine work is in progress: no engine operation SHALL block the interface thread for more than 16 ms.
+
+Re-evaluating the surface cache SHALL be bounded by a budget the host sets and
+SHALL be continued across frames rather than run to completion on the caller's
+thread. The cache SHALL keep whatever a bounded drain did not take, so the work
+is stopped and not dropped; the document SHALL report that a refill is
+outstanding, and the host SHALL keep asking for frames until it is not. A
+document with no budget set SHALL drain in full, because a caller with nothing
+waiting on it needs the exact answer before it returns.
+
+The bound SHALL apply to the batches as well as to the gaps between them: a
+budget honoured only between batches is that budget plus a whole batch, which
+on a slow backend is most of a frame.
+
+Whether a region was re-evaluated in one drain or in many, the surface that
+results SHALL be the same surface.
 
 #### Scenario: A long operation does not freeze the window
 - **WHEN** a consolidation, bake, import or export runs
@@ -52,6 +92,22 @@ The application SHALL remain responsive to input while engine work is in progres
 #### Scenario: Interface-thread blocking is detectable
 - **WHEN** the application runs with the debug instrumentation enabled
 - **THEN** any interface-thread block exceeding 16 ms is recorded with the operation responsible
+
+#### Scenario: A refill larger than one budget is continued
+- **WHEN** a command dirties more of the field than one budget can re-evaluate
+- **THEN** the command returns within the budget, the document reports the
+  refill as outstanding, and the remaining bricks are re-evaluated over the
+  following frames
+
+#### Scenario: A pumped refill reaches the surface a whole drain reaches
+- **WHEN** the same edit is drained in full by one caller and a budget at a
+  time by another
+- **THEN** both documents hold the same surface
+
+#### Scenario: Showing or hiding a worked subtool returns within a frame
+- **WHEN** the sculptor toggles the eye on a field subtool of any size
+- **THEN** the write returns within the refill budget, and the surface the
+  toggle changes is completed over the frames that follow
 
 ### Requirement: Startup reaches an interactive state within a stated time
 The application SHALL present an interactive window within 2 seconds of launch on the reference machine, including backend discovery. Backend discovery SHALL NOT delay the window beyond that budget.
@@ -190,3 +246,103 @@ cannot come apart.
 - **WHEN** a deformation cage is dragged and then applied, or abandoned
 - **THEN** the pin was held for the drag and is given back either way
 
+### Requirement: An idle application does no work proportional to the document
+With a document open, no gesture in progress, no command running and no
+animation, the application SHALL NOT perform per-frame work whose cost grows
+with the size of the document. An application nobody is touching SHALL settle
+to a small, flat cost that a worked sculpture does not raise.
+
+A figure that is only displayed — a meter, a counter, a status line — SHALL be
+refreshed on a stated interval rather than once a frame where obtaining it
+costs more than reading a field. The interval SHALL be named where it is
+defined, and SHALL be short enough that a person cannot tell the figure from an
+exact one.
+
+This is a budget in its own right and not only a matter of power: work paid on
+every idle frame is the noise floor of every other measurement taken of this
+application, and a profile whose largest entry is a status bar cannot be used
+to find anything else.
+
+#### Scenario: Idling with a worked document is cheap
+- **WHEN** a document with a worked layer is left open with no input for a
+  minute
+- **THEN** the application uses a small fraction of one core, and the figure
+  does not rise with the size of the sculpture
+
+#### Scenario: A displayed figure is refreshed on an interval
+- **WHEN** a figure shown in the interface costs a walk of an engine structure
+  to obtain
+- **THEN** it is obtained at most once per stated interval, and the frames in
+  between show the figure already obtained
+
+#### Scenario: The interval is short enough to be honest
+- **WHEN** the value behind such a figure changes
+- **THEN** what the interface shows catches up within the stated interval
+
+### Requirement: A figure records the spread it was reduced from
+A benchmark figure is a summary of several samples, and a summary on its own
+cannot say whether a change is a change. The harness SHALL record, beside every
+figure it reduces from samples, how many samples there were and the range they
+covered, and SHALL write that alongside the figures in the recorded file.
+
+A measurement that genuinely has one observation SHALL record no spread and SHALL
+be shown as having none, rather than being given a range of zero width. The
+difference between "measured twelve times, all within a millisecond" and
+"measured once" is the difference the reader needs.
+
+The spread SHALL be written as a section beside the figures rather than by
+changing a figure's own shape, so that a file recorded before this existed still
+compares and a file recorded after it still opens in a reader that does not know
+about it.
+
+A comparison SHALL be allowed to say that a change landed inside the range the
+baseline's own samples covered, and SHALL **mark** such a change rather than
+excusing it. Within-run spread is the smaller half of the noise: the variance
+that dominates is between runs, which one process cannot sample, so a change
+inside the spread is a change that was never distinguishable — not a change that
+has been ruled out.
+
+#### Scenario: A recorded figure carries its samples
+- **WHEN** a run records its figures to a file
+- **THEN** each figure reduced from more than one sample is accompanied by the
+  number of samples and the range they covered
+
+#### Scenario: A single observation says so
+- **WHEN** a figure is a single observation or a derived ratio
+- **THEN** it records no spread, and the report shows that it has none rather
+  than showing a zero range
+
+#### Scenario: A baseline recorded without spread still compares
+- **WHEN** a run is compared against a baseline recorded before spread was written
+- **THEN** the comparison proceeds and reports the change, saying only that the
+  baseline recorded no spread
+
+#### Scenario: A change inside the spread is marked, not excused
+- **WHEN** a figure moves but lands inside the range the baseline's own samples
+  covered
+- **THEN** the comparison says so beside the row, and still reports the change
+
+### Requirement: The conditions name which build of the engine, not only which version
+Two builds can both report the same engine version and differ by a commit. The
+recorded conditions SHALL carry the vendored engine's revision beside its
+version, so that a comparison across two recordings can state which engines it is
+actually comparing.
+
+The revision SHALL NOT be compared. A comparison across two engine builds is the
+measurement an upgrade needs, and refusing it would remove the only tool for
+taking it. Instead the report SHALL announce, above the table, when the two sides
+were recorded against different engines, so that every percentage below is read
+as that difference plus whatever else moved.
+
+A source tree with no revision available SHALL say that it recorded none rather
+than failing to record at all.
+
+#### Scenario: The recorded file names the engine build
+- **WHEN** a run records its conditions
+- **THEN** the file carries the engine's version and the vendored engine's
+  revision
+
+#### Scenario: A cross-build comparison is announced rather than refused
+- **WHEN** a run is compared against a baseline recorded against a different
+  engine
+- **THEN** the comparison proceeds, and a note above the table names both engines
