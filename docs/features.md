@@ -4049,7 +4049,29 @@ selection made afterwards.
 
 An unknown action is refused with the actions the group *does* have. A missing
 or wrongly typed argument is refused naming the argument, what it should have
-been, and what arrived, and changes nothing. A stroke the ViewModel refuses —
+been, and what arrived, and changes nothing.
+
+**An argument the application cannot honour is refused, not reinterpreted.** A
+key the action does not declare is refused with the keys it does take — a
+misspelt `sizee` used to run the command at its default and answer success. A
+count, size, index or key that is negative or too large for its field is
+refused rather than cast: `resolution: -1` used to wrap to four billion and be
+clamped into a plausible 512. A number that is not finite as a 32-bit float is
+refused — `scale: 1e308` used to reach the import panel as "Scale inf". A
+fraction where a whole number belongs, a malformed reference offset, and a
+retopology method or bake map nobody offers are refused rather than defaulted.
+A selection is cleared by leaving its index out; a negative index is an error
+rather than a second spelling of that. `brush set_azimuth` takes degrees, as
+`describe` says and the dial shows.
+
+**A value brought into range is reported.** Where the application clamps
+rather than refuses — as its own sliders do — the command applies and the
+answer carries `clamped: [{argument, asked, used}]`, for each brush number, a
+rebuild's resolution, a surface's opacity, a grid's blur, and every field a
+settings block's own `sanitized` moves. The report asks the model's rule
+rather than restating it, so it cannot disagree with what was applied. The
+table test in `crates/clayspace-mcp/src/catalogue/contract_tests.rs` holds all
+of this over every action. A stroke the ViewModel refuses —
 an unavailable tool is the case that happens — is refused to the client too,
 with `unavailable` as the code and the interface's own sentence as the message,
 on the begin and on any sample or close that follows it. A gesture that never
