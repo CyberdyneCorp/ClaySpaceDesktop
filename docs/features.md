@@ -618,6 +618,19 @@ hand and empty rather than abandoned: stepping forward brings the same tube
 back rather than placing a second one beside it, because the node's own id is
 remembered while history has it taken back.
 
+**Curve controls act on the tube immediately.** Changing a non-circle radius
+rebuilds its swept profile, since that size lives on the placed item rather
+than in the guide's per-point radii. A profile change keeps the chosen join.
+Removal and replacement form one undo step, and undo or redo restores the
+profile shown by the controls. A curve command with no curve up reports a
+refusal.
+
+**The manipulator moves selected curve points.** W, E and R put its move, turn
+and scale handles at their centroid; each frame uses the points where the
+gesture began, so a drag does not drift with pointer sampling. The tube follows
+and the gesture is one undo. With no point selected, the curve target explains
+why there is no handle to draw.
+
 **A drag draws the curve, a click places one point.** Nothing distinguishes
 them but distance: a press opens a stroke, and each time the pointer has
 travelled a tube-width from the last point it lays another. A click never

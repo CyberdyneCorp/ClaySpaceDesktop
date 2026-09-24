@@ -466,6 +466,11 @@ impl ObjectViewModel {
                 self.target.set(None);
             }
         }
+        if matches!(*self.target.get(), Some(GizmoTarget::Curve))
+            && self.model.target_transform(GizmoTarget::Curve).is_none()
+        {
+            self.target.set(None);
+        }
     }
 
     pub fn dispatch(&mut self, command: &Command, representation: Representation) {
@@ -584,8 +589,15 @@ impl ObjectViewModel {
             Command::ToggleLattice => {
                 self.target.set(None);
             }
+            Command::SetGizmoTarget(Some(GizmoTarget::Curve))
+                if self.model.target_transform(GizmoTarget::Curve).is_none() =>
+            {
+                self.target.set(None);
+                self.notice.set(Some("select a curve control point".into()));
+            }
             Command::SetGizmoTarget(target) => {
                 self.target.set(*target);
+                self.notice.set_if_changed(None);
             }
             Command::SetGizmoMode(mode) => {
                 self.mode.set_if_changed(*mode);
