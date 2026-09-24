@@ -139,7 +139,7 @@ waiting on a decision rather than on an engine.
 
 **Every upstream issue this section tracks is closed.** Each entry below says
 what that means here, and it is not always the same thing: most were answered
-with an entry point that is in the pinned v0.120.0 header and **not yet adopted**
+with an entry point that is in the pinned v0.120.1 header and **not yet adopted**
 by this application, one was adopted, and one — #392 — is closed upstream while
 the defect this repository measured still reproduces at the pin. The entries
 keep the reasoning that was written while they were open, because it is the
@@ -600,7 +600,7 @@ Taken up here, each one flipping a test rather than being read about.
 
 ### Upstream: released, not yet taken up here
 
-**What the pinned v0.120.0 header offers and this application does not call.**
+**What the pinned v0.120.1 header offers and this application does not call.**
 Keeping a pin move separate from what the pin enables is a deliberate line — a
 bisect over an upgrade should land on the upgrade — but it only works if what was
 left behind stays listed. Each entry below was checked against the header and
@@ -1650,7 +1650,7 @@ and engine produced it. Budget breaches are printed but not enforced without
 `--enforce-budgets`: the specification gates on a change *raising* latency, and
 a gate that is red the day it is installed is one people learn to ignore.
 
-The Linux baseline reads engine 0.52.2; the pin is at 0.120.0. It was left there
+The Linux baseline reads engine 0.52.2; the pin is at 0.120.1. It was left there
 deliberately when the pin moved to 0.60.0, and the reasoning then was that
 everything that moved across that upgrade moved *downward* — a dab's p95 1.88x,
 solo's p95 1.61x, the locality dab 1.40x, undo 1.13x, over two full runs — and

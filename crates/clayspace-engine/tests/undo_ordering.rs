@@ -670,11 +670,8 @@ fn grid_with_two_passes() -> ClayDocument {
 
 /// Every operation on a grid's passes is one command in and one command out.
 ///
-/// The engine records nothing for one — dialling a pass recomposes the grid by
-/// replaying the diffs its passes hold, and a replay is not an edit — so the
-/// way back is the document's own. Measured in the audit before this:
-/// `set_strength` was not undoable at all, the undo after it took back the
-/// stroke that came before, and strokes already taken back came up with it.
+/// ClayCore v0.120.1 records these operations in its own history. The host
+/// refreshes the cached stack after undo so the controls and surface agree.
 #[test]
 fn every_grid_pass_operation_is_one_undo_and_puts_the_stack_back() {
     let mut doc = grid_with_two_passes();
@@ -696,6 +693,64 @@ fn every_grid_pass_operation_is_one_undo_and_puts_the_stack_back() {
         doc.apply_sculpt_layer_op(SculptLayerOp::Move { from: 1, to: 0 })
             .expect("the reorder");
     });
+    apply_then_undo_restores_exactly(&mut doc, "a pass removed", |doc| {
+        doc.apply_sculpt_layer_op(SculptLayerOp::Remove { index: 1 })
+            .expect("the removal");
+    });
+    apply_then_undo_restores_exactly(&mut doc, "a pass merged down", |doc| {
+        doc.apply_sculpt_layer_op(SculptLayerOp::MergeDown { index: 1 })
+            .expect("the merge");
+    });
+}
+
+#[test]
+fn undoing_a_pass_on_another_subtool_refreshes_the_grid_stack() {
+    let mut doc = grid_with_two_passes();
+    let before = digest(&mut doc);
+    doc.apply_sculpt_layer_op(SculptLayerOp::SetStrength {
+        index: 1,
+        strength: 0.25,
+    })
+    .expect("the strength");
+    let changed = digest(&mut doc);
+    let other = doc
+        .scene()
+        .layers
+        .iter()
+        .find(|layer| layer.representation == Representation::Sdf)
+        .expect("the source field")
+        .key;
+    doc.set_active_layer(other)
+        .expect("select the other subtool");
+    assert!(doc.undo().expect("undo the pass dial"));
+    assert_eq!(digest(&mut doc), before);
+    assert!(doc.redo().expect("redo the pass dial"));
+    assert_eq!(digest(&mut doc), changed);
+}
+
+#[test]
+fn undoing_a_stroke_recorded_in_a_pass_restores_the_grid_and_pass_count() {
+    let mut doc = grid_with_two_passes();
+    let with_stroke = digest(&mut doc);
+    assert!(doc.undo().expect("undo the recorded stroke"));
+    let without_stroke = digest(&mut doc);
+    assert_ne!(without_stroke, with_stroke);
+    assert!(doc.redo().expect("redo the recorded stroke"));
+    assert_eq!(digest(&mut doc), with_stroke);
+}
+
+#[test]
+fn undoing_open_pass_creation_clears_the_recording_indicator() {
+    let mut doc = grid_with_two_passes();
+    doc.apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
+        name: "temporary".into(),
+    })
+    .expect("start recording");
+    assert!(doc.sculpt_layer_cost().recording);
+    assert!(doc.undo().expect("undo pass creation"));
+    assert!(!doc.sculpt_layer_cost().recording);
+    assert!(doc.redo().expect("redo pass creation"));
+    assert!(!doc.sculpt_layer_cost().recording);
 }
 
 /// And it is exactly one step of the history the interface reads.
@@ -730,8 +785,8 @@ fn dialling_a_pass_is_exactly_one_step_of_history() {
         "hiding a pass was not one step"
     );
 
-    // Where the next edits are filed is not an edit: nothing drawn moves, and
-    // a sculptor who opened a pass and pressed Cmd+Z means the work before it.
+    // ClayCore v0.120.1 records creation of the pass itself. Closing the
+    // recording does not add a second entry.
     doc.apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
         name: "terceiro".into(),
     })
@@ -740,18 +795,29 @@ fn dialling_a_pass_is_exactly_one_step_of_history() {
         .expect("the pass closed");
     assert_eq!(
         doc.history().depth,
-        start + 2,
-        "opening a recording was counted as something to take back"
+        start + 3,
+        "creating a pass was not one step"
+    );
+    doc.undo().expect("undo pass creation");
+    assert_eq!(doc.history().depth, start + 2);
+    assert_eq!(
+        doc.scene()
+            .layers
+            .iter()
+            .find(|layer| layer.key == doc.scene().active.expect("active grid"))
+            .expect("grid")
+            .sculpt_layers
+            .len(),
+        2,
+        "undo left the empty pass behind"
     );
 }
 
 /// A pass dialled interleaves with the engine's own entries in the order the
 /// sculptor made them.
 ///
-/// The pair the ordering exists for, on this stack: a pass operation costs the
-/// engine no entry and carries a stamp of its own, so a run that alternates
-/// between the two has to come apart one command at a time and go back
-/// together the same way.
+/// Pass edits and other engine entries share one history, while mesh gestures
+/// carried by the host still interleave by stamp.
 #[test]
 fn a_pass_and_an_engine_edit_come_back_in_the_order_they_were_made() {
     let mut doc = grid_with_two_passes();

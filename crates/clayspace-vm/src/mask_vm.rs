@@ -249,13 +249,12 @@ impl MaskViewModel {
             Command::SetMaskSteps(steps) => {
                 self.steps.set_if_changed(Self::steps_within(*steps));
             }
-            Command::SetMaskGesture(gesture) => {
-                if self.gesture.set_if_changed(*gesture) {
-                    // A gesture abandoned by changing gesture: the outline on
-                    // screen was drawn for the mode that has just been left.
-                    self.draft.set(None);
-                }
+            Command::SetMaskGesture(gesture) if self.gesture.set_if_changed(*gesture) => {
+                // A gesture abandoned by changing gesture: the outline on
+                // screen was drawn for the mode that has just been left.
+                self.draft.set(None);
             }
+            Command::SetMaskGesture(_) => {}
             Command::BeginMaskOutline(at, thaw) => {
                 let mode = if *thaw {
                     OutlineMode::Thaw

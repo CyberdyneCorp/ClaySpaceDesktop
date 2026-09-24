@@ -6098,17 +6098,18 @@ impl ApplicationHandler<AgentWake> for App {
         };
 
         match event {
-            WindowEvent::CloseRequested => {
+            WindowEvent::CloseRequested
+                if self.document_vm.guard() == Guard::Clear || self.confirm_discarding_work() =>
+            {
                 // The last chance to keep the work. Closing over unsaved edits
                 // without asking is the one mistake this application can make
                 // that a user cannot undo.
-                if self.document_vm.guard() == Guard::Clear || self.confirm_discarding_work() {
-                    // Clearing the marker is what makes the *next* run silent.
-                    // Left behind, an ordinary quit looks like a crash.
-                    self.end_session();
-                    event_loop.exit();
-                }
+                // Clearing the marker is what makes the *next* run silent.
+                // Left behind, an ordinary quit looks like a crash.
+                self.end_session();
+                event_loop.exit();
             }
+            WindowEvent::CloseRequested => {}
 
             WindowEvent::Resized(size) => {
                 if let Some(graphics) = self.graphics.as_mut() {

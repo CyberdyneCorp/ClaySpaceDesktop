@@ -25,10 +25,10 @@
 //! **The floor is zero until a host sets one, and nothing in the application
 //! sets one.** Everything above works — the chain returns to zero, the first
 //! collapse takes the starting form and every one after it is local, the
-//! closure holds its width — and it does not pay for itself on the pinned
-//! engine (v0.120.0), because what it was meant to make cheaper gets dearer.
-//! Measured on the starting sphere, mirrored, one patch worked forty times
-//! (`tests/chain_compaction.rs`, Mac, debug host over a Release engine):
+//! closure holds its width — but an undo over the baked patch remains dearer
+//! than over the chain on v0.120.1. The historical series below was measured
+//! against v0.120.0 on the starting sphere, mirrored, one patch worked forty
+//! times (`tests/chain_compaction.rs`, Mac, debug host over a Release engine):
 //!
 //! | | no collapse | collapse at the cache's 0.02 | collapse at 0.04 |
 //! |---|---:|---:|---:|
@@ -38,11 +38,10 @@
 //! | undo, gesture 40 | 362 ms | 5,418 ms | 858 ms |
 //! | gesture, steady | 20–54 ms, rising | 80–90 ms | 45 ms |
 //!
-//! A baked patch is a sampled volume, and a refill costs about sixty times as
-//! much per brick over one as over the analytic chain it replaced. An undo
-//! refills what the engine says it reached, which for an edit hung off the
-//! starting form is the form's whole bound — thousands of bricks either way —
-//! so the per-brick price is the whole story, and the collapse raises it. The
+//! A baked patch is a sampled volume, and a refill on v0.120.0 cost about
+//! sixty times as much per brick over one as over the analytic chain it
+//! replaced. An undo then refilled the starting form's whole bound. The
+//! v0.120.1 bound is narrower, but its measured undo still favors the chain. The
 //! chain *is* bounded; the cost the chain stood for is not, over the range a
 //! session reaches. Those are debug-host figures: Linux CI in release measured
 //! the gesture-11 undo at 1.9x the chain rather than sixty, so the size of the
@@ -51,11 +50,12 @@
 //! regional scope inherits it because what it installs is the same kind of
 //! item.
 //!
-//! What would change the verdict is either half of that product: a volume that
-//! refills at something near the chain's per-brick cost, or an undo whose reach
-//! for a grab is the grab's support rather than the node it hangs off. The
-//! tripwire `a_baked_patch_still_refills_dearer_than_its_chain` fails the day
-//! the first half is true, and that is the day to set [`CHAIN_FLOOR`].
+//! v0.120.1 narrows an undo for a grab to the grab's support, but the tripwire
+//! `a_baked_patch_still_refills_dearer_than_its_chain` still measures the baked
+//! patch at 1.2x the chain on Linux debug and about 4.9x on local macOS debug
+//! and release. A volume that refills near the chain's per-brick cost could
+//! change that direction. Until the measured patch is no dearer, the floor
+//! stays off by default.
 
 use std::collections::HashMap;
 use std::time::Duration;

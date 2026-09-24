@@ -122,8 +122,10 @@ pub struct BakeParams {
 
 impl Default for BakeParams {
     fn default() -> Self {
-        let mut raw = sys::CyberBakeParams::default();
-        raw.structSize = std::mem::size_of::<sys::CyberBakeParams>();
+        let mut raw = sys::CyberBakeParams {
+            structSize: std::mem::size_of::<sys::CyberBakeParams>(),
+            ..Default::default()
+        };
         // SAFETY: the sized struct is initialized before the engine writes defaults.
         let status = unsafe { sys::cyber_default_bake_params(&mut raw) };
         assert_eq!(
@@ -144,10 +146,12 @@ impl Default for BakeParams {
 
 impl BakeParams {
     fn to_raw(self) -> Result<sys::CyberBakeParams> {
-        let mut raw = sys::CyberBakeParams::default();
-        raw.structSize = std::mem::size_of::<sys::CyberBakeParams>();
-        // SAFETY: the sized struct is initialized before the engine writes defaults.
+        let mut raw = sys::CyberBakeParams {
+            structSize: std::mem::size_of::<sys::CyberBakeParams>(),
+            ..Default::default()
+        };
         check(
+            // SAFETY: the sized struct is initialized before the engine writes defaults.
             unsafe { sys::cyber_default_bake_params(&mut raw) },
             "cyber_default_bake_params",
         )?;
