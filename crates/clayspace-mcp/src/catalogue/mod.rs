@@ -309,6 +309,19 @@ impl Catalogue {
     fn call_measure(&self, arguments: &Value) -> Result<CallResult, Refusal> {
         let group = Args::new("measure", "run", arguments).text("group")?;
         let action = Args::new("measure", "run", arguments).text("action")?;
+        if !GROUPS.iter().any(|(known, _, _)| *known == group) {
+            return Err(Refusal::new(
+                RefusalCode::UnknownAction,
+                format!(
+                    "measure has no group {group}; the groups are {}",
+                    GROUPS
+                        .iter()
+                        .map(|(known, _, _)| *known)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
         let inner = arguments.get("arguments").cloned().unwrap_or(json!({}));
         let args = Args::new("measure", "run", &inner);
         let command = actions::build(&group, &action, &args)?;
@@ -880,14 +893,15 @@ fn narrows_by_layer(group: &str) -> bool {
 
 /// The commands that are real and deliberately not offered, with the reason.
 fn not_offered() -> Vec<Value> {
-    // One of each, named rather than enumerated by iterating the enum — which
-    // cannot be iterated. `home_of` is what guarantees the list is complete:
-    // a variant nobody placed does not compile.
+    // One representative of each deliberately unoffered command variant.
+    // The enum cannot be iterated, so keep this list paired with `home_of`.
     [
         Command::OpenDocument,
         Command::SaveAs,
         Command::InsertMesh,
         Command::LoadAlpha,
+        Command::RunBake,
+        Command::ExportProfile,
         Command::LoadReference(clayspace_model::RefPlane::Front),
         Command::ToggleAgentDoor,
         Command::ShowAgentAccess(false),
@@ -1137,7 +1151,16 @@ mod tests {
     #[test]
     fn the_commands_not_offered_say_why() {
         let listed = not_offered();
-        assert_eq!(listed.len(), 8, "{listed:?}");
+        assert_eq!(listed.len(), 10, "{listed:?}");
+        for command in [Command::RunBake, Command::ExportProfile] {
+            assert!(
+                listed
+                    .iter()
+                    .any(|entry| entry["command"] == command.label()),
+                "{} is not explained",
+                command.label()
+            );
+        }
         for entry in listed {
             assert!(entry["why"].as_str().unwrap().len() > 20, "{entry}");
         }
@@ -1685,6 +1708,17 @@ mod tests {
         assert_eq!(bench.applied(), vec![Command::Undo]);
     }
 
+    #[test]
+    fn measure_refuses_an_undeclared_group() {
+        let bench = Bench::new();
+        let refusal = bench
+            .call("measure", json!({ "group": "hidden", "action": "run" }))
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::UnknownAction);
+        assert!(refusal.message.contains("measure has no group hidden"));
+        assert!(bench.applied().is_empty());
+    }
+
     // -- describing ---------------------------------------------------------
 
     #[test]
@@ -1707,6 +1741,58 @@ mod tests {
         assert_eq!(size["arguments"][0]["name"], "size");
         assert_eq!(size["arguments"][0]["required"], true);
         assert_eq!(size["example"]["size"], 0.12);
+    }
+
+    #[test]
+    fn dynamics_and_curve_insertion_are_described() {
+        let bench = Bench::new();
+        let brush = structured(&bench.call("describe", json!({ "group": "brush" })).unwrap());
+        let offered: Vec<_> = brush["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|action| action["action"].as_str())
+            .collect();
+        for name in [
+            "set_pressure_size",
+            "set_pressure_strength",
+            "set_pressure_curve",
+            "set_taper_start",
+            "set_taper_end",
+            "set_rake",
+        ] {
+            assert!(offered.contains(&name), "brush.{name} is hidden");
+        }
+        let curve = structured(&bench.call("describe", json!({ "group": "curve" })).unwrap());
+        assert!(curve["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["action"] == "insert_point"));
+    }
+
+    #[test]
+    fn corrected_action_summaries_reach_describe() {
+        let bench = Bench::new();
+        for (group, action, meaning) in [
+            ("brush", "set_flow", "spaced"),
+            ("brush", "set_smoothing", "do not use"),
+            ("transform", "drag", "snapping"),
+            ("lattice", "drag", "one selected"),
+            ("layer", "set_combine", "next edit"),
+            ("repair", "close_holes", "voxel grid"),
+        ] {
+            let described = structured(&bench.call("describe", json!({ "group": group })).unwrap());
+            let summary = described["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["action"] == action)
+                .unwrap()["summary"]
+                .as_str()
+                .unwrap();
+            assert!(summary.contains(meaning), "{group}.{action}: {summary}");
+        }
     }
 
     #[test]
