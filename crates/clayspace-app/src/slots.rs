@@ -86,6 +86,14 @@ fn with_headroom(needed: u32, grain: u32) -> u32 {
 }
 
 impl SlotMap {
+    /// What the table of spans holds in host memory, at its capacity.
+    ///
+    /// A floor, as every figure in the memory ledger is: the hash table's
+    /// control bytes and the allocator's rounding are not counted.
+    pub fn resident_bytes(&self) -> usize {
+        self.slots.capacity() * (std::mem::size_of::<BrickKey>() + std::mem::size_of::<Slot>())
+    }
+
     /// An empty layout over buffers of the given capacity.
     pub fn new(vertex_capacity: u32, index_capacity: u32) -> Self {
         Self {

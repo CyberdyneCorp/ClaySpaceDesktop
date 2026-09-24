@@ -533,6 +533,23 @@ pub(super) fn diagnostics_memory(ui: &mut egui::Ui, d: &Diagnostics) {
         "Superfícies",
         format!("{} · {}", m.surfaces, megabytes(m.surface_bytes)),
     );
+    // What this application holds beside the document, and the figure the
+    // status area shows with it folded in. The engine's total above is the
+    // document; this is what the process is charged for it.
+    readout(ui, "Cache", megabytes(m.cache_bytes));
+    readout(
+        ui,
+        "Desenho",
+        format!(
+            "{} · {} geometria · {} buffers · {} staging · {} alvos",
+            megabytes(m.drawing.total()),
+            megabytes(m.drawing.geometry),
+            megabytes(m.drawing.buffers),
+            megabytes(m.drawing.staging),
+            megabytes(m.drawing.targets)
+        ),
+    );
+    readout(ui, "Em uso", megabytes(m.in_use()));
 }
 
 /// Where a stroke's milliseconds went, phase by phase.

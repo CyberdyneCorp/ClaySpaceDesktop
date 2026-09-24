@@ -10,6 +10,7 @@ pub mod geometry;
 pub mod input;
 pub mod json;
 pub mod keys;
+pub mod memory;
 pub mod profile_file;
 pub mod reference;
 pub mod session;

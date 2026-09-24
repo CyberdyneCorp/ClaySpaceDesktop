@@ -206,6 +206,12 @@ struct MaterialUniform {
 pub struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
+    /// The two buffers' bytes, counted against the device while they live.
+    ///
+    /// Replaced together with the buffer each stands for, so a buffer grown
+    /// into a larger one gives the smaller one's bytes back at the same moment
+    /// the smaller one is dropped.
+    resident: [crate::device_memory::Resident; 2],
     vertex_capacity: usize,
     index_capacity: usize,
     index_count: u32,
@@ -283,14 +289,25 @@ fn patch_runs<T: bytemuck::Pod>(gpu: &Gpu, buffer: &wgpu::Buffer, runs: &mut [(u
 ///
 /// Every mesh allocation goes through here so the counter behind
 /// [`Gpu::note_allocation`] is the whole truth about them.
-fn mesh_buffer(gpu: &Gpu, label: &str, bytes: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+///
+/// And counts its bytes against the device for as long as the returned
+/// [`Resident`](crate::device_memory::Resident) lives, which the caller keeps
+/// beside the buffer.
+fn mesh_buffer(
+    gpu: &Gpu,
+    label: &str,
+    bytes: u64,
+    usage: wgpu::BufferUsages,
+) -> (wgpu::Buffer, crate::device_memory::Resident) {
     gpu.note_allocation();
-    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+    let size = bytes.max(4);
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
-        size: bytes.max(4),
+        size,
         usage: usage | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
-    })
+    });
+    (buffer, gpu.resident_buffer(size))
 }
 
 /// How large to make a buffer that must hold `required` items of `stride`
@@ -311,9 +328,12 @@ fn grow_within(gpu: &Gpu, current: usize, required: usize, stride: usize) -> usi
 impl GpuMesh {
     /// An empty mesh with no allocation yet.
     pub fn new(gpu: &Gpu) -> Self {
+        let (vertices, vertex_bytes) = empty_buffer(gpu, "vertices", wgpu::BufferUsages::VERTEX);
+        let (indices, index_bytes) = empty_buffer(gpu, "indices", wgpu::BufferUsages::INDEX);
         Self {
-            vertices: empty_buffer(gpu, "vertices", wgpu::BufferUsages::VERTEX),
-            indices: empty_buffer(gpu, "indices", wgpu::BufferUsages::INDEX),
+            vertices,
+            indices,
+            resident: [vertex_bytes, index_bytes],
             vertex_capacity: 0,
             index_capacity: 0,
             index_count: 0,
@@ -370,7 +390,7 @@ impl GpuMesh {
     fn grow_to(&mut self, gpu: &Gpu, vertices: usize, indices: usize) {
         if vertices > self.vertex_capacity {
             let capacity = grow_within(gpu, self.vertex_capacity, vertices, Vertex::STRIDE);
-            self.vertices = mesh_buffer(
+            (self.vertices, self.resident[0]) = mesh_buffer(
                 gpu,
                 "vertices",
                 (capacity * Vertex::STRIDE) as u64,
@@ -380,7 +400,7 @@ impl GpuMesh {
         }
         if indices > self.index_capacity {
             let capacity = grow_within(gpu, self.index_capacity, indices, 4);
-            self.indices = mesh_buffer(
+            (self.indices, self.resident[1]) = mesh_buffer(
                 gpu,
                 "indices",
                 (capacity * 4) as u64,
@@ -561,7 +581,11 @@ fn grown(current: usize, required: usize) -> usize {
     required.max(current.saturating_mul(3) / 2)
 }
 
-fn empty_buffer(gpu: &Gpu, label: &str, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+fn empty_buffer(
+    gpu: &Gpu,
+    label: &str,
+    usage: wgpu::BufferUsages,
+) -> (wgpu::Buffer, crate::device_memory::Resident) {
     mesh_buffer(gpu, label, 4, usage)
 }
 
@@ -847,6 +871,8 @@ pub struct Renderer {
     /// uploaded, and duplicating them to draw lines over them would cost a
     /// second copy of every vertex for no new information.
     wire_indices: wgpu::Buffer,
+    /// Its bytes, counted against the device while it lives.
+    wire_resident: crate::device_memory::Resident,
     wire_index_count: u32,
     wire_capacity: usize,
     /// Whether to draw them.
@@ -1521,6 +1547,8 @@ impl Renderer {
             "membrane_fs",
             PipelineState::transparent(wgpu::PrimitiveTopology::TriangleList),
         );
+        let (wire_indices, wire_resident) =
+            empty_buffer(gpu, "polyframe", wgpu::BufferUsages::INDEX);
 
         Self {
             // Uncalled: no back-face culling and so no depth write, which is
@@ -1585,7 +1613,8 @@ impl Renderer {
             scaffold_solid_pipeline,
             gizmo_pipeline,
             wire_pipeline,
-            wire_indices: empty_buffer(gpu, "polyframe", wgpu::BufferUsages::INDEX),
+            wire_indices,
+            wire_resident,
             wire_index_count: 0,
             wire_capacity: 0,
             polyframe: false,
@@ -2215,12 +2244,14 @@ impl Renderer {
             return;
         }
         if edges.len() > self.wire_capacity {
+            let bytes = (edges.len() * 4) as u64;
             self.wire_indices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("polyframe"),
-                size: (edges.len() * 4) as u64,
+                size: bytes,
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.wire_resident = gpu.resident_buffer(bytes);
             self.wire_capacity = edges.len();
         }
         gpu.queue
@@ -2575,6 +2606,7 @@ impl Renderer {
         // rather than `Wait`: the point is to collect what has already
         // finished, not to stall the frame on what has not.
         let _ = gpu.device.poll(wgpu::Maintain::Poll);
+        gpu.note_frame_polled();
     }
 
     /// Fills the studio rig's shadow map, in Studio mode.

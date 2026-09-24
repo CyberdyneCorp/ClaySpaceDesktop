@@ -483,6 +483,37 @@ impl SurfaceGeometry {
         self.keys.values().map(|k| k.vertices.len()).sum()
     }
 
+    /// What this store holds in host memory: the per-key copy of the surface
+    /// the viewport draws from, and the tables beside it.
+    ///
+    /// At capacity rather than length, because a vector that shrank keeps its
+    /// allocation and that allocation is what the process is charged for. The
+    /// GPU buffers this uploads into are not here — the device counts them —
+    /// so the two can be added without counting anything twice.
+    ///
+    /// A walk of the keys, so it is read on the memory meter's clock and not
+    /// once a frame. A floor, like every figure in the ledger: hash-table
+    /// control bytes and allocator rounding are not counted.
+    pub fn resident_bytes(&self) -> u64 {
+        use std::mem::size_of;
+        let key = size_of::<BrickKey>();
+        let geometry: usize = self
+            .keys
+            .values()
+            .map(|k| k.vertices.capacity() * size_of::<Vertex>() + k.indices.capacity() * 4)
+            .sum();
+        let rest: usize = self
+            .cage_rest
+            .values()
+            .map(|positions| positions.capacity() * size_of::<[f32; 3]>())
+            .sum();
+        let tables = self.keys.capacity() * (key + size_of::<KeyGeometry>())
+            + self.cage_rest.capacity() * (key + size_of::<Vec<[f32; 3]>>())
+            + self.touched.capacity() * key
+            + self.layout.resident_bytes();
+        (geometry + rest + tables) as u64
+    }
+
     /// Re-meshes whatever the document reports as dirty and uploads the result.
     ///
     /// Returns `None` when nothing was dirty, so a frame with no edit costs
