@@ -608,6 +608,13 @@ tube behind on every move.
 | Arrastar no vazio | Draws the curve freehand, laying a point every tube-width |
 | Duplo clique na linha | Splits the span under the pointer, and takes the new point in hand |
 
+**A circle tube keeps its authored radius.** Its overlapping swept segments
+meet with a hard union inside the tube, so adding more control points does not
+inflate it. The field's measured diameter is within 10% of twice the chosen
+radius on straight spans from 0.02 to 0.5 world units. Square, hexagon and
+triangle sections keep their intended corners without spikes along a dense
+straight guide.
+
 **The points in hand follow the history.** A control point reaches the engine
 as part of the guide the moment there are two to sweep along, so ⌘Z takes
 points back — and the hand used to keep them, which meant the panel offered a

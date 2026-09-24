@@ -12420,15 +12420,11 @@ impl ClayDocument {
             let mut item = claycore::Item::stroke().map_err(ModelError::engine)?;
             item.set_curve_points(guide, kind)
                 .map_err(ModelError::engine)?;
-            // The chain's own smoothing, so consecutive spans meet without a
-            // crease where the radius steps.
-            let thinnest = curve
-                .points
-                .iter()
-                .map(|point| point.radius)
-                .fold(f32::MAX, f32::min);
-            item.set_stroke_blend_k(thinnest * 0.5)
-                .map_err(ModelError::engine)?;
+            // A stroke already consists of overlapping round-cone segments.
+            // A soft union adds material at every overlap, so its thickness
+            // grows with the tessellation density. A hard union preserves the
+            // radii carried by the guide points, including tapered spans.
+            item.set_stroke_blend_k(0.0).map_err(ModelError::engine)?;
             return Ok(item);
         }
 
