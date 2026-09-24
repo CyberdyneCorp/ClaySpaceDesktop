@@ -2151,6 +2151,35 @@ impl ClayDocument {
         }
     }
 
+    fn first_visible_field_layer(&self) -> Option<LayerId> {
+        self.layers
+            .iter()
+            .find(|layer| layer.visible && layer.is_in_the_field())
+            .map(|layer| layer.id)
+    }
+
+    /// Covers the first-visible rule in ClayCore's "What a command that changes
+    /// the visible SDF layer list costs" paragraph in `scene/commands.cpp`.
+    /// A composed layer promoted to initializer (or demoted to a fold) can
+    /// change the field over its own extent, outside the edited layer's bound.
+    fn mark_first_visible_flip(&mut self, before: Option<LayerId>) -> Result<(), ModelError> {
+        let after = self.first_visible_field_layer();
+        if before == after {
+            return Ok(());
+        }
+        for id in [before, after].into_iter().flatten() {
+            if self.layers.iter().any(|layer| layer.id == id)
+                && !self
+                    .document
+                    .layer_is_hard_union(id)
+                    .map_err(ModelError::engine)?
+            {
+                self.mark_for_refill(id, &[])?;
+            }
+        }
+        Ok(())
+    }
+
     /// Writes one layer's visibility without settling the cache.
     ///
     /// `SceneModel::set_layer_visible` is this plus a drain, and that is the
@@ -2180,6 +2209,7 @@ impl ClayDocument {
     fn write_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
         let id = self.layers[index].id;
+        let first = self.first_visible_field_layer();
         self.document
             .set_layer_visible(id, visible)
             .map_err(ModelError::engine)?;
@@ -2187,7 +2217,8 @@ impl ClayDocument {
         if self.visibility_is_borrowed || !self.layers[index].is_in_the_field() {
             return Ok(());
         }
-        self.mark_for_refill(id, &[])
+        self.mark_for_refill(id, &[])?;
+        self.mark_first_visible_flip(first)
     }
 
     /// How many bytes a voxel cell costs, for the budget refusal.
@@ -10352,6 +10383,7 @@ impl SceneModel for ClayDocument {
             ));
         }
         let id = self.layers[index].id;
+        let first = self.first_visible_field_layer();
         // Where it was, asked while it is still there to ask.
         //
         // The cache holds the *evaluated field*, brick by brick. Removing a
@@ -10396,6 +10428,7 @@ impl SceneModel for ClayDocument {
         // the control is drawn per stack row and the soloed row is the one that
         // left, so the rest of the scene stayed hidden with no way back.
         self.release_solo_of(key)?;
+        self.mark_first_visible_flip(first)?;
         let active = self.active_layer().id;
         self.refill(active, &[])?;
         // Re-evaluated against the document as it is now, which is what drops
@@ -10420,6 +10453,7 @@ impl SceneModel for ClayDocument {
             return Ok(());
         }
         let id = self.layers[from].id;
+        let first = self.first_visible_field_layer();
         self.document
             .move_layer(id, to as i32)
             .map_err(ModelError::engine)?;
@@ -10432,6 +10466,7 @@ impl SceneModel for ClayDocument {
             .iter()
             .position(|layer| layer.key == key)
             .unwrap_or(self.active.min(self.layers.len() - 1));
+        self.mark_first_visible_flip(first)?;
         let active = self.active_layer().id;
         self.refill(active, &[])?;
         Ok(())
@@ -15993,6 +16028,149 @@ impl ObjectModel for ClayDocument {
             node: node.get(),
         };
         self.object_index(id).map(|_| id)
+    }
+}
+
+#[cfg(test)]
+mod first_visible_refill_tests {
+    use super::*;
+
+    fn composed_layers() -> (ClayDocument, LayerKey, LayerKey) {
+        let policy = crate::BackendPolicy::discover(None).expect("discover backends");
+        let mut doc = ClayDocument::new(policy)
+            .and_then(ClayDocument::with_starting_form)
+            .expect("a starting form");
+        let base = doc.active_layer().key;
+        let cutter = doc
+            .add_layer("Cutter", Representation::Sdf)
+            .expect("cutter");
+        doc.place_object(
+            Shape::Sphere,
+            &[0.6],
+            [3.0, 0.0, 0.0],
+            clayspace_model::CombineSettings::default(),
+        )
+        .expect("cutter shape");
+        let id = doc.layers[doc.index_of(cutter).unwrap()].id;
+        doc.document
+            .set_layer_composition(id, claycore::Op::Subtract, claycore::Blend::Hard, 0.0, 0.0)
+            .expect("a subtracting layer");
+        doc.refill(id, &[]).expect("settle composed field");
+        (doc, base, cutter)
+    }
+
+    fn surface_at_cutter(doc: &ClayDocument) -> Option<f32> {
+        doc.cache
+            .raycast([3.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+            .expect("raycast")
+            .map(|hit| hit.position[2])
+    }
+
+    #[test]
+    fn hiding_a_base_under_a_cutter_matches_a_rebuild() {
+        let (mut doc, base, _) = composed_layers();
+        assert_eq!(surface_at_cutter(&doc), None);
+        doc.set_layer_visible(base, false).expect("hide base");
+        let incremental = surface_at_cutter(&doc);
+
+        let (mut rebuilt, rebuilt_base, _) = composed_layers();
+        rebuilt
+            .set_layer_visible(rebuilt_base, false)
+            .expect("hide base");
+        rebuilt
+            .cache
+            .mark_dirty([-4.0; 3], [4.0; 3])
+            .expect("whole box");
+        rebuilt.drain_dirty().expect("rebuild box");
+        let whole = surface_at_cutter(&rebuilt);
+        assert!(whole.is_some(), "the promoted cutter supplied no surface");
+        assert_eq!(incremental, whole);
+
+        doc.set_layer_visible(base, true).expect("show base");
+        assert_eq!(surface_at_cutter(&doc), None);
+    }
+
+    #[test]
+    fn reordering_past_the_first_visible_layer_matches_a_rebuild() {
+        let (mut doc, base, cutter) = composed_layers();
+        doc.move_layer(base, 1).expect("move base above cutter");
+        let incremental = surface_at_cutter(&doc);
+
+        let (mut rebuilt, rebuilt_base, _) = composed_layers();
+        rebuilt.move_layer(rebuilt_base, 1).expect("same order");
+        rebuilt
+            .cache
+            .mark_dirty([-4.0; 3], [4.0; 3])
+            .expect("whole box");
+        rebuilt.drain_dirty().expect("rebuild box");
+        let whole = surface_at_cutter(&rebuilt);
+        assert!(whole.is_some(), "the first layer supplied no surface");
+        assert_eq!(incremental, whole);
+        assert_eq!(
+            doc.first_visible_field_layer(),
+            Some(doc.layers[doc.index_of(cutter).unwrap()].id)
+        );
+    }
+
+    #[test]
+    fn removing_the_first_visible_layer_matches_a_rebuild() {
+        let (mut doc, base, _) = composed_layers();
+        doc.add_layer("Another", Representation::Sdf)
+            .expect("third layer");
+        doc.remove_layer(base).expect("remove base");
+        let incremental = surface_at_cutter(&doc);
+        doc.cache
+            .mark_dirty([-4.0; 3], [4.0; 3])
+            .expect("whole box");
+        doc.drain_dirty().expect("rebuild box");
+        let whole = surface_at_cutter(&doc);
+        assert!(whole.is_some(), "the promoted cutter supplied no surface");
+        assert_eq!(incremental, whole);
+    }
+
+    #[test]
+    fn visibility_that_keeps_the_first_layer_marks_only_the_toggled_layer() {
+        let (mut doc, _, _) = composed_layers();
+        let third = doc
+            .add_layer("Another", Representation::Sdf)
+            .expect("third layer");
+        doc.place_object(
+            Shape::Sphere,
+            &[0.6],
+            [6.0, 0.0, 0.0],
+            clayspace_model::CombineSettings::default(),
+        )
+        .expect("third shape");
+        let id = doc.layers[doc.index_of(third).unwrap()].id;
+        doc.take_dirty_keys();
+        doc.set_layer_visible(third, false).expect("hide third");
+        let changed = doc.take_dirty_keys();
+        doc.mark_for_refill(id, &[]).expect("mark only third");
+        doc.drain_dirty().expect("drain only third");
+        assert_eq!(changed, doc.take_dirty_keys());
+    }
+
+    #[test]
+    fn adding_the_first_visible_layer_matches_a_rebuild() {
+        let (mut doc, base, cutter) = composed_layers();
+        doc.set_layer_visible(base, false).expect("hide base");
+        doc.set_layer_visible(cutter, false).expect("hide cutter");
+        doc.add_layer("New base", Representation::Sdf)
+            .expect("new first layer");
+        doc.place_object(
+            Shape::Sphere,
+            &[0.6],
+            [3.0, 0.0, 0.0],
+            clayspace_model::CombineSettings::default(),
+        )
+        .expect("new base shape");
+        let incremental = surface_at_cutter(&doc);
+        doc.cache
+            .mark_dirty([-4.0; 3], [4.0; 3])
+            .expect("whole box");
+        doc.drain_dirty().expect("rebuild box");
+        assert!(incremental.is_some(), "the new layer supplied no surface");
+        assert_eq!(incremental, surface_at_cutter(&doc));
     }
 }
 

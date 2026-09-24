@@ -2846,6 +2846,15 @@ still catching up rather than measuring it half-built.
 Two operations marked far more of the field than they had changed, and paid for
 all of it.
 
+**Changing the first visible field layer can reach the one above it.** The
+first visible SDF layer initializes the field; each later layer folds into it.
+Hiding or removing a base, or moving another layer below it, can promote a
+subtractive layer into that first position. Its whole shape can then appear
+outside the base's bound. The cache marks that composed layer as well as the
+edited layer when the first-visible role changes. Showing the base again
+restores the earlier field. A toggle elsewhere in the stack keeps its ordinary
+bounded refill, and grids and carried meshes still require no field refill.
+
 **Cancelling a curve costs the tube.** Retiring the placed sweep used to refill
 the subtool the curve was laid on *and* the box that subtool occupied before
 the removal — the same thing twice, and on a worked subtool that is everything
