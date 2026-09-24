@@ -1117,6 +1117,14 @@ impl App {
         outstanding
     }
 
+    /// Collect completed background work on either a frame or an agent wait.
+    fn poll_jobs(&mut self) {
+        self.retopo.poll();
+        self.uv.poll();
+        self.bake.poll();
+        self.conform.poll();
+    }
+
     /// Every channel a refusal arrives on, in the order the answer belongs to
     /// the command.
     ///
@@ -5043,10 +5051,7 @@ impl App {
         // A retopology that has finished is placed here, before the interface
         // is built, so the frame that shows the new subtool is the frame that
         // learns about it. Never blocks: a job still running reports nothing.
-        self.retopo.poll();
-        self.uv.poll();
-        self.bake.poll();
-        self.conform.poll();
+        self.poll_jobs();
 
         // The interface is built first, because it decides where the viewport
         // is and therefore what a pointer position means.
@@ -6808,8 +6813,10 @@ impl Session for App {
         // on this thread, so return its outstanding work when a pass makes no
         // progress instead of spinning until the budget expires.
         loop {
+            self.poll_jobs();
             let before = self.outstanding_work();
             self.finish_pending_geometry();
+            self.poll_jobs();
             let after = self.outstanding_work();
             if after.is_empty() || after == before || started.elapsed() >= budget {
                 break;
