@@ -325,6 +325,70 @@ pub struct MemoryDiagnostics {
     pub surfaces: usize,
     /// What those surfaces contributed to the figures above.
     pub surface_bytes: u64,
+    /// The brick cache: surface-brick payload and the per-key bookkeeping
+    /// beside it.
+    ///
+    /// Held by this application beside the document, as the surfaces are, and
+    /// outside [`total`](Self::total) for the same reason — the engine's report
+    /// walks the document, and the cache is not in it.
+    pub cache_bytes: u64,
+    /// What the brick cache was created with; zero is unlimited.
+    ///
+    /// The budget bounds the cache's payload and nothing else, so it is a
+    /// ceiling on [`cache_bytes`](Self::cache_bytes) and not on
+    /// [`in_use`](Self::in_use).
+    pub cache_budget: u64,
+    /// What this application holds to draw the document.
+    pub drawing: DrawingMemory,
+}
+
+impl MemoryDiagnostics {
+    /// Everything this document is holding: the engine's figure with the
+    /// surfaces folded in, the brick cache, and the drawing.
+    ///
+    /// The one figure the status area and an agent both read. The engine's
+    /// [`total`](Self::total) alone was reported as this for a long time, and
+    /// against a process footprint it read 10x to 2,000x low: what it leaves
+    /// out — the cache, the geometry the viewport keeps, the buffers it
+    /// uploads into — is most of what a sculpting session holds.
+    pub fn in_use(&self) -> u64 {
+        self.total
+            .saturating_add(self.cache_bytes)
+            .saturating_add(self.drawing.total())
+    }
+}
+
+/// What this application holds to draw the document, beside the document.
+///
+/// The host-owned part of the ledger ("desenho"). None of it is the user's
+/// work and all of it is rebuilt from the document, but it is memory the
+/// process holds, and a figure that leaves it out answers "how big is the
+/// sculpture" when the question is "what is this costing".
+///
+/// Counted where it is allocated rather than estimated from the document: the
+/// geometry by the store that keeps it, the rest by the graphics device's own
+/// gauge, which every buffer and target it creates reports to and gives back
+/// to when dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DrawingMemory {
+    /// The CPU-side copy of the surface the viewport draws from, per key.
+    pub geometry: u64,
+    /// Vertex and index buffers, at capacity.
+    pub buffers: u64,
+    /// Upload staging the device may not have finished with.
+    pub staging: u64,
+    /// Render targets: the window's framebuffer, the shadow map, and any
+    /// capture target while it is alive.
+    pub targets: u64,
+}
+
+impl DrawingMemory {
+    pub fn total(&self) -> u64 {
+        self.geometry
+            .saturating_add(self.buffers)
+            .saturating_add(self.staging)
+            .saturating_add(self.targets)
+    }
 }
 
 /// What mesh sculpting has had to correct for itself.
@@ -580,6 +644,26 @@ impl Diagnostics {
                     "{} held, {} folded in",
                     memory.surfaces,
                     megabytes(memory.surface_bytes)
+                ),
+            );
+            // The figure the status area shows, and what it is made of past
+            // the engine's own. The engine's total is the document; this is
+            // the process's share of it, which is what a footprint is compared
+            // against.
+            let drawing = &memory.drawing;
+            line(
+                "memory in use",
+                &format!(
+                    "{} = {} engine + {} cache + {} drawing \
+                     ({} geometry, {} buffers, {} staging, {} targets)",
+                    megabytes(memory.in_use()),
+                    megabytes(memory.total),
+                    megabytes(memory.cache_bytes),
+                    megabytes(drawing.total()),
+                    megabytes(drawing.geometry),
+                    megabytes(drawing.buffers),
+                    megabytes(drawing.staging),
+                    megabytes(drawing.targets)
                 ),
             );
         }
@@ -860,7 +944,36 @@ mod tests {
             total: 11 * 1024 * 1024,
             surfaces: 2,
             surface_bytes: 3 * 1024 * 1024,
+            cache_bytes: 4 * 1024 * 1024,
+            cache_budget: 512 * 1024 * 1024,
+            drawing: DrawingMemory {
+                geometry: 5 * 1024 * 1024,
+                buffers: 6 * 1024 * 1024,
+                staging: 1024 * 1024,
+                targets: 2 * 1024 * 1024,
+            },
         }
+    }
+
+    /// The figure in use is the engine's with everything this application
+    /// holds beside it, and the report shows what it is made of — a person
+    /// comparing it with a footprint needs to see which part moved.
+    #[test]
+    fn the_figure_in_use_folds_in_the_cache_and_the_drawing() {
+        let memory = memory();
+        assert_eq!(memory.drawing.total(), 14 * 1024 * 1024);
+        assert_eq!(memory.in_use(), (11 + 4 + 14) * 1024 * 1024);
+
+        let mut diagnostics = sample();
+        diagnostics.memory = Some(memory);
+        let text = diagnostics.to_report();
+        assert!(
+            text.contains(
+                "memory in use: 29.0 MB = 11.0 MB engine + 4.0 MB cache + 14.0 MB drawing \
+                 (5.0 MB geometry, 6.0 MB buffers, 1.0 MB staging, 2.0 MB targets)"
+            ),
+            "{text}"
+        );
     }
 
     /// The whole reason the three are carried instead of one figure: a reader

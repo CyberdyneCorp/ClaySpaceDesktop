@@ -936,19 +936,24 @@ pub struct JobState {
 pub struct MemoryState {
     pub in_use_bytes: u64,
     pub budget_bytes: u64,
-    /// What the status area shows, which is the brick cache's own figure.
+    /// The brick cache on its own: payload and bookkeeping.
     ///
-    /// Beside `in_use_bytes` rather than instead of it, because the two count
-    /// different things and both are the engine's: this is the cache that the
-    /// budget above bounds, and `in_use_bytes` is the whole document's ledger
-    /// with its surfaces. They were reported as though they were one number,
-    /// so a status area reading 0.00 GB against a report of 359 MB looked like
-    /// one of them was wrong. Folding them into a single figure that also
-    /// accounts for host-owned memory is the memory-accounting issue's work;
-    /// until then an agent can at least see which figure it is reading.
+    /// Included in `in_use_bytes`, and named beside it because it is the part
+    /// the budget above bounds — the budget limits the cache, not the whole,
+    /// and comparing it against the whole reads as an overrun that is not one.
     pub cache_bytes: u64,
-    /// Which part of the document holds it — the engine's own accounting, not
-    /// an estimate kept here.
+    /// What the operating system charges the process, where it can be read.
+    ///
+    /// The figure `in_use_bytes` is checked against. It is always larger —
+    /// it also counts the code, the graphics driver and the interface — and a
+    /// footprint that runs far past the ledger is logged with the ledger's
+    /// breakdown, because that gap is what memory nobody counts looks like.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footprint_bytes: Option<u64>,
+    /// Which part holds it. The engine's own accounting for the document and
+    /// its surfaces, then the parts this application holds beside it: `cache`
+    /// and `desenho` (the drawing), with the drawing's own four parts after
+    /// it.
     pub parts: Vec<MemoryPart>,
 }
 
@@ -1290,6 +1295,7 @@ mod tests {
                 in_use_bytes: 0,
                 budget_bytes: 0,
                 cache_bytes: 0,
+                footprint_bytes: None,
                 parts: Vec::new(),
             }),
             timing: Some(TimingState {

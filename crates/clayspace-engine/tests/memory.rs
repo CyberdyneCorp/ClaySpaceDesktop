@@ -356,3 +356,32 @@ fn a_hierarchy_reaches_the_report_and_moves_it_when_it_deepens() {
         "the hierarchy did not reach the document's report at all"
     );
 }
+
+/// The brick cache is held beside the document as the surfaces are, and the
+/// engine's report walks neither — so it was in no figure an agent read, and
+/// the status area showed only its payload, which on a worked document read
+/// 0.00 GB. It is now in the ledger, payload and bookkeeping both, and in the
+/// figure in use.
+#[test]
+fn the_ledger_counts_the_brick_cache() {
+    let document = sphere();
+    let stats = document.cache().stats().expect("the cache's figures");
+    assert!(
+        stats.memory_usage > 0,
+        "the starting form holds no surface bricks, so there is nothing to count"
+    );
+    let memory = document.memory_diagnostics().expect("diagnostics");
+    assert_eq!(
+        memory.cache_bytes,
+        stats.memory_usage + stats.bookkeeping_bytes,
+        "the cache's payload and its bookkeeping are both memory the process holds"
+    );
+    assert_eq!(memory.cache_budget, stats.memory_budget.unwrap_or(0));
+    assert_eq!(
+        memory.in_use(),
+        memory.total + memory.cache_bytes,
+        "the document holds no drawing, so in use is the engine's figure and \
+         the cache — and not the engine's figure alone"
+    );
+    assert!(memory.in_use() > document.memory().expect("memory").total);
+}

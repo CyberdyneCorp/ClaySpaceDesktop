@@ -370,8 +370,8 @@ pub struct ShellState<'a> {
     pub can_undo: bool,
     pub can_redo: bool,
 
-    /// Bytes in use and the budget, for the memory meter.
-    pub memory: (u64, u64),
+    /// What the memory meter shows.
+    pub memory: MemoryFigures,
     pub backend: &'a str,
     /// The document's scale and what lengths are shown in.
     pub units: Units,
@@ -688,33 +688,60 @@ fn clock(left: std::time::Duration) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
+/// The memory meter's figures.
+///
+/// Two figures and not one, because the budget bounds only one of them. The
+/// number is everything the document holds — the same figure an agent reads
+/// as `state.memory.in_use_bytes` — and the bar is the brick cache against the
+/// budget it was created with. A bar that filled with the whole figure would
+/// read as the budget running out when what grew was, say, the viewport's
+/// buffers, which the budget does not limit and nothing would release.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryFigures {
+    pub in_use: u64,
+    pub cache: u64,
+    pub budget: u64,
+}
+
+impl MemoryFigures {
+    /// How full the cache is, from zero to one; zero where it is unlimited.
+    pub fn cache_fraction(&self) -> f32 {
+        if self.budget == 0 {
+            0.0
+        } else {
+            (self.cache as f64 / self.budget as f64).clamp(0.0, 1.0) as f32
+        }
+    }
+}
+
 /// The status area: document, memory, backend and units.
 pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.horizontal(|ui| {
         ui.add_space(space::PANEL);
 
-        let (used, budget) = state.memory;
+        let memory = state.memory;
         ui.label(
             egui::RichText::new(s.label_memory)
                 .size(type_scale::HEADING)
                 .color(Tokens::text_faint()),
         );
-        numeric(ui, format!("{} / {}", gigabytes(used), gigabytes(budget)));
+        numeric(ui, gigabytes(memory.in_use));
 
         // Approaching the budget changes state before it is exhausted, rather
-        // than only at failure.
-        let fraction = if budget == 0 {
-            0.0
-        } else {
-            used as f32 / budget as f32
-        };
-        let (bar, _) = ui.allocate_exact_size(egui::vec2(120.0, 4.0), egui::Sense::hover());
+        // than only at failure. The cache against its budget, which is what
+        // the budget bounds — see `MemoryFigures`.
+        let fraction = memory.cache_fraction();
+        let (bar, response) = ui.allocate_exact_size(egui::vec2(120.0, 4.0), egui::Sense::hover());
+        response.on_hover_text(format!(
+            "{}: {} / {}",
+            s.hint_memory_cache,
+            gigabytes(memory.cache),
+            gigabytes(memory.budget)
+        ));
         ui.painter().rect_filled(bar, 0.0, Tokens::raised());
-        let filled = egui::Rect::from_min_size(
-            bar.min,
-            egui::vec2(bar.width() * fraction.clamp(0.0, 1.0), bar.height()),
-        );
+        let filled =
+            egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * fraction, bar.height()));
         ui.painter().rect_filled(
             filled,
             0.0,
@@ -1168,6 +1195,24 @@ mod tests {
         assert_eq!(thousands(789), "789");
         assert_eq!(thousands(0), "0");
         assert_eq!(thousands(1_000), "1.000");
+    }
+
+    /// The bar is the cache against its budget, not the whole figure against
+    /// it: the budget bounds the cache and nothing else.
+    #[test]
+    fn the_memory_bar_is_the_cache_against_its_budget() {
+        let figures = MemoryFigures {
+            in_use: 900,
+            cache: 25,
+            budget: 100,
+        };
+        assert_eq!(figures.cache_fraction(), 0.25);
+        assert_eq!(MemoryFigures::default().cache_fraction(), 0.0);
+        let full = MemoryFigures {
+            cache: 300,
+            ..figures
+        };
+        assert_eq!(full.cache_fraction(), 1.0);
     }
 
     #[test]

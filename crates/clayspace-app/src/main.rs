@@ -286,16 +286,22 @@ enum CurvePress {
 /// bar: a second behind reads the same to a person as exact, nothing else in
 /// the application derives anything from it, and one walk a second is a cost
 /// no sculpture can make matter.
+///
+/// What it reads is the whole ledger now — the engine's report with the
+/// surfaces, the brick cache and the drawing, see [`clayspace_app::memory`] —
+/// and the agent's `state.memory` and the diagnostics window read the same
+/// reading, so no two of them can show different figures for one moment.
+/// Generic over the reading so the clock can be tested without a document.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct MemoryMeter {
-    /// Bytes in use and the budget, as last read.
-    figures: (u64, u64),
+struct MemoryMeter<T = (u64, u64)> {
+    /// The figures as last read.
+    figures: T,
     /// When they were read. `None` before the first reading, and again
     /// whenever the document they describe has been replaced.
     taken: Option<Instant>,
 }
 
-impl MemoryMeter {
+impl<T: Copy> MemoryMeter<T> {
     /// How stale the figure may be before it is read again.
     const INTERVAL: Duration = Duration::from_secs(1);
 
@@ -310,7 +316,7 @@ impl MemoryMeter {
     /// zeroes: a cache that cannot answer has not thereby freed its memory.
     /// The stamp still moves, so a cache that answers no longer is asked once
     /// a second rather than once a frame.
-    fn figures(&mut self, now: Instant, read: impl FnOnce() -> Option<(u64, u64)>) -> (u64, u64) {
+    fn figures(&mut self, now: Instant, read: impl FnOnce() -> Option<T>) -> T {
         if self
             .taken
             .is_some_and(|taken| now.duration_since(taken) < Self::INTERVAL)
@@ -332,6 +338,21 @@ impl MemoryMeter {
     fn forget(&mut self) {
         self.taken = None;
     }
+
+    /// The figures as last read, without reading.
+    fn last(&self) -> T {
+        self.figures
+    }
+}
+
+/// One reading of the memory meter.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct MemoryReading {
+    /// The ledger, or `None` before the engine has answered once.
+    ledger: Option<clayspace_model::MemoryDiagnostics>,
+    /// What the operating system charged the process at the time, where the
+    /// probe had a figure.
+    footprint: Option<u64>,
 }
 
 struct App {
@@ -478,7 +499,11 @@ struct App {
     /// Here rather than at the call site because the figure has to outlive the
     /// frame that read it — that is the whole point of it — and because the
     /// document-swap path is what tells it to forget.
-    memory_meter: MemoryMeter,
+    memory_meter: MemoryMeter<MemoryReading>,
+    /// What the operating system charges the process, read off this thread.
+    footprint: clayspace_app::memory::FootprintProbe,
+    /// Whether a footprint the ledger does not explain has been logged.
+    footprint_watch: clayspace_app::memory::FootprintWatch,
 
     /// Where session state lives, when this machine has somewhere to put it.
     store: Option<SessionStore>,
@@ -827,6 +852,8 @@ impl App {
             show_diagnostics: false,
             diagnostics_copied: false,
             memory_meter: MemoryMeter::default(),
+            footprint: clayspace_app::memory::FootprintProbe::spawn(),
+            footprint_watch: clayspace_app::memory::FootprintWatch::default(),
             store,
             recent,
             autosave: AutosavePolicy::default(),
@@ -3449,10 +3476,11 @@ impl App {
             self.document
                 .with(|document| document.multires_diagnostics()),
         );
-        // The surfaces this application holds are folded in on the way, which
-        // is what keeps the figure from being the document's memory with the
-        // largest thing in it left out — see `ClayDocument::memory`.
-        report.memory = self.document.with(|document| document.memory_diagnostics());
+        // The meter's reading rather than a fresh one: this report is built
+        // every frame, and the ledger is a walk of the brick cache and of
+        // every surface. It is also what keeps this window, the status area
+        // and an agent's `state.memory` on one figure.
+        report.memory = self.memory_meter.last().ledger;
         // What is in hand, against the layer it would land on. Read out of the
         // capability table by the report itself rather than described here, so
         // that the line and the shelf cannot say different things about the
@@ -4924,20 +4952,50 @@ impl App {
         self.rigging = self.rigging && self.armature.is_rigging();
     }
 
-    /// Bytes in use and the budget, for the status area's meter.
+    /// The memory ledger, for the status area, the diagnostics and an agent.
     ///
     /// The engine is asked at most once a second, because asking it walks the
     /// whole brick cache — see [`MemoryMeter`], which is where that story is
-    /// told. The document handle is cloned out first so the closure borrows
-    /// the document rather than all of `self`; it is two reference counts, not
-    /// a document.
-    fn memory_figures(&mut self, now: Instant) -> (u64, u64) {
-        let document = self.document.clone();
-        self.memory_meter.figures(now, || {
-            document
-                .with(|document| document.cache().stats().ok())
-                .map(|stats| (stats.memory_usage, stats.memory_budget.unwrap_or(0)))
+    /// told. Each fresh reading is also checked against the process
+    /// footprint, and a footprint the ledger does not explain is logged with
+    /// its breakdown: that comparison is what notices memory nobody counts.
+    fn memory_reading(&mut self, now: Instant) -> MemoryReading {
+        let Self {
+            memory_meter,
+            document,
+            graphics,
+            footprint,
+            footprint_watch,
+            ..
+        } = self;
+        memory_meter.figures(now, || {
+            let drawing = graphics
+                .as_ref()
+                .map(|graphics| clayspace_app::memory::drawing(&graphics.geometry, &graphics.gpu))
+                .unwrap_or_default();
+            let ledger =
+                document.with(|document| clayspace_app::memory::ledger(document, drawing))?;
+            let footprint = footprint.latest();
+            if let Some(line) = footprint.and_then(|bytes| footprint_watch.observe(bytes, &ledger))
+            {
+                eprintln!("{line}");
+            }
+            Some(MemoryReading {
+                ledger: Some(ledger),
+                footprint,
+            })
         })
+    }
+
+    /// The status area's meter: the whole figure in use, and the brick cache
+    /// against the budget that bounds it.
+    fn memory_figures(&mut self, now: Instant) -> clayspace_view::shell::MemoryFigures {
+        let ledger = self.memory_reading(now).ledger.unwrap_or_default();
+        clayspace_view::shell::MemoryFigures {
+            in_use: ledger.in_use(),
+            cache: ledger.cache_bytes,
+            budget: ledger.cache_budget,
+        }
     }
 
     fn redraw(&mut self) {
@@ -6504,6 +6562,11 @@ impl App {
         if !(query.memory || query.timing || query.backends || query.strokes) {
             return;
         }
+        // Memory is read through the same meter the status area reads, before
+        // the report that carries it is built, so an agent and a person cannot
+        // disagree — and so an agent polling this does not put back the
+        // per-call walk of the brick cache that the meter took out.
+        let footprint = self.memory_reading(Instant::now()).footprint;
         // The stroke section is the one part of this report that costs
         // something to assemble, so it is assembled only where the agent asked
         // for it.
@@ -6513,12 +6576,7 @@ impl App {
             StrokeSection::Skipped
         });
         if query.memory {
-            // The engine's own accounting, read through the same meter the
-            // status area reads, so an agent and a person cannot disagree —
-            // and so an agent polling this does not put back the per-call walk
-            // of the brick cache that the meter took out.
-            let (in_cache, budget) = self.memory_figures(Instant::now());
-            state.memory = report::memory_state(&diagnostics, in_cache, budget);
+            state.memory = report::memory_state(&diagnostics, footprint);
         }
         if query.timing {
             // The GPU passes the renderer timed, summed. Zero where the
@@ -6922,7 +6980,7 @@ mod memory_meter {
         let mut meter = MemoryMeter::default();
         let started = Instant::now();
         frame(&mut meter, started, &reads);
-        frame(&mut meter, started + MemoryMeter::INTERVAL, &reads);
+        frame(&mut meter, started + <MemoryMeter>::INTERVAL, &reads);
         assert_eq!(reads.get(), 2);
     }
 
@@ -6954,8 +7012,8 @@ mod memory_meter {
                 None
             })
         };
-        assert_eq!(refused(started + MemoryMeter::INTERVAL), (3, 9));
-        assert_eq!(refused(started + MemoryMeter::INTERVAL), (3, 9));
+        assert_eq!(refused(started + <MemoryMeter>::INTERVAL), (3, 9));
+        assert_eq!(refused(started + <MemoryMeter>::INTERVAL), (3, 9));
         assert_eq!(
             refusals.get(),
             1,
