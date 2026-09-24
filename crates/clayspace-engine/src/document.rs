@@ -1377,13 +1377,12 @@ pub struct ClayDocument {
     gesture_id: u64,
     /// History entries opening the live gesture recorded before it began.
     live_opening_entries: usize,
-    /// The gesture the preview has been showing, kept so that closing it can
-    /// lay the stroke down the way every smoothing stroke was laid down
-    /// before there was a preview.
+    /// The dabs the preview has applied, in order, kept so that closing the
+    /// gesture can lay down the same dabs rather than a summary of them.
     ///
     /// See [`ClayDocument::close_live_gesture`] for why the transaction's own
     /// commit is not used.
-    live_gesture: Option<(ToolKind, BrushSettings, [bool; 3], Vec<GestureSample>)>,
+    live_gesture: Option<LiveDabs>,
     /// Bumped whenever the surface the viewport should mesh from changes
     /// identity — a live gesture opening, committing or being abandoned.
     ///
@@ -3763,12 +3762,16 @@ impl ClayDocument {
         // The mirror is still pointed where the sculptor asked, because these
         // verbs share a layer with the ones it does reach.
         self.point_the_mirror(symmetry)?;
-        // Kept whole and unreflected, because the commit reflects it again.
+        // Unreflected, because the commit reflects it again; one dab per
+        // segment, where `live_relax_dab` puts it.
         if self.live_smooth.is_some() && matches!(tool, ToolKind::Suavizar | ToolKind::Relaxar) {
-            self.live_gesture
-                .get_or_insert_with(|| (tool, brush, symmetry, Vec::new()))
-                .3
-                .extend_from_slice(samples);
+            if let Some(last) = samples.last() {
+                let gesture = self.live_gesture.get_or_insert_with(|| LiveDabs {
+                    symmetry,
+                    dabs: Vec::new(),
+                });
+                gesture.dabs.push((brush.sanitized(), last.position));
+            }
         }
         // The live drag is not reflected here, and that is the engine's rule
         // rather than an omission: `clay_sdf_move_*` reflects the drag into
@@ -4800,6 +4803,58 @@ impl ClayDocument {
         })
     }
 
+    /// Lays down a live smoothing gesture: the region its dabs reached,
+    /// sampled once, relaxed by each dab in turn with the parameters the
+    /// preview gave it, and placed as one item.
+    ///
+    /// The arithmetic is the preview's — `live_relax_dab` hands the
+    /// transaction the same parameters, and the transaction relaxes its
+    /// retained volume in place — so what lands is what was shown, and only
+    /// the region the dabs reached is re-sampled.
+    fn relax_dabs(&mut self, dabs: &[(BrushSettings, [f32; 3])]) -> Result<(), ModelError> {
+        let Some((first, rest)) = dabs.split_first() else {
+            return Ok(());
+        };
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for (brush, centre) in dabs {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(centre[axis] - brush.size);
+                max[axis] = max[axis].max(centre[axis] + brush.size);
+            }
+        }
+        let cell = Self::bake_cell_size(first.0.size);
+        Self::grown_for_feather(&mut min, &mut max, cell);
+        let layer = self.active_layer().id;
+        let mut volume = {
+            let mask = self.active_mask();
+            let mask = mask.as_deref();
+            // The first dab samples the region and relaxes it in one call; the
+            // rest relax those samples in place, as the transaction does.
+            let mut volume = self
+                .document
+                .relax_region(
+                    &live_relax_params(first, mask),
+                    Self::bake_volume(cell),
+                    min,
+                    max,
+                )
+                .map_err(ModelError::engine)?;
+            for dab in rest {
+                volume
+                    .relax(&live_relax_params(dab, mask))
+                    .map_err(ModelError::engine)?;
+            }
+            volume
+        };
+        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])
+    }
+
     // -- the live half of the region tools ---------------------------------
 
     /// Whether a region gesture would be shown while it is being made.
@@ -5008,28 +5063,38 @@ impl ClayDocument {
         // moving 2458 pixels where the same stroke moves 205 here: the whole
         // surface shifts. Planar and Polir, which are baked the old way, are
         // identical on both platforms, so it is the consolidation and not the
-        // measurement. Filed upstream as ClayCore#379.
+        // measurement. Filed upstream as ClayCore#379, and closed there
+        // without an engine fault found: the divergence was never explained.
         //
         // Even where it measures well it is a heavy thing to do on every
         // stroke: it discards the layer's edit list and re-samples the whole
         // subtool at the cache's cell size, so repeated smoothing compounds
         // the resampling. So the preview is what the transaction is used for,
-        // and the stroke is laid down by the path that was always used.
+        // and the stroke is laid down as a bake of the region it reached.
         //
-        // The cost is that the preview and the result are not the same
-        // arithmetic: the preview relaxes cumulatively per dab, the bake makes
-        // one pass over the whole gesture. Measured on the same surface they
-        // land within 0.09 of each other in roughness, which is the difference
-        // between 5.74 and 5.83 — visible in numbers, not on the clay.
+        // THE BAKE REPLAYS EVERY DAB THE PREVIEW MADE, in the order it made
+        // them — see `relax_dabs`. It used to replay the gesture through
+        // `relax_stroke`, which makes ONE pass about the centre of the
+        // stroke's box: the preview compounded a pass per dab and the release
+        // kept one, so a spot dabbed smooth sprang back to its first dab on
+        // pointer-up, and a long stroke kept only a brush-sized spot in its
+        // middle. The measurement that called the two equivalent (0.09 apart
+        // in roughness) was of a gesture short enough that they were.
         drop(live);
-        let Some((tool, brush, symmetry, samples)) = gesture else {
+        let Some(LiveDabs { symmetry, dabs }) = gesture else {
             return Ok(opening);
         };
-        if samples.is_empty() {
+        if dabs.is_empty() {
             return Ok(opening);
         }
         let before = self.engine_undo_depth();
-        self.baked_stroke(tool, brush, &samples, symmetry)?;
+        for mirror in mirrors(symmetry) {
+            let reflected: Vec<(BrushSettings, [f32; 3])> = dabs
+                .iter()
+                .map(|(brush, centre)| (*brush, mirror.point(*centre)))
+                .collect();
+            self.relax_dabs(&reflected)?;
+        }
         let recorded = opening + self.engine_undo_depth().saturating_sub(before);
         self.refresh_stats();
         Ok(recorded)
@@ -5142,18 +5207,7 @@ impl ClayDocument {
         let Some(live) = live_smooth.as_mut() else {
             return Ok(EditOutcome::NOTHING);
         };
-        let dirty_bricks = live.dab(
-            document,
-            claycore::RelaxParams {
-                strength: brush.intensity,
-                radius_cells: 1,
-                iterations: 2,
-                centre: last.position,
-                region_radius: brush.size,
-                falloff: brush.size * 0.5,
-                mask,
-            },
-        )?;
+        let dirty_bricks = live.dab(document, live_relax_params(&(brush, last.position), mask))?;
         Ok(EditOutcome {
             changed: true,
             dirty_bricks,
@@ -9864,6 +9918,34 @@ struct VoxelGrab {
 /// Two axes give four and three give eight: the full subset lattice, which is
 /// what a sculptor means by "symmetric in x and y" — the four quadrants, not
 /// the two halves twice.
+/// The dabs a live smoothing gesture has made, and the symmetry it was made
+/// under.
+struct LiveDabs {
+    symmetry: [bool; 3],
+    /// Each dab's brush and where it was centred, unreflected, in order.
+    dabs: Vec<(BrushSettings, [f32; 3])>,
+}
+
+/// One live smoothing dab's relax, shared by the preview and the release so
+/// the two cannot drift apart.
+///
+/// The region and the falloff are `relax_stroke`'s, so a live gesture smooths
+/// the clay a held one would, dab for dab.
+fn live_relax_params<'a>(
+    (brush, centre): &(BrushSettings, [f32; 3]),
+    mask: Option<&'a claycore::MaskField>,
+) -> claycore::RelaxParams<'a> {
+    claycore::RelaxParams {
+        strength: brush.intensity,
+        radius_cells: 1,
+        iterations: 2,
+        centre: *centre,
+        region_radius: brush.size,
+        falloff: brush.size * 0.5,
+        mask,
+    }
+}
+
 fn mirrors(symmetry: [bool; 3]) -> Vec<Mirror> {
     let mut out = vec![Mirror([false; 3])];
     for axis in 0..3 {
