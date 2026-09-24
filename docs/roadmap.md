@@ -50,7 +50,7 @@ those stay on the list:
 under *Upstream: released, not yet taken up here*. It is now the larger part of
 what is left, and none of it waits on anyone but this repository.
 
-Engine pinned at ClayCore **0.120.0**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.120.1**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. The pins before it
 were v0.116.0 (#140), which repaired a drag and stopped losing a pull; v0.113.0
 (#126), which removed the whole-field re-mesh on every stroke release and gave

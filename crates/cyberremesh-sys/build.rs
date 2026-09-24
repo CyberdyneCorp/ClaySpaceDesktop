@@ -12,9 +12,8 @@
 //!   in-process solver does not fail: it silently routes to the portable
 //!   quadrangulator and produces genuinely different quads. `REQUIRE` turns
 //!   that into a configure error.
-//! - **No ABI number to assert.** This engine's `SOVERSION` is its project
-//!   major, still 0, so `libcyber_capi.so.0` names every 0.x release. The pin
-//!   is the submodule commit and `cyber_version` is informational.
+//! - **Check the ABI and pin the release.** The shared library's soname carries
+//!   ABI major 2, while the submodule commit pins output behavior.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,9 +58,8 @@ fn check_submodule(engine: &Path) {
 /// another. What that produces is a wall of `unresolved import` on generated
 /// bindings, which names neither the cause nor the fix.
 ///
-/// It matters more here than there. This engine's soname does not move between
-/// minor releases — `libcyber_capi.so.0` for every 0.x — so there is no linker
-/// error to fall back on when the revision is wrong.
+/// The ABI check catches incompatible libraries; this revision check also
+/// prevents silently changing the meshes or maps produced by a compatible one.
 fn check_submodule_revision(engine: &Path, workspace: &Path) {
     let Some(pinned) = git(workspace, &["rev-parse", "HEAD:vendor/CyberRemesherAndUV"]) else {
         return;
@@ -244,10 +242,8 @@ fn build_engine(engine: &Path) -> PathBuf {
 /// happened rather than a guess that it might have. Checked after the build
 /// because that is when the answer exists.
 ///
-/// Still a build-time check and still not the whole guard: it says what we
-/// linked, and cannot say what a host loads later — `libcyber_capi.so.0`
-/// names every 0.x release. The runtime half needs an entry point the pinned
-/// ABI does not have.
+/// Still a build-time check: it says what this build linked, while the
+/// application also checks the library's ABI at runtime.
 fn report_the_solver_the_build_got(build: &Path) {
     let solver = build.join("src/quadrangulate");
     let built = std::fs::read_dir(&solver)

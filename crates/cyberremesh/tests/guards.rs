@@ -48,5 +48,5 @@ fn the_worker_pool_can_be_capped_and_reports_what_it_is() {
 #[test]
 fn the_linked_engine_is_the_pinned_release() {
     let version = cyberremesh::version();
-    assert_eq!((version.major, version.minor), (0, 9), "linked {version}");
+    assert_eq!((version.major, version.minor), (0, 10), "linked {version}");
 }
