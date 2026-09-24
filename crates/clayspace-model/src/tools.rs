@@ -1038,8 +1038,7 @@ pub enum ToolNote {
     /// A hierarchy carries no colour of its own, so the colour brushes are not
     /// offered on one.
     ///
-    /// The one note here attached to a tool that is **absent** rather than
-    /// present. It is worth the exception because the absence otherwise reads
+    /// An absence worth explaining because it otherwise reads
     /// as an oversight: every other mesh brush is on this shelf, these two are
     /// missing, and the shelf cannot say why. What it does not do is leave the
     /// sculptor without a route — the cage's colours are subdivided all the way
@@ -2074,10 +2073,9 @@ impl ToolKind {
     /// surprise — and where faking agreement would mean doing arithmetic the
     /// engine does not offer.
     ///
-    /// Answers for a pair whether or not the tool is *offered* on it. Four of
-    /// the five notes describe a tool that is there, and one describes one
-    /// that is not — [`ToolKind::availability`] carries that one into the
-    /// refusal, since a tool nobody can select is a tool nobody can hover.
+    /// Answers for a pair whether or not the tool is *offered* on it. Notes
+    /// for absent tools are carried into [`ToolKind::availability`]'s refusal,
+    /// since a tool nobody can select is a tool nobody can hover.
     pub fn note_on(self, representation: Representation) -> Option<ToolNote> {
         match (self, representation) {
             (Self::Planar, Representation::Voxel) => Some(ToolNote::VoxelPlanarIsTwoSided),
