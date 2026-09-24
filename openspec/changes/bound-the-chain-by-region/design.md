@@ -61,3 +61,24 @@ Measured: gesture 1 reports `whole_layer=1` at 302 ms because the closure reache
 **The mirrored path costs roughly 2.5x the unmirrored one** — 110–140 ms against 43–49 — and mirrored is the default. That is honest cost rather than waste, because the patch genuinely spans the plane, but it means the common case is the expensive one.
 
 **Our local path depends on the starting form's volume not participating in the layer mirror.** ClayCore's gate refuses a node that does participate, and we measured that we are on the permissive side of it by construction. If a future change makes the base volume mirror-participating, this silently becomes whole-layer maintenance, which is measured **6x worse** for a chain. A test has to pin the local path, not just the outcome.
+
+## Measured after implementation
+
+Everything the design needed from the engine held, and the decision it rested on did not.
+
+**What held.** The floor calibrated cleanly: the first of 512 marched rays is lost at a step scale of 0.0134, a mirrored gesture multiplies the step scale by 0.54, and a floor of 0.05 leaves two mirrored gestures of margin. Stamps build no chain at all, so a stamp-heavy session never reaches the floor. The first collapse on a fresh form reports `whole_layer` and every later one is local — on a mirrored document too — and the closure holds its width (3.80 once, then flat). The chain returns to zero and a worked patch stays bounded.
+
+**One correction to the decision above.** The policy *does* special-case the first collapse: "collapse only when the plan stays local" read literally declines it, and then no later collapse is ever local either, because the engine's local path needs the volume the first one installs. So a whole-layer plan is accepted on a layer's first collapse and declined on every one after.
+
+**What did not hold is the premise that a bounded chain is a cheaper layer.** The proposal measured the bake — flat, 110–140 ms — and not what the layer costs afterwards. Measured here on the starting sphere, mirrored, one patch worked forty times (`crates/clayspace-engine/tests/chain_compaction.rs` and the series recorded in `compaction.rs`):
+
+| | no collapse | bake at the cache's 0.02 | bake at 0.04 |
+|---|---:|---:|---:|
+| refill, per brick | ~7 µs | ~430 µs | — |
+| undo, gesture 11 | 61 ms | 3,621 ms | 760 ms |
+| undo, gesture 40 | 362 ms | 5,418 ms | 858 ms |
+| surface bricks after the first bake | 1,045 | 3,432 | 1,081 |
+
+A baked patch is a sampled volume, and a refill over one costs about sixty times what it costs over the analytic chain. An undo refills what the engine reports it reached, which for a grab hung off the starting form is the form's whole bound — thousands of bricks with or without the collapse — so the per-brick price is the whole of the difference, and the collapse raises it. At the cache's own spacing the baked band also equals the cache's band exactly, and a collapsed sphere tripled its surface bricks; baking at twice the spacing fixes that and costs a tenth as much afterwards, and it is still a loss against the chain over any session length measured. The sixty is a debug-host figure: Linux CI in a release build measured the same undo at 1.9x the chain, so the tripwire asserts the direction (above 1.25x) rather than the debug magnitude.
+
+**So the mechanism ships with its floor at zero**, the Optimize refusal stays, and a tripwire test fails when an undo over a baked patch comes within 2x of one over the chain. The two things that would change the verdict are both upstream: a sampled volume that refills near an analytic item's per-brick cost, or an undo bound for a deformer append that is the deformer's support rather than its node's whole bound. The second would help the uncollapsed chain as much as the collapsed one, and is the more direct cure for the undo cost the audit measured.

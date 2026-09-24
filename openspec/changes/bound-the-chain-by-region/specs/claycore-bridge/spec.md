@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Regional consolidation is reachable and its signals are read correctly
 The bridge SHALL expose planning and performing a regional consolidation, and callers SHALL read its result by the rules below.

@@ -1,18 +1,13 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Optimising a brush-chain layer compacts it rather than refusing
-The layer-level optimise action SHALL collapse the region of the most recent gesture on a field layer degraded by a chain of brushes, and SHALL refuse only where no region is available to collapse.
+### Requirement: Optimising a brush-chain layer refuses while a regional bake would slow it
+The layer-level optimise action SHALL refuse a field layer degraded by a chain of brushes for as long as a regional bake of that layer measures dearer to refill than the chain it would replace, and SHALL say that flattening it would make strokes slower rather than faster.
 
-Previously it refused outright on such a layer, because the whole-layer bake it invoked is measured 6x worse for a deformer chain and it had no gesture to take a region from.
+The regional bake was expected to replace this refusal. It was measured instead: on the pinned engine a baked patch costs about sixty times the analytic chain per brick refilled at the brick cache's spacing, and an undo on the collapsed layer went from 61 ms to 3.6 s. The refusal is therefore the correct answer on this pin, and is kept until the tripwire that measures the difference fails.
 
 #### Scenario: A layer degraded by a chain of brushes
-- **WHEN** a sculptor optimises a field layer whose degradation is a deformer chain, and a gesture has been made on it
-- **THEN** the region of that gesture is collapsed
-- **AND** the action does not refuse
-
-#### Scenario: No gesture to take a region from
-- **WHEN** the same layer has had no gesture in this session, so no region is known
-- **THEN** the action refuses and says that it has no worked region to compact, rather than collapsing the whole layer
+- **WHEN** a sculptor optimises a field layer whose degradation is a deformer chain
+- **THEN** the action refuses, the document is unchanged, and the sentence says that flattening it would make strokes slower
 
 #### Scenario: A layer degraded by something other than a chain
 - **WHEN** the layer's degradation is a stack of volumes or a long edit list

@@ -1346,6 +1346,9 @@ pub struct ClayDocument {
     /// The work this document owes itself between two interactions, the gate
     /// that keeps it from happening during one, and the pin a gesture holds.
     maintenance: crate::maintenance::Maintenance,
+    /// Which field layers have been worked where, and whether the chain a
+    /// gesture left there is due to be baked. See [`crate::compaction`].
+    compaction: crate::compaction::Compaction,
     /// Bumped by every preview, so the viewport knows to look again.
     ///
     /// A preview banks nothing, so nothing else about the document changes and
@@ -1729,6 +1732,7 @@ impl ClayDocument {
             live_mesh: None,
             previewing: false,
             maintenance: crate::maintenance::Maintenance::new(),
+            compaction: crate::compaction::Compaction::default(),
             live_generation: 0,
             live_smooth: None,
             live_move: None,
@@ -9186,7 +9190,11 @@ impl SculptModel for ClayDocument {
                     },
                     None => brush,
                 };
-                self.field_stroke(tool, brush, samples, symmetry)
+                let outcome = self.field_stroke(tool, brush, samples, symmetry)?;
+                if outcome.changed {
+                    self.note_worked_region(key, brush, samples);
+                }
+                Ok(outcome)
             }
             Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),
             Representation::Mesh => self.stroke_mesh(tool, brush, samples, symmetry),
@@ -9571,6 +9579,11 @@ impl SculptModel for ClayDocument {
         for key in hierarchies {
             self.bank_multires_gesture(key);
         }
+        // After everything the gesture wrote is committed and before the
+        // settle, so a collapse is part of this gesture's history — one undo
+        // takes back the stroke and the bake that followed it together — and
+        // the settle below already sees the layer it left.
+        self.compact_what_the_gesture_worked();
         // The pointer is up. Whatever the drag made necessary, and this
         // document can afford, is done now — on a budget, because this is the
         // only moment where a stall belongs to nobody.
@@ -10784,14 +10797,22 @@ impl SceneModel for ClayDocument {
         // flag true on exactly the layer this is wrong for — so the refusal is
         // here rather than resting on an advisory that is about to change.
         //
-        // The scope that fits a brush chain is a REGION bake, which
-        // `claycore::Document::consolidate_region` now reaches. What it cannot
-        // be given from here is the region: this is a layer-level action with
-        // no gesture behind it, and the closure of the wrong box is either the
-        // whole layer again or a patch nobody worked. That is a policy
-        // question with measurements outstanding (ClaySpaceDesktop #111), and
-        // guessing it now would bind the wrong answer into the one place a
-        // sculptor can ask for help.
+        // The scope that fits a brush chain was expected to be a REGION bake
+        // of the last gesture's patch, and `crate::compaction` now carries
+        // that region and can plan and perform it. It is not offered here
+        // because it was measured, and on this pin it does not help either:
+        // a baked patch costs about sixty times the analytic chain it
+        // replaces per brick refilled, so the layer a sculptor asked to make
+        // faster refills and undoes slower afterwards — the same verdict the
+        // engine gives the whole-layer bake, reached from the other scope.
+        // See `crate::compaction` for the figures, and
+        // `tests/chain_compaction.rs` for the tripwire that says when this
+        // should change.
+        //
+        // `0.5` here is the question of whether to OFFER a whole-layer bake,
+        // which is what `layer_cost` asks too. It is not the end-of-gesture
+        // floor — see `compaction::CHAIN_FLOOR` for that number and for why
+        // the two differ.
         let report = self
             .document
             .field_report(id, 0.5)
@@ -11263,6 +11284,174 @@ impl ClayDocument {
     }
 }
 
+/// Bounding a field layer's deformer chain by baking the patch a gesture
+/// worked. The policy is [`crate::compaction`]; this is where it meets the
+/// engine.
+impl ClayDocument {
+    /// Remembers where a field stroke landed.
+    ///
+    /// The gesture's own samples, in the layer's own frame — `apply_stroke`
+    /// has already carried them there — dilated by the brush, which is the
+    /// reach every field verb is built around. Not reflected: the engine's
+    /// closure folds every removed grab's support in, reflected images
+    /// included, so reflecting the request here would count the mirror twice.
+    fn note_worked_region(
+        &mut self,
+        key: LayerKey,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) {
+        let Some(bounds) = crate::compaction::around(samples.iter().map(|sample| sample.position))
+        else {
+            return;
+        };
+        let reach = brush.sanitized().size;
+        self.compaction
+            .note_stroke(key, crate::compaction::dilated(bounds, reach));
+    }
+
+    /// Asks, for every field layer the gesture that just ended touched,
+    /// whether its chain is due a collapse — and performs it where it is.
+    ///
+    /// A failure here is dropped rather than raised, and the next gesture on
+    /// the layer asks again. The gesture is already committed and nothing it
+    /// drew depends on what happens next; the engine refuses before it bakes,
+    /// so a refused collapse leaves the document as the stroke left it, which
+    /// is the state a sculptor saw.
+    ///
+    /// With the floor at zero — the default, see [`crate::compaction`] for
+    /// why — the regions are closed and nothing else happens: no report, no
+    /// plan, no engine call at all.
+    fn compact_what_the_gesture_worked(&mut self) {
+        let touched = self.compaction.end_gesture();
+        if !self.compaction.is_enabled() {
+            return;
+        }
+        for (key, region) in touched {
+            let _ = self.compact_region(key, region);
+        }
+    }
+
+    /// Plans a collapse of `region` on a field layer, and bakes it if the
+    /// layer is under the floor and the plan says the result stays local.
+    fn compact_region(
+        &mut self,
+        key: LayerKey,
+        region: crate::compaction::Bounds,
+    ) -> Result<Result<crate::Collapse, crate::Declined>, ModelError> {
+        let index = self.index_of(key)?;
+        if self.layers[index].representation != Representation::Sdf {
+            return Ok(Err(crate::Declined::Healthy));
+        }
+        let id = self.layers[index].id;
+        // Free, and the answer at the end of almost every gesture.
+        let report = self
+            .document
+            .field_report(id, self.compaction.floor())
+            .map_err(ModelError::engine)?;
+        let chain = matches!(
+            report.degradation,
+            claycore::Degradation::Deformers | claycore::Degradation::Both
+        );
+        if !self.compaction.is_due(report.safe_step_scale, chain) {
+            return Ok(Err(crate::Declined::Healthy));
+        }
+        // Also free: pure, and measured upstream at thousandths of a
+        // millisecond. `whole_layer` is what is read, and not `absorbed`
+        // against the root count — on a one-root layer those agree for a
+        // local collapse and a whole-layer one alike.
+        let plan = self
+            .document
+            .plan_region_merge(id, region)
+            .map_err(ModelError::engine)?;
+        if let Err(declined) = self.compaction.judge(key, plan.whole_layer, plan.absorbed) {
+            self.compaction.declined(&declined);
+            return Ok(Err(declined));
+        }
+        // The bake is one undo step of its own, and it lands inside the
+        // gesture the view model is banking, so undo takes it back with the
+        // stroke rather than as an entry that changes nothing visible.
+        let started = std::time::Instant::now();
+        let (_, merge) = self
+            .document
+            .consolidate_region(id, region, self.compaction_params())
+            .map_err(ModelError::engine)?;
+        let collapse = crate::Collapse {
+            layer: key,
+            whole_layer: merge.whole_layer,
+            absorbed: merge.absorbed,
+            request_width: crate::compaction::width(region),
+            closure_width: crate::compaction::width((merge.box_min, merge.box_max)),
+            took: started.elapsed(),
+        };
+        self.compaction.record(collapse);
+        self.refill_collapsed(key, id, (merge.box_min, merge.box_max))?;
+        Ok(Ok(collapse))
+    }
+
+    /// Refills what a collapse resampled, through the drain and therefore
+    /// under the host's refill budget.
+    ///
+    /// The closure is the whole of what changed, so it is the bound. It is in
+    /// the layer's frame; a placed layer is refilled whole rather than mapped,
+    /// because a placed layer is also the case the engine takes its
+    /// conservative closure on, which is most of the layer anyway.
+    fn refill_collapsed(
+        &mut self,
+        key: LayerKey,
+        id: LayerId,
+        (min, max): crate::compaction::Bounds,
+    ) -> Result<(), ModelError> {
+        if self.carried_placement(key).is_some() {
+            self.mark_for_refill(id, &[])?;
+            return self.drain_dirty();
+        }
+        let pad = self.cache.config().voxel_size * Self::BRICK_MARGIN;
+        let min = std::array::from_fn(|axis| min[axis] - pad);
+        let max = std::array::from_fn(|axis| max[axis] + pad);
+        self.refill_region(min, max)
+    }
+
+    /// What the session has spent collapsing chains, apart from sculpting.
+    pub fn compaction_totals(&self) -> &crate::CompactionTotals {
+        self.compaction.totals()
+    }
+
+    /// What the last collapse that reached a plan came to.
+    pub fn last_compaction(&self) -> Option<&Result<crate::Collapse, crate::Declined>> {
+        self.compaction.last()
+    }
+
+    /// The step scale under which a chain is collapsed at the end of a
+    /// gesture. Zero, and therefore off, until a host turns it on — see
+    /// [`crate::compaction`] for the measurement that keeps it off.
+    pub fn compaction_floor(&self) -> f32 {
+        self.compaction.floor()
+    }
+
+    /// Moves the floor. [`crate::compaction::CHAIN_FLOOR`] is the calibrated
+    /// value; zero turns end-of-gesture collapsing off.
+    pub fn set_compaction_floor(&mut self, floor: f32) {
+        self.compaction.set_floor(floor);
+    }
+
+    /// How a gesture's patch is sampled when it is baked.
+    ///
+    /// Twice the brick cache's spacing, not the spacing itself, and measured
+    /// rather than chosen. At the cache's own 0.02 the baked volume's band is
+    /// exactly the cache's band, a brick just outside it reads the clamped
+    /// value the cache classifies as surface, and a collapsed starting sphere
+    /// went from 1,045 surface bricks to 3,432 — three times the refill work
+    /// for the same form. Widening the band alone at 0.02 fixed the count and
+    /// made every refill slower still, because what a refill of a baked patch
+    /// costs tracks how many samples the volume holds. At 0.04 the count stays
+    /// at 1,081 and an undo on the collapsed layer costs about a tenth of what
+    /// it did at 0.02 (`tests/chain_compaction.rs`).
+    fn compaction_params(&self) -> claycore::ConsolidationParams {
+        claycore::ConsolidationParams::at(self.cache.config().voxel_size * 2.0)
+    }
+}
+
 impl DocumentModel for ClayDocument {
     fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
         // An undone crossing leaves an emptied layer in the engine that the
@@ -11470,6 +11659,7 @@ impl ClayDocument {
             live_mesh: None,
             previewing: false,
             maintenance: crate::maintenance::Maintenance::new(),
+            compaction: crate::compaction::Compaction::default(),
             live_generation: 0,
             live_smooth: None,
             live_move: None,
