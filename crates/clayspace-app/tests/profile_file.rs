@@ -59,6 +59,7 @@ fn diagnostics() -> Diagnostics {
             total: 11 * 1024 * 1024,
             surfaces: 2,
             surface_bytes: 3 * 1024 * 1024,
+            ..Default::default()
         }),
         agent: None,
         tool: None,

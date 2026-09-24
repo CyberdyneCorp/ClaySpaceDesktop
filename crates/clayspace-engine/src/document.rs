@@ -7581,14 +7581,22 @@ impl ClayDocument {
             .map_err(ModelError::engine)
     }
 
-    /// The same figures as the diagnostics report carries them.
+    /// The same figures as the diagnostics report carries them, with the brick
+    /// cache beside them.
     ///
     /// `None` where the engine refused the question, which is what keeps a
     /// report that is opened *because* something has gone wrong from being the
     /// thing that cannot be opened.
+    ///
+    /// **Not free.** The cache's figures are a walk of every key it tracks, and
+    /// the surfaces are asked one by one, so this belongs behind a clock — the
+    /// status area's meter — and not in a frame. The drawing is left at zero:
+    /// this document does not hold it, the viewport does, and it is the
+    /// viewport's to fill in.
     pub fn memory_diagnostics(&self) -> Option<clayspace_model::MemoryDiagnostics> {
         let (surfaces, ledger) = self.surface_ledger().ok()?;
         let report = self.document.memory_with_surfaces(&ledger).ok()?;
+        let (cache_bytes, cache_budget) = self.brick_cache_memory().ok()?;
         Some(clayspace_model::MemoryDiagnostics {
             essential: report.essential,
             rebuildable: report.rebuildable,
@@ -7596,7 +7604,34 @@ impl ClayDocument {
             total: report.total,
             surfaces,
             surface_bytes: ledger.total,
+            cache_bytes,
+            cache_budget,
+            drawing: clayspace_model::DrawingMemory::default(),
         })
+    }
+
+    /// What the brick caches hold, and the budget the document's was made
+    /// with.
+    ///
+    /// Payload *and* bookkeeping: the budget bounds only the first, but the
+    /// second is memory the process holds all the same, and grows with every
+    /// key the cache has ever tracked. The status area used to show the
+    /// payload alone, which on a worked document read 0.00 GB.
+    ///
+    /// A live gesture's preview cache is counted beside the document's while
+    /// one is drawing. It is a second cache, not a view of the first, and it is
+    /// held exactly while a stroke is — the moment a figure is most worth
+    /// reading.
+    fn brick_cache_memory(&self) -> Result<(u64, u64), ModelError> {
+        let held = |stats: &claycore::BrickStats| {
+            stats.memory_usage.saturating_add(stats.bookkeeping_bytes)
+        };
+        let stats = self.cache.stats().map_err(ModelError::engine)?;
+        let mut bytes = held(&stats);
+        if let Some(live) = self.live_surface() {
+            bytes = bytes.saturating_add(held(&live.cache.stats().map_err(ModelError::engine)?));
+        }
+        Ok((bytes, stats.memory_budget.unwrap_or(0)))
     }
 
     // -- work that is not required for correctness ---------------------------

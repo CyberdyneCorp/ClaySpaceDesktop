@@ -55,9 +55,9 @@ pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEW
 pub use cut::{lasso_keeps_inside, side_of, CutGesture, CutModel, DrawnCut, TrimSide};
 pub use detail::DetailPolicy;
 pub use diagnostics::{
-    AgentDiagnostics, AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, MemoryDiagnostics,
-    MeshDiagnostics, MultiresDiagnostics, PhaseCost, RefillDiagnostics, RenderDiagnostics,
-    StrokeDiagnostics, ToolDiagnostics,
+    AgentDiagnostics, AoDiagnostics, Diagnostics, DiagnosticsModel, DrawingMemory, Fallback,
+    MemoryDiagnostics, MeshDiagnostics, MultiresDiagnostics, PhaseCost, RefillDiagnostics,
+    RenderDiagnostics, StrokeDiagnostics, ToolDiagnostics,
 };
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{

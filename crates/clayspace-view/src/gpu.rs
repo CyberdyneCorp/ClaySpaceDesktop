@@ -11,6 +11,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::device_memory::{texture_bytes, DeviceLedger, DeviceMemory, Residency, Resident};
+
 /// A WebGPU device and its queue.
 #[derive(Clone)]
 pub struct Gpu {
@@ -41,6 +43,13 @@ pub struct Gpu {
     /// add nothing here, and a session whose surface has stopped growing must
     /// stop allocating.
     allocations: Arc<AtomicU64>,
+    /// What the device holds for this application now, by kind.
+    ///
+    /// A gauge where the three above are counters: they say how much traffic
+    /// there has been since somebody last asked, this says what is resident,
+    /// and it is what the memory ledger folds in. See
+    /// [`crate::device_memory`].
+    memory: Arc<DeviceLedger>,
     adapter: Arc<wgpu::Adapter>,
     /// How much multisampling this device draws the scene with. See
     /// [`Gpu::msaa`] for why it does not change.
@@ -139,6 +148,7 @@ impl Gpu {
             uploaded: Arc::new(AtomicU64::new(0)),
             writes: Arc::new(AtomicU64::new(0)),
             allocations: Arc::new(AtomicU64::new(0)),
+            memory: Arc::new(DeviceLedger::default()),
             instance,
         })
     }
@@ -237,6 +247,37 @@ impl Gpu {
     pub fn note_upload(&self, bytes: u64) {
         self.uploaded.fetch_add(bytes, Ordering::Relaxed);
         self.writes.fetch_add(1, Ordering::Relaxed);
+        self.memory.note_staging(bytes);
+    }
+
+    /// What the device is holding for this application now.
+    ///
+    /// Buffers and targets are exact to the allocation; staging is what was
+    /// written in the frames the device may not have finished with yet.
+    pub fn memory(&self) -> DeviceMemory {
+        self.memory.read()
+    }
+
+    /// Records that a frame was submitted and the device polled without
+    /// waiting, so the staging of the frame before it has been collected.
+    pub fn note_frame_polled(&self) {
+        self.memory.frame_polled();
+    }
+
+    /// Records that the device was waited on until idle, which releases the
+    /// staging of everything submitted before the wait.
+    pub fn note_device_idle(&self) {
+        self.memory.device_idle();
+    }
+
+    /// Counts `bytes` of geometry buffer for as long as the result is alive.
+    pub(crate) fn resident_buffer(&self, bytes: u64) -> Resident {
+        Resident::new(&self.memory, Residency::Buffer, bytes)
+    }
+
+    /// Counts a render target's bytes for as long as the result is alive.
+    pub(crate) fn resident_target(&self, bytes: u64) -> Resident {
+        Resident::new(&self.memory, Residency::Target, bytes)
     }
 
     /// Records a buffer created for mesh geometry.
@@ -449,6 +490,10 @@ pub struct Framebuffer {
     /// as it always did.
     antialias: Option<wgpu::TextureView>,
     samples: u32,
+    /// Every texture above, counted against the device for as long as this
+    /// framebuffer lives — which is until the next resize for a window's, and
+    /// one frame for a capture's.
+    _resident: Resident,
 }
 
 /// The source of [`Framebuffer::id`]. Never reused: a wrapped counter would
@@ -581,7 +626,24 @@ impl Framebuffer {
                 .create_view(&wgpu::TextureViewDescriptor::default())
         });
 
+        let full = |format, samples| texture_bytes(width, height, samples, format);
+        let reduced = |format| texture_bytes(ao_width, ao_height, 1, format);
+        let bytes = full(Self::DEPTH_FORMAT, samples)
+            + if color.is_some() {
+                full(format, samples)
+            } else {
+                0
+            }
+            + if antialias.is_some() {
+                full(format, 1)
+            } else {
+                0
+            }
+            + reduced(Self::REDUCED_DEPTH_FORMAT)
+            + reduced(Self::OCCLUSION_FORMAT);
+
         Self {
+            _resident: gpu.resident_target(bytes),
             id: NEXT_FRAMEBUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             width,
             height,

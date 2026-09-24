@@ -61,6 +61,8 @@ pub(super) struct ShadowMap {
     /// — which is not a rule about tidiness but about what a pass may do to a
     /// resource at once, and wgpu refuses the whole command buffer over it.
     pub(super) casting: wgpu::BindGroup,
+    /// The map's bytes, counted against the device while it lives.
+    _resident: crate::device_memory::Resident,
 }
 
 impl ShadowMap {
@@ -260,6 +262,12 @@ impl ShadowMap {
             uniform,
             sampled,
             casting,
+            _resident: gpu.resident_target(crate::device_memory::texture_bytes(
+                SHADOW_SIZE,
+                SHADOW_SIZE,
+                1,
+                crate::gpu::Framebuffer::DEPTH_FORMAT,
+            )),
         }
     }
 }

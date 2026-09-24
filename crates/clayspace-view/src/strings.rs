@@ -511,6 +511,12 @@ pub struct Strings {
     pub label_triangles: &'static str,
     pub label_objects: &'static str,
     pub label_memory: &'static str,
+    /// What the memory meter's bar measures, in its hover text.
+    ///
+    /// The figure beside the bar is everything the document holds; the bar is
+    /// the brick cache against the budget that bounds it, which is a part of
+    /// that figure and the only part the budget limits.
+    pub hint_memory_cache: &'static str,
     pub label_units: &'static str,
     pub label_backend: &'static str,
     /// The agent-facing door, in the status area.
@@ -1156,6 +1162,7 @@ libera em vez de congelar.",
     label_triangles: "Triângulos",
     label_objects: "Objetos",
     label_memory: "MEMÓRIA",
+    hint_memory_cache: "Cache de blocos",
     label_units: "Unidades",
     label_backend: "Aceleração",
     label_agent: "AGENTE",
@@ -1727,6 +1734,7 @@ instead.",
     label_triangles: "Triangles",
     label_objects: "Objects",
     label_memory: "MEMORY",
+    hint_memory_cache: "Brick cache",
     label_units: "Units",
     label_backend: "Acceleration",
     label_agent: "AGENT",
@@ -2308,6 +2316,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     label_triangles: "Triángulos",
     label_objects: "Objetos",
     label_memory: "MEMORIA",
+    hint_memory_cache: "Caché de bloques",
     label_units: "Unidades",
     label_backend: "Aceleración",
     label_agent: "AGENTE",
@@ -2759,7 +2768,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 263] {
+    pub fn all(&self) -> [&'static str; 264] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2974,6 +2983,7 @@ impl Strings {
             self.label_triangles,
             self.label_objects,
             self.label_memory,
+            self.hint_memory_cache,
             self.label_units,
             self.label_backend,
             self.label_new_layer,

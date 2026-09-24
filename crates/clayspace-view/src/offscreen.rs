@@ -19,6 +19,10 @@ pub struct OffscreenTarget {
     /// bytes, so this is usually wider than the image.
     padded_bytes_per_row: u32,
     readback: wgpu::Buffer,
+    /// The colour texture's and the readback buffer's bytes, counted against
+    /// the device for as long as this target lives. The framebuffer counts
+    /// its own.
+    _resident: crate::device_memory::Resident,
 }
 
 impl OffscreenTarget {
@@ -69,7 +73,10 @@ impl OffscreenTarget {
             mapped_at_creation: false,
         });
 
+        let bytes = crate::device_memory::texture_bytes(width, height, 1, format)
+            + u64::from(padded_bytes_per_row) * u64::from(height);
         Self {
+            _resident: gpu.resident_target(bytes),
             texture,
             view,
             framebuffer: Framebuffer::new(gpu, width, height, format),
@@ -171,6 +178,7 @@ impl OffscreenTarget {
         // The map completes on the device's own timeline, so the queue has to
         // be pumped until it does.
         gpu.device.poll(wgpu::Maintain::Wait);
+        gpu.note_device_idle();
         receiver
             .recv()
             .expect("the readback mapping was dropped")
