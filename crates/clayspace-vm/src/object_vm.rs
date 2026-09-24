@@ -474,14 +474,13 @@ impl ObjectViewModel {
                 let open = !*self.picking.get();
                 self.picking.set(open);
             }
-            Command::SetShape(shape) => {
-                if self.shape.set_if_changed(*shape) {
-                    // A different shape is measured by different things, so
-                    // the numbers start again rather than being carried across
-                    // and meaning something else.
-                    self.parameters.set(shape.defaults());
-                }
+            Command::SetShape(shape) if self.shape.set_if_changed(*shape) => {
+                // A different shape is measured by different things, so
+                // the numbers start again rather than being carried across
+                // and meaning something else.
+                self.parameters.set(shape.defaults());
             }
+            Command::SetShape(_) => {}
             Command::SetShapeParameters(values) => {
                 let shape = *self.shape.get();
                 let (sanitised, clamped) = shape.sanitised_reported(values);

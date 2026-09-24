@@ -28,11 +28,14 @@ both had moved, and the command cannot go stale.
 flight, what the engine currently gets wrong, and what the pinned engine
 already offers that this application has not taken up.
 
-**The engine pin now stands at v0.120.0.** Nothing had to change to build
-against it — thirteen symbols added, zero removed, and the one struct that grew
-did so behind the `struct_size` this workspace already writes. What it carries
-is two changes that answer differently to a caller who changes nothing and
-recompiles nothing, with no version gate announcing either.
+**The engine pins now stand at ClayCore v0.120.1 and CyberRemesher v0.10.0.**
+ClayCore narrows operator and undo bounds, repairs smooth-seam invalidation,
+and makes voxel-layer edits undoable. CyberRemesher changes its shared C ABI to
+2.1; the bake wrapper supplies the required struct size and checks the default
+initializer before using it. Its new mesh maps and retopology operations remain
+engine capabilities until this application exposes them.
+
+The next two paragraphs describe the earlier **v0.120.0** pin.
 
 **A mesh grab now reaches the whole drag**, and it does not change a mark made
 here: the change is in the stroke consumers, and this application sends Grab as
@@ -99,7 +102,7 @@ report says which part of a document a byte belongs to.
 | Visual captures | Some 640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
-| Engine | ClayCore 0.120.0, pinned to the release tag as a submodule |
+| Engine | ClayCore 0.120.1, pinned to the release tag as a submodule |
 | Sculpting tools | 21 across four representations · 15 SDF, 13 voxel, 17 mesh, 16 on a subdivision hierarchy |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
@@ -520,7 +523,7 @@ Field subtools only, because a cut resolves to a field item.
 ### Retopology, UV and baking
 
 The pipeline is `sculpt -> retopo -> UV -> bake`. This application owns the
-first stage; **CyberRemesher v0.9.0** owns the rest, vendored beside ClayCore as
+first stage; **CyberRemesher v0.10.0** owns the rest, vendored beside ClayCore as
 a second engine. Four operations reach a mesh subtool, all of them off the
 interface thread with progress and a cancel:
 
@@ -1482,8 +1485,8 @@ just diagnostics   # or: cargo run -p claycore --example diagnostics
 ```
 
 ```
-engine version   : 0.120.0
-expected ABI     : 0.120.0
+engine version   : 0.120.1
+expected ABI     : 0.120.1
 compiled backends: metal
 registered       : cpu, metal
 ```

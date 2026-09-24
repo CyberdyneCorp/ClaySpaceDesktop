@@ -2590,7 +2590,7 @@ something would be the worse error.
 ### Retopology, UV and baking: the second half of the pipeline
 
 The pipeline is `sculpt -> retopo -> UV -> bake`. This application owns the
-first stage; **CyberRemesher v0.9.0** owns the rest, vendored beside ClayCore as
+first stage; **CyberRemesher v0.10.0** owns the rest, vendored beside ClayCore as
 a second engine with its own `-sys` crate and safe wrapper. Neither engine knows
 the other's types — both state that as a rule about themselves — so this
 application is the only place the correspondence exists.

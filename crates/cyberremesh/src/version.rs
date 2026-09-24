@@ -65,7 +65,7 @@ mod tests {
     /// library linked without complaint and surfaced later as behaviour rather
     /// than as an error. The note that used to sit here said "the day one
     /// exists, assert on it here instead", and v0.9.0 is that day:
-    /// `CYBER_ABI_VERSION_MAJOR`/`_MINOR` are 1 and 16, and `cyber_abi_check`
+    /// `CYBER_ABI_VERSION_MAJOR`/`_MINOR` are 2 and 1, and `cyber_abi_check`
     /// applies the compatibility rule rather than leaving a caller to compare
     /// numbers by hand — which its own header tells you not to do.
     ///
@@ -113,9 +113,9 @@ mod tests {
         let found = version();
         assert_eq!(
             (found.major, found.minor),
-            (0, 9),
+            (0, 10),
             "the retopology engine reports {found}, and this workspace pins \
-             v0.9.0. The submodule and this constant disagree — the pin is the \
+             v0.10.0. The submodule and this constant disagree — the pin is the \
              submodule commit, and the soname is not what would have caught it"
         );
     }

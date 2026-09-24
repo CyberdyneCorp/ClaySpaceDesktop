@@ -122,9 +122,17 @@ pub struct BakeParams {
 
 impl Default for BakeParams {
     fn default() -> Self {
-        let mut raw = sys::CyberBakeParams::default();
-        // SAFETY: a valid out-pointer; the call only writes.
-        unsafe { sys::cyber_default_bake_params(&mut raw) };
+        let mut raw = sys::CyberBakeParams {
+            structSize: std::mem::size_of::<sys::CyberBakeParams>(),
+            ..Default::default()
+        };
+        // SAFETY: the sized struct is initialized before the engine writes defaults.
+        let status = unsafe { sys::cyber_default_bake_params(&mut raw) };
+        assert_eq!(
+            status,
+            sys::CyberStatus::CYBER_OK,
+            "invalid bake parameters layout"
+        );
         Self {
             width: raw.width.max(0) as u32,
             height: raw.height.max(0) as u32,
@@ -137,17 +145,23 @@ impl Default for BakeParams {
 }
 
 impl BakeParams {
-    fn to_raw(self) -> sys::CyberBakeParams {
-        let mut raw = sys::CyberBakeParams::default();
-        // SAFETY: as `Default`.
-        unsafe { sys::cyber_default_bake_params(&mut raw) };
+    fn to_raw(self) -> Result<sys::CyberBakeParams> {
+        let mut raw = sys::CyberBakeParams {
+            structSize: std::mem::size_of::<sys::CyberBakeParams>(),
+            ..Default::default()
+        };
+        check(
+            // SAFETY: the sized struct is initialized before the engine writes defaults.
+            unsafe { sys::cyber_default_bake_params(&mut raw) },
+            "cyber_default_bake_params",
+        )?;
         raw.width = self.width as _;
         raw.height = self.height as _;
         raw.cageDistance = self.cage_distance;
         raw.aoSamples = self.ao_samples as _;
         raw.aoRadius = self.ao_radius;
         raw.curvatureRange = self.curvature_range;
-        raw
+        Ok(raw)
     }
 }
 
@@ -220,7 +234,7 @@ pub fn bake_field<F: Field>(
     params: BakeParams,
     field: &F,
 ) -> Result<Image> {
-    let raw_params = params.to_raw();
+    let raw_params = params.to_raw()?;
 
     // The trait object the three C callbacks reach the field through, valid
     // for exactly the duration of the call below.
@@ -300,4 +314,21 @@ unsafe fn read3(p: *const f32) -> [f32; 3] {
         return [0.0; 3];
     }
     [*p, *p.add(1), *p.add(2)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bake_params_use_the_sized_abi_defaults() {
+        let params = BakeParams::default();
+        let raw = params
+            .to_raw()
+            .expect("the engine accepts this struct layout");
+        assert_eq!(raw.structSize, std::mem::size_of::<sys::CyberBakeParams>());
+        assert_eq!(raw.paddingRadius, 8);
+        assert_eq!(raw.width, params.width as i32);
+        assert_eq!(raw.height, params.height as i32);
+    }
 }
