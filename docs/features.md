@@ -18,7 +18,7 @@ implementation. A tool with no engine counterpart is not offered.
 
 All twenty-one are bound and each is covered by a before-and-after capture in
 `target/visual/`. Which of the representations each one reaches is in the
-Layers column: fifteen have an SDF verb, thirteen a voxel one, and seventeen a
+Layers column: fifteen have an SDF verb, fourteen a voxel one, and seventeen a
 mesh one.
 
 A fourth representation — a subdivision hierarchy — is left out of the Layers
@@ -46,10 +46,10 @@ hierarchy takes the selected pass's detail back toward zero, plus Máscara. See
 | Relaxar | `clay_item_volume_relax_from` | SDF, mesh | Relax as a brush |
 | Nudge | `clay_voxel_sculpt_smudge` | voxel, mesh | Drags the surface skin, leaving the interior |
 | Trim | `clay_cut_create` | SDF | A shape drawn on the frame, cutting through |
-| Argila | `clay_layer_apply_stroke` with relief and buildup / `clay_mesh_sculptor_apply_stroke` (CLAY) | SDF, mesh | Builds up in flat-ish planes, the way clay is added by hand. On a field it is relief with **buildup** accumulation and a denser stroke, which is what separates ClayBuildup from Standard in ZBrush too — a second pass adds where Camada's does not |
-| Vinco | `clay_layer_apply_stroke` with incise / `clay_mesh_sculptor_apply_stroke` (CREASE) | SDF, mesh | Pinches a sharp ridge or trough along the stroke. On a field it is `Op::Incise` — "a thin region gives the line", in the engine's words — at 0.6 of the brush, which cuts to the full depth in three fifths of the width. Held, the key raises the ridge it would have cut, which is the inverse the engine names |
+| Argila | `clay_layer_apply_stroke` with relief and buildup / `clay_mesh_sculptor_apply_stroke` (CLAY) | SDF, mesh | Builds up in flat-ish planes, the way clay is added by hand. On a field it is relief with **buildup** accumulation and a denser stroke, which is what separates ClayBuildup from Standard in ZBrush too — a second pass adds where Camada's does not. A grid has binary occupancy, so it cannot hold that gradual buildup; Padrão and Inflar deposit cells instead |
+| Vinco | `clay_layer_apply_stroke` with incise / `clay_voxel_sculpt_inflate` with a narrow erode recipe / `clay_mesh_sculptor_apply_stroke` (CREASE) | SDF, voxel, mesh | Pinches a sharp ridge or trough along the stroke. On a field it is `Op::Incise` — "a thin region gives the line", in the engine's words — at 0.6 of the brush, which cuts to the full depth in three fifths of the width. Held, the key raises the ridge it would have cut, which is the inverse the engine names. On a grid it instead cuts a narrow groove with a solid spherical erode, amount -2 and an odd width of 3–7 cells; it does not sharpen existing edges or invert into a deposit |
 | Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_apply_stroke` (PAINT) | voxel, mesh | Writes colour rather than moving the surface. The colour comes from the swatch in the options bar, which is shown for the two tools that read one |
-| Borrar | `clay_mesh_sculptor_apply_stroke` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
+| Borrar | `clay_mesh_sculptor_apply_stroke` (SMEAR) | mesh | Smears existing colour. A grid has no colour-smear verb: its geometric `clay_voxel_sculpt_smudge` is Nudge, while Pintar changes colour |
 | Apagar | `clay_voxel_erase_brush` / `clay_multires_sculpt_layer_stroke_erase` | voxel, multires | Removes cells. **On a hierarchy it is a different operation under the same name**: there are no cells to clear, so it takes the *selected pass*'s detail toward zero and leaves the form and every other pass exactly where they are. Refused where the form's row is selected rather than a pass |
 
 **A row says what the call *is*, not only what it is called.** Each column of
@@ -259,7 +259,7 @@ so the same switch always lands on the same tool:
 | Polir | grid | Raspar |
 | Borrar | grid | Pintar |
 | Argila | grid | Padrão |
-| Trim, Apagar, Preencher, Vinco, Pintar, Borrar | a layer with no tool for that act | Padrão |
+| Trim, Apagar, Preencher, Pintar, Borrar | a layer with no tool for that act | Padrão |
 
 A stand-in stays a stand-in: switching back to a layer that carries the tool
 you chose gives it back, rather than keeping the one you were handed. Choosing

@@ -145,6 +145,8 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
     let dragging = tool == ToolKind::Mover;
     let from = if dragging {
         [ANCHOR[0], top_at(document, ANCHOR[0]) + 0.05, ANCHOR[2]]
+    } else if tool == ToolKind::Vinco {
+        [ANCHOR[0], top_at(document, ANCHOR[0]), ANCHOR[2]]
     } else {
         ANCHOR
     };
@@ -184,9 +186,10 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 /// Máscara paints the freeze, Pintar colours cells rather than moving them,
 /// and Preencher closes holes — which this slab has none of, and which
 /// `voxel_tools.rs` covers on material that does.
-const SHAPING: [ToolKind; 9] = [
+const SHAPING: [ToolKind; 10] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
+    ToolKind::Vinco,
     ToolKind::Suavizar,
     ToolKind::Pincar,
     ToolKind::Raspar,
@@ -196,6 +199,40 @@ const SHAPING: [ToolKind; 9] = [
     ToolKind::Planar,
     ToolKind::Mover,
 ];
+
+#[test]
+fn voxel_crease_cuts_a_groove() {
+    let mut document = packed();
+    let before = cells(&document);
+    let x = ANCHOR[0];
+    let surface = top_at(&document, x);
+    let samples: Vec<GestureSample> = (0..9)
+        .map(|step| GestureSample {
+            position: [x + step as f32 * 0.05 - 0.2, surface, 0.0],
+            pressure: 1.0,
+            time: step as f32 / 8.0,
+        })
+        .collect();
+    let changed = document
+        .apply_stroke(
+            ToolKind::Vinco,
+            BrushSettings {
+                size: 0.25,
+                intensity: 0.9,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("Crease is offered on a grid")
+        .changed;
+    assert!(changed);
+    assert!(cells(&document) < before, "Crease must erode material");
+    assert!(
+        top_at(&document, x) < surface,
+        "Crease must lower the surface"
+    );
+}
 
 /// The brushes with an opposite, and what holding the key means.
 const SIGNED: [ToolKind; 5] = [

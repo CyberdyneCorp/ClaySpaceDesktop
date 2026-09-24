@@ -1,0 +1,3 @@
+- [x] Bind voxel Crease as a recipe and explain related tool availability.
+- [x] Route the recipe through Inflate and test its parameters and result.
+- [x] Update the feature documentation and validate the change.

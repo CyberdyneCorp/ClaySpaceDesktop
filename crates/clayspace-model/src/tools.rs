@@ -463,12 +463,8 @@ pub(crate) const fn mask_field(entry_point: &'static str) -> Option<Binding> {
     ))
 }
 
-/// Several verbs in a fixed order, standing in for one the engine has not.
-///
-/// Nothing on the shelf is one today. It is exercised by
-/// `a_recipe_is_expressible_and_is_marked_as_one`, which is what keeps it
-/// compiling and honest until the first composed tool lands.
-#[allow(dead_code)]
+/// A pinned combination of existing engine verbs or parameters, standing in
+/// for a native verb the engine does not have.
 pub(crate) const fn recipe(entry_point: &'static str, intent: SemanticIntent) -> Option<Binding> {
     Some(Binding::new(
         entry_point,
@@ -1088,15 +1084,24 @@ pub enum ToolNote {
     /// Standard the engine measured is not shipped, being a per-item warp per
     /// dab at nine times relief's cost.
     SdfStandardIsAnInflate,
+    /// A grid's crease is a narrow, fixed erode recipe, not a sharpening verb.
+    VoxelCreaseIsErodeRecipe,
+    /// A grid has no colour-smear verb; its geometric smudge is Nudge.
+    VoxelSmearHasNoColourVerb,
+    /// Binary occupancy cannot hold Clay's clamped buildup.
+    VoxelClayHasNoBuildup,
 }
 
 impl ToolNote {
-    pub const ALL: [ToolNote; 5] = [
+    pub const ALL: [ToolNote; 8] = [
         Self::VoxelPlanarIsTwoSided,
         Self::MultiresSmoothChoosesAFrequency,
         Self::MultiresStoresNoColour,
         Self::MultiresEraseTakesThisPassToZero,
         Self::SdfStandardIsAnInflate,
+        Self::VoxelCreaseIsErodeRecipe,
+        Self::VoxelSmearHasNoColourVerb,
+        Self::VoxelClayHasNoBuildup,
     ];
 }
 
@@ -1769,16 +1774,14 @@ impl ToolKind {
             // displace the accumulated field inward without contributing a
             // primitive.
             //
-            // Voxel is left absent. The engine documents DamStandard there as
-            // a *recipe* rather than a verb, and a preset that borrows a name
-            // is not worth a shelf entry until somebody has looked at it.
+            // On a grid, a narrow erosion is a pinned recipe over Inflate.
             Self::Vinco => Verbs {
                 sdf: field_op(
                     "clay_layer_apply_stroke (CLAY_OP_INCISE)",
                     SemanticIntent::SurfaceCrease,
                     Fidelity::Native,
                 ),
-                voxel: None,
+                voxel: recipe("clay_voxel_sculpt_inflate", SemanticIntent::SurfaceCrease),
                 mesh: mesh_verb(
                     "clay_mesh_sculptor_apply_stroke (CREASE)",
                     SemanticIntent::SurfaceCrease,
@@ -2088,6 +2091,9 @@ impl ToolKind {
                 Some(ToolNote::MultiresEraseTakesThisPassToZero)
             }
             (Self::Padrao, Representation::Sdf) => Some(ToolNote::SdfStandardIsAnInflate),
+            (Self::Vinco, Representation::Voxel) => Some(ToolNote::VoxelCreaseIsErodeRecipe),
+            (Self::Borrar, Representation::Voxel) => Some(ToolNote::VoxelSmearHasNoColourVerb),
+            (Self::Argila, Representation::Voxel) => Some(ToolNote::VoxelClayHasNoBuildup),
             _ => None,
         }
     }
@@ -3140,14 +3146,30 @@ mod tests {
 
     /// A composed tool is describable rather than absent.
     ///
-    /// Nothing on the shelf is a recipe today, and the voxel Crease column is
-    /// the reason this matters: the engine documents DamStandard there as a
-    /// recipe rather than a verb, so under a table that could only say "a
-    /// call" or "nothing" the honest answer was nothing, with the explanation
-    /// in a comment. A recipe binding says the same thing where the shelf, the
-    /// refusal and the diagnostics line can all read it.
+    /// Voxel Crease uses a pinned erosion preset of Inflate. Its binding must
+    /// identify the existing engine entry point and the recipe fidelity.
     #[test]
     fn a_recipe_is_expressible_and_is_marked_as_one() {
+        let crease = ToolKind::Vinco
+            .binding_on(Representation::Voxel)
+            .expect("Crease is offered on a grid");
+        assert!(crease.is_a_recipe());
+        assert_eq!(crease.entry_point, "clay_voxel_sculpt_inflate");
+        assert_eq!(crease.intent, SemanticIntent::SurfaceCrease);
+        assert_eq!(
+            ToolKind::Vinco.note_on(Representation::Voxel),
+            Some(ToolNote::VoxelCreaseIsErodeRecipe)
+        );
+        assert_eq!(
+            ToolKind::Borrar.note_on(Representation::Voxel),
+            Some(ToolNote::VoxelSmearHasNoColourVerb)
+        );
+        assert_eq!(
+            ToolKind::Argila.note_on(Representation::Voxel),
+            Some(ToolNote::VoxelClayHasNoBuildup)
+        );
+        assert!(!ToolKind::Borrar.exists_on(Representation::Voxel));
+        assert!(!ToolKind::Argila.exists_on(Representation::Voxel));
         let composed = recipe(
             "clay_layer_apply_stroke (CLAY_OP_INCISE) / clay_layer_apply_stroke \
              (CLAY_OP_RELIEF)",
@@ -3454,9 +3476,10 @@ mod tests {
              this count and `docs/features.md` together."
         );
         assert_eq!(
-            voxel, 13,
+            voxel, 14,
             "the voxel vocabulary has moved: {voxel} tools reach a voxel \
-             layer. Eleven of them are sculpt verbs, of the engine's \
+             layer. Twelve entries use sculpt verbs, including the Crease \
+             recipe over Inflate, of the engine's \
              {ENGINE_VOXEL_SCULPT_VERBS} — Máscara is on the shelf and is a \
              brush on none of the three — and the other two are the paint and \
              erase brushes, which are a different family. Update this count \
@@ -3739,8 +3762,7 @@ mod tests {
         }
     }
 
-    /// Every other absence carries no note, which is what keeps the one that
-    /// does worth reading.
+    /// Only the deliberate colour and buildup absences carry a note.
     #[test]
     fn an_ordinary_absence_is_refused_without_a_second_sentence() {
         for tool in ToolKind::ALL {
@@ -3755,7 +3777,7 @@ mod tests {
                     (
                         ToolKind::Pintar | ToolKind::Borrar,
                         Representation::Multires
-                    )
+                    ) | (ToolKind::Borrar | ToolKind::Argila, Representation::Voxel)
                 );
                 assert_eq!(
                     note.is_some(),
