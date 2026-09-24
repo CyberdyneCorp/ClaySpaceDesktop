@@ -106,12 +106,10 @@ fn a_dragged_control_point_leaves_no_stale_bricks() {
          {differing} pixels differ",
         geometry.triangle_count()
     );
-    assert!(
-        differing < 40,
-        "{differing} pixels of the drawn surface change when every brick is \
-         refilled, so dragging a control point left bricks holding an older \
-         shape — most likely where the point came from rather than where it \
-         went. See target/visual/curve-drag-incremental.png"
+    assert_eq!(dragged_triangles, geometry.triangle_count());
+    assert_eq!(
+        differing, 0,
+        "a full refill changed {differing} rendered pixels after the drag"
     );
 }
 
