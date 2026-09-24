@@ -255,11 +255,12 @@ Point a client at `http://127.0.0.1:<porta>/mcp` with `Authorization: Bearer
 address and key…** shows both. The same menu shuts the door and opens it again,
 and a door shut by hand stays shut when the application is opened next.
 
-**What an agent gets.** Twenty-four tools grouped by the domains the interface
-already has panels for — `tool`, `brush`, `stroke`, `mask`, `curve`, `shape`,
+**What an agent gets.** Twenty-nine tools grouped by the domains the interface
+already has panels for — `tool`, `brush`, `stroke`, `mask`, `cut`, `curve`, `shape`,
 `object`, `transform`, `lattice`, `subtool`, `boolean`, `layer`, `passes`,
-`hierarchy`, `document`, `exchange`, `repair`, `convert`, `deform`, `armature`,
-`history`, `view`, `reference`, `session` — plus `describe`, `state`,
+`hierarchy`, `document`, `exchange`, `repair`, `convert`, `retopo`, `uv`,
+`conform`, `bake`, `deform`, `armature`, `history`, `view`, `reference`,
+`session` — plus `describe`, `state`,
 `viewport`, `wait` and `measure`. Every action dispatches the *same* command a
 menu item does, so an agent's edit is one history entry and one undo away, and
 is refused wherever the interface would refuse it.

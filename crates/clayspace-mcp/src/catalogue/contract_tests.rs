@@ -19,12 +19,56 @@
 //! combination of its choices, and the decoder's own record of what it looked
 //! up decides which variants a bad value must be refused in.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 
 use super::actions;
 use super::args::Args;
-use super::table::{ActionSpec, Kind, TABLE};
+use super::table::{ActionSpec, Kind, GROUPS, TABLE};
 use crate::session::RefusalCode;
+
+/// The two quoted names at a route. `home` and `build` both spell their
+/// group/action pairs as literals, so this lets the test inspect the actual
+/// routing arms rather than another hand-maintained list of their names.
+fn route_names(source: &str) -> (String, String) {
+    let mut parts = source.split('"');
+    parts.next();
+    let group = parts.next().expect("route group");
+    parts.next();
+    let action = parts.next().expect("route action");
+    (group.into(), action.into())
+}
+
+#[test]
+fn every_dispatched_action_is_offered_and_every_offered_action_dispatches() {
+    let source = include_str!("actions.rs");
+    let home: BTreeSet<_> = source
+        .match_indices("Home::In(")
+        .map(|(at, marker)| route_names(&source[at + marker.len()..]))
+        .collect();
+    let dispatch: BTreeSet<_> = source
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("(\"") && line.contains("\") =>"))
+        .map(route_names)
+        .collect();
+    let rows: BTreeSet<_> = TABLE
+        .iter()
+        .map(|row| (row.group.to_owned(), row.name.to_owned()))
+        .collect();
+    let groups: BTreeSet<_> = GROUPS.iter().map(|(group, _, _)| *group).collect();
+
+    assert_eq!(home, dispatch, "home and command dispatch disagree");
+    assert_eq!(home, rows, "offered actions and catalogue rows disagree");
+    assert_eq!(rows.len(), TABLE.len(), "duplicate catalogue action");
+    for (group, action) in rows {
+        assert!(
+            groups.contains(group.as_str()),
+            "{group}.{action} has no group"
+        );
+    }
+}
 
 /// A value of this kind the decoder accepts, where one can be named without
 /// knowing the action.

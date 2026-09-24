@@ -361,10 +361,8 @@ const ENVELOPE: &[&str] = &["action", "capture", "width", "height"];
 /// read, because the row is what `describe` and the schema told the agent —
 /// and `every_argument_the_builder_reads_is_declared` holds the two together.
 ///
-/// An action with no row is let through unchecked. That is the retopology,
-/// UV, conform and bake verbs, which no group offers and only `measure` can
-/// reach; they have no declared list to check against, and inventing one here
-/// would be a second table to drift.
+/// An action with no row is let through unchecked. The catalogue contract
+/// test keeps every dispatched route paired with a row.
 fn accept_declared(group: &str, action: &str, args: &Args<'_>) -> Result<(), Refusal> {
     let Some(spec) = super::table::TABLE
         .iter()
@@ -519,6 +517,11 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("curve", "add_point") => {
             C::AddCurvePoint(args.vec3("at")?, args.number_or("radius", 0.1)?)
         }
+        ("curve", "insert_point") => C::InsertCurvePoint(
+            args.index("index")?,
+            args.vec3("at")?,
+            args.number_or("radius", 0.1)?,
+        ),
         ("curve", "select_point") => C::SelectCurvePoint(optional_index(args, "index")?),
         ("curve", "toggle_point") => C::ToggleCurvePoint(args.index("index")?),
         ("curve", "drag") => C::DragCurve(args.vec3("by")?),
@@ -687,7 +690,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
             // A method nobody offers used to become quadcover, silently.
             method: args.choice_or(
                 "method",
-                QUAD_METHODS,
+                tags::QUAD_METHODS,
                 clayspace_model::QuadMethod::QuadCover,
             )?,
             sharp_edge_degrees: args.number_or(
@@ -932,14 +935,6 @@ fn reference(args: &Args<'_>) -> Result<ReferenceSettings, Refusal> {
         ],
     ))
 }
-
-const QUAD_METHODS: &[(&str, clayspace_model::QuadMethod)] = &[
-    ("quadcover", clayspace_model::QuadMethod::QuadCover),
-    ("zremesher", clayspace_model::QuadMethod::ZRemesher),
-    ("field_aligned", clayspace_model::QuadMethod::FieldAligned),
-    ("instant_meshes", clayspace_model::QuadMethod::InstantMeshes),
-    ("integer", clayspace_model::QuadMethod::Integer),
-];
 
 /// The maps a bake writes, as a comma-separated list.
 ///
