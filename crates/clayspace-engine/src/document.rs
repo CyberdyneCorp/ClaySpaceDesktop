@@ -8642,7 +8642,7 @@ impl ClayDocument {
                     // with it. That is what the stamp is for on a grid — pores and
                     // fabric cut into a surface already there — and a tool that
                     // deposits would have nothing to modulate.
-                    _ if alpha.is_some() => {
+                    _ if alpha.is_some() && tool != ToolKind::Vinco => {
                         let alpha = alpha.expect("checked in the guard");
                         // The one verb that still dithers, because the stamp's
                         // own greys have nowhere else to go on binary cells.
@@ -8682,6 +8682,12 @@ impl ClayDocument {
                     // only the dilating half was ever asked for.
                     ToolKind::Inflar => {
                         grid.sculpt_inflate(cell, &solid, if brush.invert { -1 } else { 1 })
+                    }
+                    // Crease is the narrow eroding preset of the existing
+                    // Inflate verb. It never turns into a deposit on invert.
+                    ToolKind::Vinco => {
+                        let (crease, amount) = voxel_crease_recipe(solid);
+                        grid.sculpt_inflate(cell, &crease, amount)
                     }
                     // Magnify is pinch's inverse and the engine says so
                     // outright — "sharing its walk so the two cannot drift
@@ -8837,6 +8843,45 @@ fn solid_footprint(params: BrushParams<'_>) -> BrushParams<'_> {
         falloff: Falloff::Constant,
         strength: 1.0,
         ..params
+    }
+}
+
+/// Grid Crease: a narrow, solid spherical erode over Inflate, never a new verb.
+fn voxel_crease_recipe(params: BrushParams<'_>) -> (BrushParams<'_>, i32) {
+    (
+        BrushParams {
+            size: ((params.size / 4) | 1).clamp(3, 7),
+            shape: BrushShape::Sphere,
+            falloff: Falloff::Constant,
+            ..params
+        },
+        -2,
+    )
+}
+
+#[cfg(test)]
+mod voxel_crease_recipe_tests {
+    use super::*;
+
+    #[test]
+    fn voxel_crease_is_the_erode_recipe() {
+        for (span, expected) in [(5, 3), (11, 3), (17, 5), (63, 7)] {
+            let source = BrushParams {
+                size: span,
+                shape: BrushShape::Cube,
+                falloff: Falloff::Gaussian,
+                strength: 0.7,
+                seed: 42,
+                mask: None,
+            };
+            let (crease, amount) = voxel_crease_recipe(source);
+            assert_eq!(crease.size, expected);
+            assert!(matches!(crease.shape, BrushShape::Sphere));
+            assert!(matches!(crease.falloff, Falloff::Constant));
+            assert_eq!(crease.strength, source.strength);
+            assert_eq!(crease.seed, source.seed);
+            assert_eq!(amount, -2);
+        }
     }
 }
 

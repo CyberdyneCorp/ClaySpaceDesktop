@@ -151,12 +151,31 @@ fn changes_nothing_here(tool: ToolKind) -> bool {
     tool.writes_colour() || tool == ToolKind::Preencher
 }
 
+/// The grid's top cell at the stroke centre. A narrow erode must touch the
+/// surface rather than the slab's interior to make a visible groove.
+fn voxel_surface(document: &ClayDocument) -> f32 {
+    const CELL: f32 = 0.04;
+    let (_, reader) = document
+        .document()
+        .voxel_reader("Voxels")
+        .expect("the grid reads back");
+    let top = (-40..40)
+        .rev()
+        .find(|&y| reader.get([0, y, 0]).expect("a cell reads back").is_some())
+        .expect("the worked slab has a surface");
+    top as f32 * CELL
+}
+
 /// The stroke every tool is given: a short drag across the material.
 ///
 /// One shape for all of them, because the question is whether the *binding*
 /// lands rather than whether a particular gesture suits a particular brush.
 fn drag(document: &mut ClayDocument, tool: ToolKind, representation: Representation) -> bool {
-    let at = over(representation);
+    let at = if representation == Representation::Voxel && tool == ToolKind::Vinco {
+        [0.0, voxel_surface(document), 0.0]
+    } else {
+        over(representation)
+    };
     let samples: Vec<GestureSample> = (0..=8)
         .map(|step| {
             let t = step as f32 / 8.0;

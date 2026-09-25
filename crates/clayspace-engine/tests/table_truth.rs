@@ -175,6 +175,9 @@ fn every_tool_note_is_proved_here() {
                 "erasing_is_a_different_verb_on_a_grid_and_on_a_hierarchy"
             }
             ToolNote::SdfStandardIsAnInflate => "a_field_standard_thickens_a_fin_and_not_a_sphere",
+            ToolNote::VoxelCreaseIsErodeRecipe => "voxel_crease_cuts_a_groove",
+            ToolNote::VoxelSmearHasNoColourVerb => "a_recipe_is_expressible_and_is_marked_as_one",
+            ToolNote::VoxelClayHasNoBuildup => "a_recipe_is_expressible_and_is_marked_as_one",
         };
         assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
     }

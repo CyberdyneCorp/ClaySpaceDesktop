@@ -146,6 +146,9 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
     let dragging = matches!(tool, ToolKind::Mover);
     let from = if dragging {
         [0.35, top_at(document, 0.35) + 0.05, 0.0]
+    } else if tool == ToolKind::Vinco {
+        // A narrow erode must meet the surface to make a visible groove.
+        [0.35, top_at(document, 0.35), 0.0]
     } else {
         [0.35, 0.0, 0.0]
     };
@@ -185,6 +188,7 @@ fn name_of(tool: ToolKind) -> &'static str {
     match tool {
         ToolKind::Padrao => "padrao",
         ToolKind::Inflar => "inflar",
+        ToolKind::Vinco => "vinco",
         ToolKind::Suavizar => "suavizar",
         ToolKind::Mover => "mover",
         ToolKind::Planar => "planar",

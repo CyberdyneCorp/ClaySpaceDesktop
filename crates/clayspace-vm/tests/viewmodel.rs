@@ -954,6 +954,18 @@ fn a_voxel_layer_accepts_voxel_tools() {
     );
 }
 
+#[test]
+fn crease_is_offered_on_a_grid() {
+    let (mut vm, recorded) = fixture_with(|model| model.representation.set(Representation::Voxel));
+    vm.dispatch(Command::SelectTool(ToolKind::Vinco))
+        .expect("select voxel Crease");
+    assert!(vm.tool_status().get().is_none());
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
+    let strokes = recorded.borrow();
+    assert!(!strokes.strokes.is_empty());
+    assert!(strokes.strokes.iter().all(|s| s.0 == ToolKind::Vinco));
+}
+
 // -- brush settings ----------------------------------------------------------
 
 #[test]
