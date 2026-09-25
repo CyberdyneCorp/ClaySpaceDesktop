@@ -7,6 +7,7 @@ use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
 use clayspace_vm::{Command, SculptViewModel};
 
 const CELL: f32 = 0.05;
+type OccupiedCells = Vec<([i32; 3], i32)>;
 
 fn slab() -> SharedDocument {
     let policy = BackendPolicy::discover(None).expect("backends");
@@ -35,7 +36,7 @@ fn slab() -> SharedDocument {
     SharedDocument::new(document)
 }
 
-fn cells(document: &SharedDocument) -> Vec<([i32; 3], i32)> {
+fn cells(document: &SharedDocument) -> OccupiedCells {
     document.with(|document| {
         let (_, reader) = document.document().voxel_reader("Voxels").expect("grid");
         let Some((min, max)) = reader.bounds().expect("bounds") else {
@@ -68,11 +69,7 @@ fn surface(document: &SharedDocument) -> f32 {
     })
 }
 
-fn drag(
-    document: &SharedDocument,
-    updates: usize,
-    cancel: bool,
-) -> (Vec<([i32; 3], i32)>, Vec<([i32; 3], i32)>) {
+fn drag(document: &SharedDocument, updates: usize, cancel: bool) -> (OccupiedCells, OccupiedCells) {
     let mut vm = SculptViewModel::new(Box::new(document.clone()));
     vm.dispatch(Command::SelectTool(ToolKind::Mover))
         .expect("select Move");
