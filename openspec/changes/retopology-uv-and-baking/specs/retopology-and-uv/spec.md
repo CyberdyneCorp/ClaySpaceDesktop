@@ -4,9 +4,9 @@
 A mesh subtool SHALL be retopologisable through `cyber_remesh`, with the quad
 methods the pinned release carries and a target quad count.
 
-The result SHALL replace the subtool's topology **in place**, in one undo entry,
-as *Refazer a malha* already does. The stack is not the record of an operation
-the history records.
+The accepted result SHALL become a new mesh subtool, leaving the sculpt source
+available for comparison. Its creation SHALL be one undo entry. The stack is
+not the record of an operation the history records.
 
 The commit SHALL be a compare-and-swap against the layer revision read before
 the work was dispatched, and SHALL refuse rather than overwrite when the layer
@@ -17,9 +17,17 @@ The operation SHALL be offered on mesh subtools only. A field is not a mesh, and
 crossing one for the sculptor silently would perform a representation change
 with its own cost and its own undo entry.
 
+Retopology SHALL be a named workflow, available from the interface and agent
+catalogue. It SHALL run as a cancellable job with progress and a preview of
+the result. The sculptor SHALL explicitly accept or discard that preview.
+
 #### Scenario: A sculpted mesh is retopologised
-- **WHEN** the operation completes
+- **WHEN** the operation completes and its preview is accepted
 - **THEN** the quads stand in a new subtool and the source is untouched
+
+#### Scenario: A result is discarded
+- **WHEN** the sculptor discards a completed retopology preview
+- **THEN** neither a new subtool nor a history entry is created
 
 ### Requirement: A retopology is one undo entry
 Placing the result SHALL be one entry in the history, as a crossing and a
@@ -56,6 +64,35 @@ them.
 #### Scenario: An empty seam set is unwrapped along
 - **WHEN** the mesh carries no marked seams
 - **THEN** it is parameterised without cuts rather than auto-seamed
+
+### Requirement: Guides and density are retopology inputs
+The retopology workflow SHALL accept surface flow guides and a painted density
+field as retopology data, independent of sculpt brushes. Guides and density
+SHALL be visible and editable before a job starts and SHALL be passed to the
+remesher only when that job is requested. Their edits SHALL be undoable.
+
+#### Scenario: Density changes the requested topology
+- **WHEN** the same mesh is retopologised with and without a higher-density region
+- **THEN** the accepted mesh has measurably more quads in that region, while the source sculpt is unchanged
+
+#### Scenario: A guide steers flow
+- **WHEN** a flow guide is drawn across a source mesh and the job runs
+- **THEN** the job receives that guide as retopology input rather than modifying the source surface
+
+### Requirement: Optional UVs survive acceptance
+The retopology workflow SHALL offer optional automatic UV generation for its
+result. The preview SHALL report UV metrics and the accepted mesh SHALL retain
+the resulting UV coordinates. Declining UV generation SHALL leave the result
+without newly generated UVs. A failed UV step SHALL be reported and SHALL NOT
+be silently presented as a UV-carrying success.
+
+#### Scenario: A result with UVs is accepted
+- **WHEN** automatic UV generation is requested and the retopology preview is accepted
+- **THEN** the new mesh subtool retains the previewed UV coordinates after save and reload
+
+#### Scenario: UVs are declined
+- **WHEN** a retopology result is accepted without requesting UV generation
+- **THEN** no automatic atlas is generated for that result
 
 ### Requirement: Maps are baked from the field where a field is what exists
 Normal, ambient occlusion, curvature and cavity SHALL be baked through

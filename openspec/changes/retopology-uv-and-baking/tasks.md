@@ -168,3 +168,34 @@ field evaluator with no field. We are the first of either.
       latency flat under load. They can only simulate this; we have `dab.*`,
       `brush.*`, `locality.*` and `tape.*` and a before-and-after protocol, so
       they get a measured answer instead
+
+## 11. Production retopology workflow (#211–#213)
+
+- [ ] 11.1 Route retopology as a named UI and agent action with preflight,
+      cancellable job progress, result preview and explicit accept/discard.
+      Acceptance creates a new mesh subtool and one history entry; discard
+      creates neither. (#211)
+- [ ] 11.2 Recheck the source layer revision before accepting a result and
+      refuse a stale preview with a visible reason. (#211)
+- [ ] 11.3 Store editable flow guides and density painting as retopology input,
+      independently of sculpt brushes, with undo and visual feedback; test
+      that each changes the output in the intended region. (#212)
+- [ ] 11.4 Add optional atlas generation to the retopology job, report UV
+      metrics and failures, and preserve accepted UV coordinates through
+      save/load and undo/redo. (#213)
+- [ ] 11.5 Pin the workflow with UI, VM and agent regression tests; update
+      `docs/features.md` to describe the accepted-result lifecycle. (#211–#213)
+
+## 12. From fixed mesh to hierarchy and bake out (#214)
+
+- [ ] 12.1 Route Create Hierarchy from an accepted retopology result and state
+      the level cost against current document usage before allocating; refuse
+      with current usage, added cost and limit. (#214; depends on #184)
+- [ ] 12.2 Label and control sculpt and display levels independently; report
+      level counts and detail checksum in agent state. (#214)
+- [ ] 12.3 Surface cache drop, trim and pass compaction with measured freed
+      bytes; benchmark level creation and preflight on three cage sizes. (#214)
+- [ ] 12.4 Report what a selected-level bake carries and loses, and verify
+      coarse edits preserve fine-detail checksum. (#214)
+- [ ] 12.5 Require undo or consent for removing the highest level before
+      routing that action in this workflow. (#214; depends on #194)
