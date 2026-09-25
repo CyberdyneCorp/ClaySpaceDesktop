@@ -13,3 +13,7 @@
 #![allow(clippy::all)]
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+
+#[cfg(test)]
+#[path = "../build_cache.rs"]
+mod build_cache;

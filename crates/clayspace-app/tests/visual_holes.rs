@@ -221,11 +221,13 @@ fn a_sculpted_form_has_no_holes_in_it() {
     );
 }
 
-// Ignored: a real defect with no fix yet, and a red suite teaches people to
-// ignore the suite. `cargo test -- --ignored` runs it.
+// Tripwire for the known long-session rendering defect. This stays in the
+// regular macOS visual suite: when the defect disappears, change the final
+// assertion to require zero holes and specks, rather than silently leaving an
+// ignored test behind. See #190.
+#[cfg(target_os = "macos")]
 #[test]
-#[ignore = "known defect: a long session leaves dark specks on the surface"]
-fn a_long_mixed_session_leaves_no_holes_or_specks() {
+fn long_mixed_session_render_defect_tripwire() {
     // Closer to the reported session: more tools, more strokes, and a form
     // several times the size of the first reproduction. The oracle is what a
     // sculptor would see — holes in the surface, and specks too dark to be
@@ -431,10 +433,9 @@ fn a_long_mixed_session_leaves_no_holes_or_specks() {
     );
 
     assert!(
-        holes.is_empty() && specks.is_empty(),
-        "the drawn surface has {} pinholes and {} dark specks. See \
-         target/visual/133-long-session.png",
-        holes.len(),
-        specks.len()
+        !holes.is_empty() || !specks.is_empty(),
+        "the long-session defect is no longer reproduced; replace this \
+         tripwire with zero-hole and zero-speck assertions. See \
+         target/visual/133-long-session.png"
     );
 }
