@@ -17,8 +17,8 @@ mod support;
 
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{CurveJoin, CurveModel};
-use clayspace_view::Camera;
+use clayspace_model::{CurveJoin, CurveModel, GizmoMode, GizmoTarget, ObjectModel};
+use clayspace_view::{Camera, GizmoView};
 use support::Harness;
 
 /// A curve bent hard enough that its chords and its path are different lines.
@@ -33,6 +33,70 @@ fn bend(document: &mut ClayDocument) {
         document.add_curve_point(at, 0.16).expect("refused");
     }
     document.set_curve_join(CurveJoin::Through).expect("join");
+}
+
+#[test]
+fn a_selected_curve_point_has_a_visible_transform_gizmo() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    let mut camera = Camera::default();
+    camera.frame_bounds([-2.0, -2.0, -2.0].into(), [2.0, 2.0, 2.0].into());
+    bend(&mut document);
+    document.select_curve_point(Some(1));
+    let pivot = ObjectModel::target_transform(&mut document, GizmoTarget::Curve)
+        .expect("selected curve point has a pivot")
+        .position;
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry.sync(&harness.gpu, &mut document).expect("mesh");
+    let curve = document.curve();
+    let points: Vec<[f32; 3]> = curve.points.iter().map(|p| p.position).collect();
+    let guide = curve.path();
+
+    harness.renderer.set_ghosted(true);
+    let draw = |harness: &mut Harness, gizmo, name| {
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            clayspace_view::LatticeView {
+                points: &points,
+                edges: &[],
+                guide: &guide,
+                selected: &curve.selection,
+                gizmo,
+                outline: None,
+                subtool_outline: None,
+                handle: 0.06,
+            },
+        );
+        harness.capture(geometry.mesh(), &camera, false, name)
+    };
+    let bare = draw(&mut harness, None, "curve-gizmo-none");
+    let shown = draw(
+        &mut harness,
+        Some(GizmoView {
+            pivot,
+            mode: GizmoMode::Move,
+            reach: 0.7,
+            hovered: None,
+            view_axis: [0.0, 0.0, 1.0],
+            per_axis_scale: false,
+        }),
+        "curve-gizmo-drawn",
+    );
+    let changed = bare
+        .pixels
+        .chunks_exact(4)
+        .zip(shown.pixels.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|channel| a[channel].abs_diff(b[channel]) > 12))
+        .count();
+    assert!(changed > 300, "curve gizmo changed only {changed} pixels");
 }
 
 #[test]

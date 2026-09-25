@@ -1620,6 +1620,7 @@ pub struct ClayDocument {
     /// While one is, every transform written goes into a single undo group, so
     /// a drag is one entry however many frames it took.
     dragging: Option<GizmoTarget>,
+    curve_drag_start: Option<CurveDragStart>,
     /// The table as it stood on top of each of the engine's entries.
     ///
     /// The engine reverts an object's transform and has no way to tell the
@@ -1732,6 +1733,7 @@ impl ClayDocument {
             objects: Vec::new(),
             selected_object: None,
             dragging: None,
+            curve_drag_start: None,
             object_states: std::collections::BTreeMap::new(),
         };
         model.refresh_stats();
@@ -9572,6 +9574,15 @@ fn smooth_geometry(mesh: &claycore::Mesh) -> ChunkGeometry {
     }
 }
 
+/// Selected curve points at the start of a manipulator gesture. Each frame
+/// resolves against these positions so the result does not drift with frame
+/// count or pointer sampling rate.
+#[derive(Clone)]
+struct CurveDragStart {
+    pivot: [f32; 3],
+    points: Vec<(usize, [f32; 3])>,
+}
+
 /// A curve being placed, and the sweep it is showing.
 struct Curve {
     layer: LayerKey,
@@ -9589,7 +9600,11 @@ struct Curve {
     /// because ClayCore hands the same one back when the step is redone — so
     /// a curve that forgot it would place a *second* sweep beside the one that
     /// returned, and the sculptor would be editing one of two identical tubes.
+    /// During a profile replacement it also remembers the other node version
+    /// so undo and redo can choose whichever the engine currently holds.
     undone: Option<claycore::NodeId>,
+    /// Profiles of placed node versions, so history can restore the panel.
+    node_profiles: Vec<(claycore::NodeId, CurveProfile)>,
 }
 
 impl Curve {
@@ -11498,6 +11513,7 @@ impl ClayDocument {
             objects: Vec::new(),
             selected_object: None,
             dragging: None,
+            curve_drag_start: None,
             object_states: std::collections::BTreeMap::new(),
         };
 
@@ -12032,12 +12048,13 @@ impl CurveModel for ClayDocument {
             profile: CurveProfile::default(),
             node: None,
             undone: None,
+            node_profiles: Vec::new(),
         });
     }
 
     fn add_curve_point(&mut self, at: [f32; 3], radius: f32) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
-            return Ok(());
+            return Err(Self::no_active_curve());
         };
         curve.points.push(CurvePoint {
             position: at,
@@ -12079,7 +12096,7 @@ impl CurveModel for ClayDocument {
         radius: f32,
     ) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
-            return Ok(());
+            return Err(Self::no_active_curve());
         };
         // Clamped rather than refused. The index comes from a click on a
         // tessellated guide, and the arithmetic that turns a sample into a
@@ -12103,7 +12120,7 @@ impl CurveModel for ClayDocument {
             return Ok(());
         }
         let Some(curve) = self.curve.as_mut() else {
-            return Ok(());
+            return Err(Self::no_active_curve());
         };
         let mut changed = false;
         for index in curve.selection.clone() {
@@ -12129,7 +12146,7 @@ impl CurveModel for ClayDocument {
         snap: bool,
     ) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
-            return Ok(());
+            return Err(Self::no_active_curve());
         };
         let mut changed = false;
         for index in curve.selection.clone() {
@@ -12149,7 +12166,7 @@ impl CurveModel for ClayDocument {
 
     fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_ref() else {
-            return Ok(());
+            return Err(Self::no_active_curve());
         };
         let radius = radius.max(1e-3);
         // The selection where there is one, and the whole curve where there is
@@ -12178,6 +12195,9 @@ impl CurveModel for ClayDocument {
         // took it to four and a half gigabytes, which is not a thickness
         // anybody asked for.
         self.afford_region(Self::curve_extent(&widened))?;
+        if curve.profile != CurveProfile::Circle && curve.node.is_some() {
+            return self.replace_curve_item(|curve| curve.points = widened);
+        }
         if let Some(curve) = self.curve.as_mut() {
             curve.points = widened;
         }
@@ -12185,25 +12205,21 @@ impl CurveModel for ClayDocument {
     }
 
     fn set_curve_join(&mut self, join: CurveJoin) -> Result<(), ModelError> {
-        if let Some(curve) = self.curve.as_mut() {
-            curve.join = join;
-        }
+        let curve = self.curve.as_mut().ok_or_else(Self::no_active_curve)?;
+        curve.join = join;
         self.reshape_curve()
     }
 
     fn set_curve_profile(&mut self, profile: CurveProfile) -> Result<(), ModelError> {
-        // The profile is the item's, not the guide's, so this cannot be a
-        // point-list replace — the sweep is placed again from scratch.
-        self.retire_curve_node()?;
-        if let Some(curve) = self.curve.as_mut() {
-            curve.profile = profile;
+        if self.curve.is_none() {
+            return Err(Self::no_active_curve());
         }
-        self.reshape_curve()
+        self.replace_curve_item(|curve| curve.profile = profile)
     }
 
     fn remove_curve_points(&mut self) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
-            return Ok(());
+            return Err(Self::no_active_curve());
         };
         if curve.selection.is_empty() {
             return Ok(());
@@ -12225,6 +12241,9 @@ impl CurveModel for ClayDocument {
     }
 
     fn apply_curve(&mut self) -> Result<(), ModelError> {
+        if self.curve.is_none() {
+            return Err(Self::no_active_curve());
+        }
         // The sweep is already placed; applying is letting go of the curve
         // that shaped it. What stays behind is an ordinary item in the layer.
         self.curve = None;
@@ -12240,6 +12259,31 @@ impl CurveModel for ClayDocument {
 }
 
 impl ClayDocument {
+    fn no_active_curve() -> ModelError {
+        ModelError::engine("no active curve")
+    }
+
+    /// A profile change replaces the item. Group removal and insertion so one
+    /// undo restores the old tube, and retain its node id for history resync.
+    fn replace_curve_item(&mut self, update: impl FnOnce(&mut Curve)) -> Result<(), ModelError> {
+        let old = self.curve.as_ref().and_then(|curve| curve.node);
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let result = (|| {
+            self.retire_curve_node()?;
+            update(self.curve.as_mut().ok_or_else(Self::no_active_curve)?);
+            self.reshape_curve()?;
+            if let Some(curve) = self.curve.as_mut() {
+                curve.undone = old;
+            }
+            Ok(())
+        })();
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        result?;
+        closed
+    }
+
     /// Places the sweep, or replaces the guide of the one already placed.
     /// The curve's field can change outside adjacent spans: the stroke blends
     /// its chain, and swept profiles use total arc length and transported
@@ -12276,6 +12320,7 @@ impl ClayDocument {
             // A sweep placed afresh is the one the curve has now, whatever id
             // an earlier one of its own was taken back under.
             curve.undone = None;
+            curve.node_profiles.push((node, curve.profile));
         }
         self.refill(layer, &[node])
     }
@@ -13799,9 +13844,9 @@ impl ClayDocument {
         // the curve has never had enough points to sweep along, so the
         // document holds nothing of it and nothing there can contradict the
         // hand.
-        let Some(node) = curve.node.or(curve.undone) else {
+        if curve.node.or(curve.undone).is_none() {
             return;
-        };
+        }
         let Ok(index) = self.index_of(curve.layer) else {
             // The step took away the layer the curve was being drawn into.
             // There is nothing left to shape, and a hand still holding it
@@ -13810,16 +13855,25 @@ impl ClayDocument {
             return;
         };
         let layer = self.layers[index].id;
-        let placed = self
-            .document
-            .layer_nodes(layer)
-            .is_ok_and(|nodes| nodes.contains(&node));
-        // A node that is there but will not answer is left alone rather than
-        // treated as gone: the document has said nothing, and emptying the
-        // hand on silence would throw away work no step took back.
-        let guide = placed
-            .then(|| self.document.stroke_points(layer, node).ok())
-            .flatten()
+        let Ok(nodes) = self.document.layer_nodes(layer) else {
+            return;
+        };
+        let present = curve
+            .node_profiles
+            .iter()
+            .rev()
+            .map(|(node, _)| *node)
+            .find(|node| nodes.contains(node));
+        let Some(node) = present.or(curve.node).or(curve.undone) else {
+            return;
+        };
+        let alternate = if curve.node == Some(node) {
+            curve.undone
+        } else {
+            curve.node
+        };
+        let guide = present
+            .and_then(|node| self.document.stroke_points(layer, node).ok())
             .filter(|points| !points.is_empty());
         let Some(curve) = self.curve.as_mut() else {
             return;
@@ -13833,18 +13887,23 @@ impl ClayDocument {
                         radius: point[3],
                     })
                     .collect();
+                if let Some((_, profile)) = curve
+                    .node_profiles
+                    .iter()
+                    .rev()
+                    .find(|(known, _)| *known == node)
+                {
+                    curve.profile = *profile;
+                }
             }
-            // Undone past the sweep's own creation. The points went with it —
-            // they *are* the guide — so the hand is emptied rather than left
-            // holding a curve the document has never heard of.
-            None if !placed => {
+            None if present.is_none() => {
                 curve.points.clear();
             }
             None => {}
         }
-        if placed {
+        if present.is_some() {
             curve.node = Some(node);
-            curve.undone = None;
+            curve.undone = alternate;
         } else {
             curve.node = None;
             curve.undone = Some(node);
@@ -15190,6 +15249,88 @@ impl ClayDocument {
     }
 }
 
+impl ClayDocument {
+    fn curve_transform_start(&self) -> Option<CurveDragStart> {
+        let curve = self.curve.as_ref()?;
+        let points: Vec<_> = curve
+            .selection
+            .iter()
+            .map(|&index| Some((index, curve.points.get(index)?.position)))
+            .collect::<Option<_>>()?;
+        if points.is_empty() {
+            return None;
+        }
+        let mut pivot = [0.0; 3];
+        for (_, point) in &points {
+            for axis in 0..3 {
+                pivot[axis] += point[axis] / points.len() as f32;
+            }
+        }
+        Some(CurveDragStart { pivot, points })
+    }
+
+    fn curve_transformed_point(
+        point: [f32; 3],
+        start: [f32; 3],
+        transform: clayspace_model::Transform,
+    ) -> [f32; 3] {
+        let scaled: [f32; 3] =
+            std::array::from_fn(|axis| (point[axis] - start[axis]) * transform.scale[axis]);
+        let axis = transform.rotation_axis;
+        let length = axis.iter().map(|value| value * value).sum::<f32>().sqrt();
+        let turned = if length > 1e-6 && transform.rotation_angle.abs() > 1e-6 {
+            let unit = axis.map(|value| value / length);
+            let dot = (0..3).map(|i| unit[i] * scaled[i]).sum::<f32>();
+            let cross = [
+                unit[1] * scaled[2] - unit[2] * scaled[1],
+                unit[2] * scaled[0] - unit[0] * scaled[2],
+                unit[0] * scaled[1] - unit[1] * scaled[0],
+            ];
+            let (sin, cos) = transform.rotation_angle.sin_cos();
+            std::array::from_fn(|i| scaled[i] * cos + cross[i] * sin + unit[i] * dot * (1.0 - cos))
+        } else {
+            scaled
+        };
+        std::array::from_fn(|i| transform.position[i] + turned[i])
+    }
+
+    fn set_curve_transform(
+        &mut self,
+        transform: clayspace_model::Transform,
+    ) -> Result<(), ModelError> {
+        let start = self
+            .curve_drag_start
+            .clone()
+            .or_else(|| self.curve_transform_start())
+            .ok_or_else(Self::no_active_curve)?;
+        let mut preview = self
+            .curve
+            .as_ref()
+            .ok_or_else(Self::no_active_curve)?
+            .points
+            .clone();
+        let mut changed = false;
+        for (index, original) in start.points {
+            let Some(point) = preview.get_mut(index) else {
+                continue;
+            };
+            let placed = Self::curve_transformed_point(original, start.pivot, transform);
+            changed |= placed != point.position;
+            point.position = placed;
+        }
+        if changed {
+            self.afford_region(Self::curve_extent(&preview))?;
+            self.curve
+                .as_mut()
+                .ok_or_else(Self::no_active_curve)?
+                .points = preview;
+            self.reshape_curve()
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl ObjectModel for ClayDocument {
     /// The history the interface counts, which is the one these operations
     /// are banked on. See [`ClayDocument::history_depth`].
@@ -15702,14 +15843,18 @@ impl ObjectModel for ClayDocument {
                 let index = self.index_of(key).ok()?;
                 Some(self.layers[index].transform)
             }
-            // A curve's points belong to the application while it is being
-            // authored, so a curve is transformed through the point path the
-            // cage already uses rather than through an engine transform.
-            GizmoTarget::Curve => None,
+            GizmoTarget::Curve => self
+                .curve_transform_start()
+                .map(|start| clayspace_model::Transform::at(start.pivot)),
         }
     }
 
     fn begin_target_drag(&mut self, target: GizmoTarget) {
+        self.curve_drag_start = if target == GizmoTarget::Curve {
+            self.curve_transform_start()
+        } else {
+            None
+        };
         // A gesture already open is closed first: one left open would swallow
         // every edit after it into a single undo step, which is a worse bug
         // than the one this exists to fix.
@@ -15728,6 +15873,7 @@ impl ObjectModel for ClayDocument {
     }
 
     fn end_target_drag(&mut self) {
+        self.curve_drag_start = None;
         if self.dragging.take().is_none() {
             return;
         }
@@ -15753,11 +15899,7 @@ impl ObjectModel for ClayDocument {
             // `clay_mesh_transform` is for a bake that needs the moved
             // vertices, not for standing a layer somewhere.
             GizmoTarget::Layer(key) => self.place_layer(key, transform),
-            GizmoTarget::Curve => Err(ModelError::Unavailable(
-                clayspace_model::Unavailable::WrongGesture {
-                    needs: "os pontos da curva",
-                },
-            )),
+            GizmoTarget::Curve => self.set_curve_transform(transform),
         }
     }
 

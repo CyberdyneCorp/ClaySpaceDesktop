@@ -63,6 +63,7 @@ struct FakeObjects {
     /// What a ray meets. `None` is empty space, which is the answer the
     /// interface must not confuse with an item it cannot move.
     hit: Option<ItemKind>,
+    curve_available: bool,
 }
 
 impl FakeObjects {
@@ -76,6 +77,7 @@ impl FakeObjects {
             refuse: None,
             slow: false,
             hit: None,
+            curve_available: true,
         }
     }
 
@@ -341,7 +343,7 @@ impl ObjectModel for FakeObjects {
                 })
             }
             GizmoTarget::Layer(_) => Some(Transform::default()),
-            GizmoTarget::Curve => None,
+            GizmoTarget::Curve => self.curve_available.then(|| Transform::at([0.0, 1.5, 0.0])),
         }
     }
 
@@ -952,6 +954,38 @@ fn a_curve_stretches_per_axis() {
     let (mut vm, _) = viewmodel();
     send(&mut vm, Command::SetGizmoTarget(Some(GizmoTarget::Curve)));
     assert!(vm.per_axis_scale());
+}
+
+#[test]
+fn a_curve_target_routes_a_drag_to_the_model() {
+    let (mut vm, calls) = viewmodel();
+    send(&mut vm, Command::SetGizmoTarget(Some(GizmoTarget::Curve)));
+    assert_eq!(vm.pivot(), Some([0.0, 1.5, 0.0]));
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0, 1.5, 0.0], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.0, 1.8, 0.0], false));
+    send(&mut vm, Command::EndGizmoDrag);
+    let calls = calls.borrow();
+    assert_eq!(calls.drags_begun, 1);
+    assert_eq!(calls.drags_ended, 1);
+    assert_eq!(calls.transforms.len(), 1);
+    assert!((calls.transforms[0].position[1] - 1.8).abs() < 1e-5);
+}
+
+#[test]
+fn a_curve_target_without_selected_points_is_refused() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls);
+    model.curve_available = false;
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    send(&mut vm, Command::SetGizmoTarget(Some(GizmoTarget::Curve)));
+    assert_eq!(*vm.target().get(), None);
+    assert_eq!(
+        vm.notice().get().as_deref(),
+        Some("select a curve control point")
+    );
 }
 
 /// A drag the model refuses has to reach the status area. Leaving the object

@@ -3066,7 +3066,7 @@ impl App {
         let object_mode = *self.objects.mode().get();
         // The same question `gizmo_target` asks, so the picture and the hit
         // test offer the same handles.
-        let object_per_axis = self.objects.selected().get().is_some();
+        let object_per_axis = self.objects.per_axis_scale();
         // The handle in hand while a drag is under way, and the one under the
         // pointer otherwise: a gesture keeps its handle lit wherever the
         // pointer has since travelled.
@@ -3074,6 +3074,22 @@ impl App {
             .gizmo_drag
             .map(|gesture| (gesture.mode, gesture.handle))
             .or(self.gizmo_hover);
+        let object_gizmo = object_pivot.map(|pivot| clayspace_view::GizmoView {
+            pivot,
+            mode: object_mode,
+            reach: object_reach,
+            hovered: gizmo_hovered,
+            view_axis: clayspace_app::input::toward_eye(&camera, pivot),
+            per_axis_scale: object_per_axis,
+        });
+        let curve_gizmo = if matches!(
+            *self.objects.target().get(),
+            Some(clayspace_model::GizmoTarget::Curve)
+        ) {
+            object_gizmo
+        } else {
+            None
+        };
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -3105,7 +3121,7 @@ impl App {
                         edges: &edges,
                         guide: &guide,
                         selected: &curve.selection,
-                        gizmo: None,
+                        gizmo: curve_gizmo,
                         outline: None,
                         subtool_outline: None,
                         handle: Self::curve_handle(&curve),
@@ -3117,17 +3133,6 @@ impl App {
             // object is selected, if any. Its pivot comes from the model
             // rather than from the list, so it is where the engine has the
             // object rather than where the interface last drew it.
-            let object_gizmo = object_pivot.map(|pivot| clayspace_view::GizmoView {
-                pivot,
-                mode: object_mode,
-                reach: object_reach,
-                hovered: gizmo_hovered,
-                view_axis: clayspace_app::input::toward_eye(&camera, pivot),
-                // Three boxes on a placed object, none on a whole subtool:
-                // the engine's node transform takes a factor per axis and its
-                // layer transform takes one.
-                per_axis_scale: object_per_axis,
-            });
             graphics.renderer.set_lattice(
                 &gpu,
                 clayspace_view::LatticeView {
@@ -4647,10 +4652,16 @@ impl App {
     /// widget's mode and takes nothing away from it.
     fn transform_mode(&mut self, mode: GizmoMode) {
         self.handle(Command::SetGizmoMode(mode));
-        if self.lattice.state().get().active
-            || self.curve.state().get().active
-            || self.objects.target().get().is_some()
-        {
+        if self.lattice.state().get().active {
+            return;
+        }
+        if self.curve.state().get().active {
+            self.handle(Command::SetGizmoTarget(Some(
+                clayspace_model::GizmoTarget::Curve,
+            )));
+            return;
+        }
+        if self.objects.target().get().is_some() {
             return;
         }
         let Some(key) = self

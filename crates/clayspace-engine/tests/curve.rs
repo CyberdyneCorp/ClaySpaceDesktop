@@ -13,7 +13,10 @@
 
 use claycore::BrickMeshParams;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{CurveJoin, CurveModel, CurveProfile, FieldRefusal, ModelError, SculptModel};
+use clayspace_model::{
+    CurveJoin, CurveModel, CurveProfile, FieldRefusal, GizmoTarget, ModelError, ObjectModel,
+    SculptModel,
+};
 
 fn document() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -379,6 +382,212 @@ fn the_join_and_the_profile_change_the_form() {
         (square - circle).abs() > 1e-3,
         "the profile made no difference: {circle} against {square}"
     );
+}
+
+#[test]
+fn a_profile_change_reapplies_the_join() {
+    for profile in [
+        CurveProfile::Square,
+        CurveProfile::Hexagon,
+        CurveProfile::Triangle,
+    ] {
+        let mut document = document();
+        lay(&mut document);
+        document.set_curve_join(CurveJoin::Rounded).expect("join");
+        document.set_curve_profile(profile).expect("profile");
+        let directions = [[0.0, 1.0, 0.0], [-0.4, 1.0, 0.0], [0.4, 1.0, 0.0]];
+        let immediate = directions.map(|direction| reach(&document, direction));
+        document.set_curve_join(CurveJoin::Through).expect("away");
+        document.set_curve_join(CurveJoin::Rounded).expect("back");
+        let refilled = directions.map(|direction| reach(&document, direction));
+        let worst = immediate
+            .iter()
+            .zip(&refilled)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "{profile:?} lost the curve join by {worst}");
+    }
+}
+
+#[test]
+fn a_profile_change_is_one_undoable_edit() {
+    let mut document = document();
+    lay(&mut document);
+    let before = document.curve().points;
+    document
+        .set_curve_profile(CurveProfile::Square)
+        .expect("profile");
+    assert_eq!(document.curve().profile, CurveProfile::Square);
+    assert!(SculptModel::undo(&mut document).expect("undo profile"));
+    assert_eq!(document.curve().profile, CurveProfile::Circle);
+    assert_eq!(document.curve().points, before);
+    assert!(SculptModel::redo(&mut document).expect("redo profile"));
+    assert_eq!(document.curve().profile, CurveProfile::Square);
+    assert_eq!(document.curve().points, before);
+}
+
+#[test]
+fn multiple_profile_replacements_follow_the_full_history() {
+    let mut document = document();
+    lay(&mut document);
+    document
+        .set_curve_profile(CurveProfile::Square)
+        .expect("square");
+    document
+        .set_curve_profile(CurveProfile::Triangle)
+        .expect("triangle");
+    assert!(SculptModel::undo(&mut document).expect("undo triangle"));
+    assert_eq!(document.curve().profile, CurveProfile::Square);
+    assert!(SculptModel::undo(&mut document).expect("undo square"));
+    assert_eq!(document.curve().profile, CurveProfile::Circle);
+    assert!(SculptModel::redo(&mut document).expect("redo square"));
+    assert_eq!(document.curve().profile, CurveProfile::Square);
+    assert!(SculptModel::redo(&mut document).expect("redo triangle"));
+    assert_eq!(document.curve().profile, CurveProfile::Triangle);
+}
+
+#[test]
+fn a_radius_change_reshapes_each_section_profile() {
+    for profile in [
+        CurveProfile::Square,
+        CurveProfile::Hexagon,
+        CurveProfile::Triangle,
+    ] {
+        let mut document = document();
+        document.begin_curve();
+        for at in [[-0.9, 1.5, 0.0], [0.0, 1.7, 0.0], [0.9, 1.5, 0.0]] {
+            document.add_curve_point(at, 0.06).expect("point");
+        }
+        document.set_curve_profile(profile).expect("profile");
+        document.select_curve_point(None);
+        let thin = reach(&document, [0.0, 1.0, 0.0]);
+        document.set_curve_radius(0.24).expect("radius");
+        let thick = reach(&document, [0.0, 1.0, 0.0]);
+        assert!(
+            thick > thin + 0.1,
+            "{profile:?} kept the old profile: {thin} -> {thick}"
+        );
+        assert!(SculptModel::undo(&mut document).expect("undo radius"));
+        assert_eq!(document.curve().points[0].radius, 0.06);
+        assert!(SculptModel::redo(&mut document).expect("redo radius"));
+        assert_eq!(document.curve().points[0].radius, 0.24);
+    }
+}
+
+#[test]
+fn adding_a_point_without_a_curve_is_refused() {
+    let mut document = document();
+    assert!(document.add_curve_point([0.0; 3], 0.1).is_err());
+}
+
+#[test]
+fn inactive_curve_verbs_are_refused() {
+    let mut document = document();
+    assert!(document.insert_curve_point(0, [0.0; 3], 0.1).is_err());
+    assert!(document.drag_curve([0.1, 0.0, 0.0]).is_err());
+    assert!(document.set_curve_radius(0.1).is_err());
+    assert!(document.set_curve_join(CurveJoin::Corners).is_err());
+    assert!(document.set_curve_profile(CurveProfile::Square).is_err());
+    assert!(document.remove_curve_points().is_err());
+    assert!(document.apply_curve().is_err());
+    assert!(ObjectModel::target_transform(&mut document, GizmoTarget::Curve).is_none());
+    assert!(ObjectModel::set_target_transform(
+        &mut document,
+        GizmoTarget::Curve,
+        clayspace_model::Transform::default(),
+    )
+    .is_err());
+}
+
+#[test]
+fn the_curve_target_moves_selected_points_from_the_gesture_start() {
+    let mut document = document();
+    document.begin_curve();
+    document
+        .add_curve_point([-0.5, 1.5, 0.0], 0.1)
+        .expect("point");
+    document
+        .add_curve_point([0.5, 1.5, 0.0], 0.1)
+        .expect("point");
+    document.select_curve_point(Some(0));
+    document.toggle_curve_point(1);
+    let start = ObjectModel::target_transform(&mut document, GizmoTarget::Curve)
+        .expect("selected curve target");
+    assert!((start.position[0]).abs() < 1e-6);
+    ObjectModel::begin_target_drag(&mut document, GizmoTarget::Curve);
+    for amount in [0.3, 0.1] {
+        ObjectModel::set_target_transform(
+            &mut document,
+            GizmoTarget::Curve,
+            clayspace_model::Transform {
+                position: [0.0, 1.5 + amount, 0.0],
+                ..start
+            },
+        )
+        .expect("move selected points");
+    }
+    ObjectModel::end_target_drag(&mut document);
+    let points = document.curve().points;
+    assert!((points[0].position[1] - 1.6).abs() < 1e-5);
+    assert!((points[1].position[1] - 1.6).abs() < 1e-5);
+    assert!(SculptModel::undo(&mut document).expect("undo drag"));
+    let restored = document.curve().points;
+    assert!((restored[0].position[1] - 1.5).abs() < 1e-5);
+    assert!((restored[1].position[1] - 1.5).abs() < 1e-5);
+}
+
+#[test]
+fn the_curve_target_rotates_and_scales_selected_points() {
+    let mut document = document();
+    document.begin_curve();
+    document
+        .add_curve_point([-0.5, 1.5, 0.0], 0.1)
+        .expect("point");
+    document
+        .add_curve_point([0.5, 1.5, 0.0], 0.1)
+        .expect("point");
+    document.select_curve_point(Some(0));
+    document.toggle_curve_point(1);
+    let start = ObjectModel::target_transform(&mut document, GizmoTarget::Curve).unwrap();
+    ObjectModel::begin_target_drag(&mut document, GizmoTarget::Curve);
+    ObjectModel::set_target_transform(
+        &mut document,
+        GizmoTarget::Curve,
+        clayspace_model::Transform {
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: std::f32::consts::FRAC_PI_2,
+            scale: [2.0, 1.0, 1.0],
+            ..start
+        },
+    )
+    .expect("rotate and scale");
+    ObjectModel::end_target_drag(&mut document);
+    let points = document.curve().points;
+    assert!((points[0].position[1] - 0.5).abs() < 1e-5);
+    assert!((points[1].position[1] - 2.5).abs() < 1e-5);
+}
+
+#[test]
+fn an_unaffordable_curve_transform_leaves_the_points_in_place() {
+    let mut document = document();
+    lay(&mut document);
+    document.select_curve_point(Some(0));
+    document.toggle_curve_point(2);
+    let before = document.curve().points;
+    let start = ObjectModel::target_transform(&mut document, GizmoTarget::Curve).unwrap();
+    let result = ObjectModel::set_target_transform(
+        &mut document,
+        GizmoTarget::Curve,
+        clayspace_model::Transform {
+            scale: [1_000_000.0; 3],
+            ..start
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a huge curve should exceed the field budget"
+    );
+    assert_eq!(document.curve().points, before);
 }
 
 #[test]
