@@ -70,6 +70,7 @@ struct Finished<T> {
 /// and several at once would compete for the same cores the interface needs.
 pub struct JobRunner<T: Send + 'static> {
     progress: Observable<Option<Progress>>,
+    live_progress: Option<Arc<Mutex<Progress>>>,
     /// Bumped whenever the document changes, so a job in flight can be told
     /// its result no longer applies.
     generation: Generation,
@@ -89,6 +90,7 @@ impl<T: Send + 'static> JobRunner<T> {
     pub fn new() -> Self {
         Self {
             progress: Observable::new(None),
+            live_progress: None,
             generation: Generation::default(),
             running: None,
             results: None,
@@ -149,6 +151,7 @@ impl<T: Send + 'static> JobRunner<T> {
         self.progress.set(Some(
             shared.lock().expect("progress is not poisoned").clone(),
         ));
+        self.live_progress = Some(shared.clone());
         self.running = Some(generation);
         self.results = Some(receiver);
 
@@ -171,6 +174,11 @@ impl<T: Send + 'static> JobRunner<T> {
     /// Called once per frame. Never blocks: a job still running simply reports
     /// nothing, which is what keeps the interface thread free.
     pub fn poll(&mut self) -> Option<Completion<T>> {
+        if let Some(live) = &self.live_progress {
+            if let Ok(progress) = live.lock() {
+                self.progress.set_if_changed(Some(progress.clone()));
+            }
+        }
         let receiver = self.results.as_ref()?;
         let finished = match receiver.try_recv() {
             Ok(finished) => finished,
@@ -180,6 +188,7 @@ impl<T: Send + 'static> JobRunner<T> {
                 // job rather than a result.
                 self.running = None;
                 self.results = None;
+                self.live_progress = None;
                 self.progress.set(None);
                 let why = "the job stopped unexpectedly".to_string();
                 self.last.set(Some(Outcome::Failed));
@@ -190,6 +199,7 @@ impl<T: Send + 'static> JobRunner<T> {
 
         self.running = None;
         self.results = None;
+        self.live_progress = None;
         self.progress.set(None);
 
         let completion = if finished.generation != self.generation {
@@ -364,5 +374,27 @@ mod tests {
             runner.progress().get().is_none(),
             "progress was left on screen after the job finished"
         );
+    }
+
+    #[test]
+    fn reported_fraction_reaches_the_observable_before_completion() {
+        let (reported_tx, reported_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut runner = JobRunner::new();
+        runner.start("retopology", move |reporter| {
+            reporter.report(0.4);
+            reported_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        });
+        reported_rx.recv().unwrap();
+        assert!(runner.poll().is_none());
+        assert_eq!(
+            runner.progress().get().as_ref().unwrap().fraction,
+            Some(0.4)
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(drain(&mut runner), Completion::Finished(()));
+        assert!(runner.progress().get().is_none());
     }
 }

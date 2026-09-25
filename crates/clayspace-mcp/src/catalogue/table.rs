@@ -474,7 +474,7 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "brush",
         name: "set_flow",
-        summary: "How much of the intensity each dab along the stroke carries.",
+        summary: "How closely dabs are spaced along a stroke; higher flow places them closer.",
         arguments: &[r("flow", Kind::Number, "0 to 1")],
         example: r#"{"flow":0.8}"#,
     },
@@ -583,7 +583,7 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "brush",
         name: "set_smoothing",
-        summary: "How much the surface is relaxed as the stroke passes.",
+        summary: "Stores stroke smoothing; current drag paths do not use this setting.",
         arguments: &[r("smoothing", Kind::Number, "0 to 1")],
         example: r#"{"smoothing":0.1}"#,
     },
@@ -1000,10 +1000,10 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "transform",
         name: "drag",
-        summary: "Moves the held handle to a point.",
+        summary: "Moves the held handle to a point, with optional snapping.",
         arguments: &[
             r("at", Kind::Vec3, "where, in the world"),
-            o("invert", Kind::Boolean, "hold the inverting modifier"),
+            o("invert", Kind::Boolean, "hold the snap modifier"),
         ],
         example: r#"{"at":[0.1,0,0]}"#,
     },
@@ -1053,7 +1053,7 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "lattice",
         name: "drag",
-        summary: "Moves the selected control points to a point.",
+        summary: "Moves the one selected control point to a point.",
         arguments: &[r("to", Kind::Vec3, "where, in the world")],
         example: r#"{"to":[0.1,0.2,0.0]}"#,
     },
@@ -1200,7 +1200,7 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "layer",
         name: "set_combine",
-        summary: "How the active layer meets what is under it.",
+        summary: "Sets how the next edit combines with the active layer.",
         arguments: &[
             o("op", Kind::Choice(combines), "which operation"),
             o("blend", Kind::Choice(blends), "the blend profile"),
@@ -1360,7 +1360,7 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "repair",
         name: "close_holes",
-        summary: "Closes the holes in the active mesh layer.",
+        summary: "Closes holes in the active voxel grid.",
         arguments: &[],
         example: "{}",
     },

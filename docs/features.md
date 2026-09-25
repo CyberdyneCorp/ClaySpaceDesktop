@@ -4082,6 +4082,12 @@ what a choice's whole set is, and an example that is exercised by the test
 suite — a row that stopped building the command it claims is a row the build
 fails on.
 
+`measure` accepts only a published group and action. Work it starts on a
+worker, such as retopology or a UV atlas, appears in `state.jobs` and keeps
+`wait` from reporting quiet until the application collects its result.
+`describe.not_offered` explains commands held behind a person's file panel,
+including starting a texture bake and exporting a profile.
+
 The `cut`, `retopo`, `uv`, `conform` and `bake` groups expose their model
 commands through the same catalogue as the other tools. Baking can be
 configured or cancelled here; starting a bake still opens the application's

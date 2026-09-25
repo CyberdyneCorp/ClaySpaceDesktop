@@ -36,7 +36,7 @@ use clayspace_view::{
 use clayspace_vm::{
     AgentAnswer, AgentAsk, AgentViewModel, ArmatureViewModel, Axis, BooleanViewModel, Command,
     CommandQueue, CurveViewModel, DocumentViewModel, Door, Grab, Guard, LatticeViewModel,
-    MaskViewModel, ObjectViewModel, Observable, ReferenceViewModel, SceneViewModel,
+    MaskViewModel, ObjectViewModel, Observable, Progress, ReferenceViewModel, SceneViewModel,
     SculptViewModel, UNTITLED,
 };
 use winit::application::ApplicationHandler;
@@ -353,6 +353,20 @@ struct MemoryReading {
     /// What the operating system charged the process at the time, where the
     /// probe had a figure.
     footprint: Option<u64>,
+}
+
+/// Job progress is outstanding until a frame consumes the result. The same
+/// list feeds `wait` and the `jobs` state section.
+fn running_jobs(progress: &[&Option<Progress>]) -> Vec<Outstanding> {
+    progress
+        .iter()
+        .filter_map(|item| {
+            item.as_ref().map(|item| Outstanding {
+                what: item.label.clone(),
+                fraction: item.fraction,
+            })
+        })
+        .collect()
 }
 
 struct App {
@@ -1094,7 +1108,21 @@ impl App {
                 fraction: None,
             });
         }
+        outstanding.extend(running_jobs(&[
+            self.retopo.jobs().progress().get(),
+            self.uv.jobs().progress().get(),
+            self.conform.jobs().progress().get(),
+            self.bake.jobs().progress().get(),
+        ]));
         outstanding
+    }
+
+    /// Collect completed background work on either a frame or an agent wait.
+    fn poll_jobs(&mut self) {
+        self.retopo.poll();
+        self.uv.poll();
+        self.bake.poll();
+        self.conform.poll();
     }
 
     /// Every channel a refusal arrives on, in the order the answer belongs to
@@ -5023,10 +5051,7 @@ impl App {
         // A retopology that has finished is placed here, before the interface
         // is built, so the frame that shows the new subtool is the frame that
         // learns about it. Never blocks: a job still running reports nothing.
-        self.retopo.poll();
-        self.uv.poll();
-        self.bake.poll();
-        self.conform.poll();
+        self.poll_jobs();
 
         // The interface is built first, because it decides where the viewport
         // is and therefore what a pointer position means.
@@ -6788,8 +6813,10 @@ impl Session for App {
         // on this thread, so return its outstanding work when a pass makes no
         // progress instead of spinning until the budget expires.
         loop {
+            self.poll_jobs();
             let before = self.outstanding_work();
             self.finish_pending_geometry();
+            self.poll_jobs();
             let after = self.outstanding_work();
             if after.is_empty() || after == before || started.elapsed() >= budget {
                 break;
@@ -7294,13 +7321,27 @@ mod double_press {
 #[cfg(test)]
 mod tests {
     use super::{
-        gizmo_geometry_update, notices_written, refusal_for, remark_for_an_agent,
+        gizmo_geometry_update, notices_written, refusal_for, remark_for_an_agent, running_jobs,
         stroke_needs_a_gesture, tool_status, AgentGesture, GizmoGeometryUpdate, ToolStatusSources,
         NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_mcp::RefusalCode;
     use clayspace_model::{ModelError, Representation, Unavailable};
-    use clayspace_vm::Command;
+    use clayspace_vm::{Command, Progress};
+
+    #[test]
+    fn running_jobs_are_outstanding_until_collected() {
+        let retopo = Some(Progress {
+            label: "retopology".into(),
+            fraction: Some(0.4),
+        });
+        let absent = None;
+        let jobs = running_jobs(&[&retopo, &absent, &absent, &absent]);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].what, "retopology");
+        assert_eq!(jobs[0].fraction, Some(0.4));
+        assert!(running_jobs(&[&absent, &absent, &absent, &absent]).is_empty());
+    }
 
     fn begin() -> Command {
         Command::BeginStroke {
