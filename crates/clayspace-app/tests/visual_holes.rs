@@ -72,6 +72,7 @@ fn pinholes(image: &Image, background: [u8; 4]) -> Vec<(u32, u32)> {
 /// lit surface around it" catches the hole and the half-covered pixel at its
 /// rim, and does not care whether the darkness is background or a triangle
 /// shaded badly — both are the same complaint from the sculptor's side.
+#[cfg(target_os = "macos")]
 fn dark_specks(image: &Image) -> Vec<(u32, u32)> {
     let luminance = |x: u32, y: u32| {
         let p = image.pixel(x, y);
