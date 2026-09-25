@@ -274,9 +274,9 @@ mod tests {
     /// display are in the table now; these are not, so a sculptor on English
     /// or Spanish still meets Portuguese in them.
     ///
-    /// Ten until the representation bar took the viewport bar's line: that one
-    /// drew `Representation::label`, the engine's own word, under a translated
-    /// prefix.
+    /// The five remaining calls are locale-invariant symbols or user-supplied
+    /// names: SI units, keyboard chords, axis letters, locale autonyms, and
+    /// imported object names. They need no translation.
     ///
     /// The number may go **down** freely. It going *up* means a new control
     /// was wired to a domain label instead of to the table, which is the

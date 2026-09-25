@@ -19,7 +19,7 @@
 ## 3. What this change does not do
 
 - [ ] 3.1 Wire `NoticeBoard`, `HistoryViewModel`, `JobRunner`, `UnitsModel` and `DiagnosticsModel` — five complete, tested ViewModels nothing constructs, which is why engine failures reach stderr instead of the sculptor
-- [ ] 3.2 Work off the five remaining domain labels the shell draws untranslated, held from growing by a ratchet (#40)
+- [x] 3.2 Audit the five remaining domain label calls: SI symbols, shortcut chords, axis letters, locale autonyms, and user-supplied object names need no translation; the ratchet prevents new calls (#40, #195)
 - [ ] 3.3 Split `App` (58 fields, 78 methods) and `ClayDocument` (40 fields, nine traits). Both are real and neither is a line-count argument — `document.rs` is 6,792 lines and its functions never appear in a complexity ranking
 
 ## 4. Localized interface and agent identity (#195)
