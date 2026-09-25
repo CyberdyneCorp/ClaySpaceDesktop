@@ -702,6 +702,29 @@ fn selecting_an_object_puts_the_manipulator_on_it() {
 }
 
 #[test]
+fn selecting_an_unknown_node_is_refused() {
+    let (mut vm, _) = viewmodel();
+    place(&mut vm);
+    let selected = *vm.selected().get();
+    let target = *vm.target().get();
+
+    send(
+        &mut vm,
+        Command::SelectObject(Some(ObjectId {
+            layer: HIT_LAYER,
+            node: 999_999,
+        })),
+    );
+
+    assert_eq!(*vm.selected().get(), selected);
+    assert_eq!(*vm.target().get(), target);
+    assert_eq!(
+        vm.notice().get().as_deref(),
+        Some("este objeto não existe no documento")
+    );
+}
+
+#[test]
 fn clearing_the_selection_takes_the_manipulator_away() {
     let (mut vm, _) = viewmodel();
     place(&mut vm);

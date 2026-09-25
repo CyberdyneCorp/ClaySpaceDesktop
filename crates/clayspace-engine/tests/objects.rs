@@ -66,6 +66,47 @@ fn a_placed_object_is_listed_and_selected() {
     );
 }
 
+#[test]
+fn duplicate_names_are_refused_for_field_layers() {
+    let mut document = document();
+    let first = document.scene().active.expect("starting layer");
+    let second = document
+        .add_layer("Other", Representation::Sdf)
+        .expect("second layer");
+    let name = document.scene().layer(first).unwrap().name.clone();
+
+    assert!(document.rename_layer(second, &name).is_err());
+    assert!(document.rename_layer(second, &"x".repeat(129)).is_err());
+    assert_eq!(document.scene().layer(second).unwrap().name, "Other");
+}
+
+#[test]
+fn optimize_reconciles_the_object_table() {
+    let mut document = document();
+    let layer = document.scene().active.expect("starting layer");
+    document
+        .place_object(Shape::Sphere, &[0.4], [1.0, 0.0, 0.0], subtracting())
+        .expect("second object");
+    let before = document.objects();
+
+    document.consolidate_layer(layer).expect("optimize");
+    let live = document
+        .document()
+        .layer_nodes(document.document().layer_ids().unwrap()[0])
+        .expect("live nodes");
+    assert!(
+        document.objects().len() < before.len(),
+        "optimization did not fold any recorded object"
+    );
+    assert!(document
+        .objects()
+        .iter()
+        .all(|object| { live.iter().any(|node| node.get() == object.id.node) }));
+
+    document.undo().expect("undo optimization");
+    assert_eq!(document.objects(), before);
+}
+
 /// The starting form is a placed sphere and always was; nothing but the
 /// absence of a selection model made it special.
 #[test]
@@ -335,8 +376,7 @@ fn a_grid_has_nowhere_to_put_an_object() {
     // The refusal names where an object does apply rather than restating one
     // representation's answer for all of them.
     assert!(
-        refusal.to_string().to_lowercase().contains("sdf")
-            || refusal.to_string().contains("clay_layer_add_item"),
+        refusal.to_string().contains("this one is voxel"),
         "the refusal should say where an object can live: {refusal}"
     );
 }
