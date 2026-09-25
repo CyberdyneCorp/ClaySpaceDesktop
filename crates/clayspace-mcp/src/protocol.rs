@@ -117,6 +117,15 @@ impl CallResult {
 pub trait ToolSurface: Send + Sync {
     fn tools(&self) -> Vec<ToolDescriptor>;
     fn call(&self, name: &str, arguments: &Value) -> Result<CallResult, Refusal>;
+    /// The client name belongs to this request, not to the shared surface.
+    fn call_for(
+        &self,
+        name: &str,
+        arguments: &Value,
+        _client: Option<&str>,
+    ) -> Result<CallResult, Refusal> {
+        self.call(name, arguments)
+    }
     /// What an agent should know before it starts, sent with `initialize`.
     fn instructions(&self) -> String;
 }
@@ -146,11 +155,19 @@ fn refusal_to_result(refusal: &Refusal) -> Value {
 /// Handles one message against a tool surface.
 pub struct Protocol<'a> {
     pub surface: &'a dyn ToolSurface,
+    client: Option<&'a str>,
 }
 
 impl<'a> Protocol<'a> {
     pub fn new(surface: &'a dyn ToolSurface) -> Self {
-        Self { surface }
+        Self {
+            surface,
+            client: None,
+        }
+    }
+
+    pub fn with_client(surface: &'a dyn ToolSurface, client: Option<&'a str>) -> Self {
+        Self { surface, client }
     }
 
     /// The answer to one message, or none where the message was a
@@ -214,7 +231,7 @@ impl<'a> Protocol<'a> {
         };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        match self.surface.call(name, &arguments) {
+        match self.surface.call_for(name, &arguments, self.client) {
             Ok(result) => jsonrpc::result(id, result.to_json()),
             // An unknown *tool* is the client's mistake and belongs in the
             // transport; an unknown action within a tool is the model's, and

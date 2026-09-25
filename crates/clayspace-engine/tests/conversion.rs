@@ -61,6 +61,20 @@ fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {
     );
 }
 
+#[test]
+fn a_mesh_crossing_uses_the_documented_name_suffix() {
+    let mut doc = document();
+    let made = doc
+        .convert_layer(Direction::SdfToMesh, CELL, 1)
+        .expect("mesh the starting form");
+    let scene = doc.scene();
+    let name = &scene.layer(made).expect("mesh layer").name;
+    assert!(
+        name.ends_with(" · Malha"),
+        "unexpected crossing name: {name}"
+    );
+}
+
 /// Undo takes a crossing back whole: the filling and the layer alike.
 ///
 /// This changed under us. On engine 0.39.0 a conversion recorded no entry at

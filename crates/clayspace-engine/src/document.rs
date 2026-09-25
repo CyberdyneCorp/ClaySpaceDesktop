@@ -2358,7 +2358,13 @@ impl ClayDocument {
         // grid — so a stroke aimed at the second wrote into the first, the
         // chunks were meshed from the wrong grid, and `rename_layer` refused to
         // untangle it because the name it would set was already taken.
-        let name = self.unique_layer_name(&format!("{} · {}", source.name, direction.to().label()));
+        let suffix = match direction.to() {
+            Representation::Sdf => "Campo",
+            Representation::Voxel => "voxel",
+            Representation::Mesh => "Malha",
+            Representation::Multires => "Hierarquia",
+        };
+        let name = self.unique_layer_name(&format!("{} · {suffix}", source.name));
         // Where the source stands, so the result can take its place, and its
         // key, so it can be removed once the result is filled from it.
         let (replacing, at) = (source.key, self.active);

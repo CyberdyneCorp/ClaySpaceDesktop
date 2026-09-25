@@ -9,7 +9,7 @@
 //! asking, and hands the work to [`crate::queue::JobQueue`]; the interface
 //! thread does the rest.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -55,7 +55,7 @@ pub struct Server {
 struct State {
     running: AtomicBool,
     connections: AtomicUsize,
-    sessions: Mutex<HashSet<String>>,
+    sessions: Mutex<HashMap<String, Option<String>>>,
 }
 
 /// What the application holds after the server is running.
@@ -396,7 +396,12 @@ fn post(request: &Request, surface: &dyn ToolSurface, state: &State) -> Response
         return Response::text(404, "no such session; initialize again");
     }
 
-    let answered = Protocol::new(surface).handle(&incoming);
+    let client = request
+        .headers
+        .get("mcp-session-id")
+        .and_then(|id| state.sessions.lock().ok()?.get(id).cloned())
+        .flatten();
+    let answered = Protocol::with_client(surface, client.as_deref()).handle(&incoming);
 
     match answered {
         None => Response::empty(202),
@@ -408,7 +413,7 @@ fn post(request: &Request, surface: &dyn ToolSurface, state: &State) -> Response
                     .sessions
                     .lock()
                     .expect("the session set is not poisoned")
-                    .insert(id.clone());
+                    .insert(id.clone(), client_name(incoming.params()));
                 response
                     .with_header("Mcp-Session-Id", &id)
                     .with_header("MCP-Protocol-Version", PROTOCOL_VERSION)
@@ -425,11 +430,19 @@ fn session_is_live(request: &Request, state: &State) -> bool {
             .sessions
             .lock()
             .expect("the session set is not poisoned")
-            .contains(id),
+            .contains_key(id),
         // A client that never sends one is a client of an older revision, and
         // refusing it buys nothing: the secret is what authenticates.
         None => true,
     }
+}
+
+fn client_name(params: &Value) -> Option<String> {
+    let name = params.get("clientInfo")?.get("name")?.as_str()?.trim();
+    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 fn new_session_id() -> String {
@@ -598,6 +611,25 @@ mod tests {
         assert!(
             headers.iter().any(|(name, _)| name == "mcp-session-id"),
             "{headers:?}"
+        );
+    }
+
+    #[test]
+    fn initialization_keeps_the_client_name_with_its_session() {
+        let running = running();
+        let (_, headers, _) = post_body(
+            &running.handle,
+            &running.handle.access().secret,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"Studio Agent"}}}"#,
+        );
+        let session = headers
+            .iter()
+            .find(|(name, _)| name == "mcp-session-id")
+            .map(|(_, id)| id)
+            .expect("session ID");
+        assert_eq!(
+            running.handle.state.sessions.lock().unwrap().get(session),
+            Some(&Some("Studio Agent".to_string()))
         );
     }
 
