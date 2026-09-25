@@ -1263,6 +1263,51 @@ impl Document {
         Ok((has != 0).then_some((min, max)))
     }
 
+    /// Whether this layer's fold is the engine's hard union identity.
+    /// Mirrors `layer_composition_is_hard_union` in ClayCore's `scene/types.h`;
+    /// all four fields matter when deciding whether a first-visible flip widens.
+    pub fn layer_is_hard_union(&self, layer: LayerId) -> Result<bool> {
+        let (mut op, mut blend, mut blend_k, mut rounding) = (0, 0, 0.0, 0.0);
+        check(
+            unsafe {
+                sys::clay_document_layer_composition(
+                    self.as_ptr(),
+                    layer.0,
+                    &mut op,
+                    &mut blend,
+                    &mut blend_k,
+                    &mut rounding,
+                )
+            },
+            "clay_document_layer_composition",
+        )?;
+        Ok(op == Op::Add.raw() && blend == Blend::Hard.raw() && blend_k == 0.0 && rounding == 0.0)
+    }
+
+    /// Sets the fold used when this layer is above another visible SDF layer.
+    pub fn set_layer_composition(
+        &mut self,
+        layer: LayerId,
+        op: Op,
+        blend: Blend,
+        blend_k: f32,
+        rounding: f32,
+    ) -> Result<()> {
+        check(
+            unsafe {
+                sys::clay_document_set_layer_composition(
+                    self.as_ptr(),
+                    layer.0,
+                    op.raw(),
+                    blend.raw(),
+                    blend_k,
+                    rounding,
+                )
+            },
+            "clay_document_set_layer_composition",
+        )
+    }
+
     // -- placed nodes -------------------------------------------------------
 
     /// Removes a placed node.
