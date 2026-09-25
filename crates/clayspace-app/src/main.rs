@@ -3682,8 +3682,10 @@ impl App {
         let outcome = work(self);
         let took = started.elapsed();
         if self.stalls.record(operation, took) {
+            let description =
+                agent_operation_label(self.strings, operation, self.strings.diag_stall_recorded);
             eprintln!(
-                "{}: {operation} {:.0} ms",
+                "{}: {description} {:.0} ms",
                 self.strings.log_stall,
                 took.as_secs_f64() * 1000.0
             );
@@ -6575,6 +6577,18 @@ fn agent_command_label(strings: &clayspace_view::Strings, command: &Command) -> 
     }
 }
 
+fn agent_operation_label(
+    strings: &clayspace_view::Strings,
+    operation: &str,
+    fallback: &str,
+) -> String {
+    if strings.locale == clayspace_model::Locale::PtBr && !operation.contains("clay_") {
+        operation.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
 /// What the agent-facing door can ask of the running application.
 ///
 /// Every method here runs on the interface thread, between frames, because
@@ -6779,10 +6793,29 @@ impl App {
                 .filter(|render| render.gpu_timing)
                 .map(|render| render.gpu_passes.iter().map(|(_, ms)| ms).sum())
                 .unwrap_or(0.0);
-            state.timing = Some(report::timing_state(&self.stalls, frame));
+            let mut timing = report::timing_state(&self.stalls, frame);
+            for stall in &mut timing.stalls {
+                stall.operation = agent_operation_label(
+                    self.strings,
+                    &stall.operation,
+                    self.strings.diag_stall_recorded,
+                );
+            }
+            state.timing = Some(timing);
         }
         if query.backends {
-            state.backends = Some(report::backend_state(&diagnostics));
+            let mut backends = report::backend_state(&diagnostics);
+            for fallback in &mut backends.fallbacks {
+                fallback.operation = agent_operation_label(
+                    self.strings,
+                    &fallback.operation,
+                    self.strings.diag_fallback_recorded,
+                );
+                if fallback.declined_by.contains("clay_") {
+                    fallback.declined_by = self.strings.diag_fallback_recorded.to_string();
+                }
+            }
+            state.backends = Some(backends);
         }
         if query.strokes {
             // Where the last strokes spent their milliseconds, split across
@@ -7481,9 +7514,9 @@ mod double_press {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_command_label, agent_history_label, gizmo_geometry_update, localized_agent_refusal,
-        localized_agent_remark, localized_tool_status, notices_written, refusal_for,
-        remark_for_an_agent, stroke_needs_a_gesture, tool_status, AgentGesture,
+        agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
+        localized_agent_refusal, localized_agent_remark, localized_tool_status, notices_written,
+        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status, AgentGesture,
         GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_mcp::RefusalCode;
@@ -7502,6 +7535,14 @@ mod tests {
         assert_eq!(
             agent_history_label(pt, "clay_multires_rebuild"),
             "Edição anterior"
+        );
+        assert_eq!(
+            agent_operation_label(en, "re-malha", en.diag_stall_recorded),
+            en.diag_stall_recorded
+        );
+        assert_eq!(
+            agent_operation_label(es, "clay_multires_rebuild", es.diag_stall_recorded),
+            es.diag_stall_recorded
         );
     }
 
@@ -7522,7 +7563,7 @@ mod tests {
             "{e}",
             "{line}",
             "  {} [{:?}] {:.0} ms = {} {:.0} + {} {:.0} + {} {:.0} + {} {:.0}; {} {}",
-            "{}: {operation} {:.0} ms",
+            "{}: {description} {:.0} ms",
         ];
         for call in production.split("eprintln!(").skip(1) {
             let format = call
