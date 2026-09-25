@@ -25,12 +25,8 @@
 //!   full-resolution surface does escape them: sculpting shades with the
 //!   gradient, so they are only ever seen on the coarse one.
 //! - **Missing coarse blocks.** A mip needs all eight children evaluated, and
-//!   the cache only evaluates surface bricks, so a coarse block on the edge of
-//!   the surface band never gets one however long it settles — 70 of 242 here,
-//!   covering 184 of 1043 fine bricks. Meshing those at level 0 and splicing
-//!   them in was measured: it moves 0.69% of the frame, against 2.09% between
-//!   the coarse surface and the full one. Not taken, because mixing levels in
-//!   one surface risks cracks where the spacings meet.
+//!   the cache only evaluates surface bricks. A partial mip set now keeps the
+//!   complete full-resolution surface on screen.
 //!
 //! ```sh
 //! cargo test -p clayspace-app --test visual_lod
@@ -112,6 +108,43 @@ fn compare(a: &Image, b: &Image) -> (f64, u8) {
 }
 
 #[test]
+fn a_partial_mip_set_cannot_leave_a_flat_grey_region() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = settled() else {
+        return;
+    };
+    if document
+        .complete_coarse_keys()
+        .expect("mip coverage")
+        .is_some()
+    {
+        return;
+    }
+    assert!(!document
+        .drawable_coarse_keys()
+        .expect("partial mips")
+        .is_empty());
+    let (camera, _) = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("full surface");
+    let full = harness.capture(geometry.mesh(), &camera, false, "18-lod-complete");
+    geometry
+        .set_detail(&harness.gpu, &mut document, Detail::Reduced)
+        .expect("request reduced detail");
+    assert_eq!(geometry.detail(), Detail::Full);
+    let requested = harness.capture(geometry.mesh(), &camera, false, "18-lod-partial-fallback");
+    assert_eq!(
+        compare(&full, &requested).0,
+        0.0,
+        "partial mips changed the drawing"
+    );
+}
+
+#[test]
 fn the_coarse_surface_is_worth_looking_at() {
     let Some(harness) = Harness::new() else {
         return;
@@ -120,8 +153,8 @@ fn the_coarse_surface_is_worth_looking_at() {
         return;
     };
     if document
-        .drawable_coarse_keys()
-        .map(|keys| keys.is_empty())
+        .complete_coarse_keys()
+        .map(|keys| keys.is_none())
         .unwrap_or(true)
     {
         return;

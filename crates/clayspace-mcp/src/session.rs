@@ -74,6 +74,9 @@ pub trait Session {
 pub struct Applied {
     /// The command's own label, in the words the interface uses for it.
     pub label: String,
+    /// Whether the command changed anything. A harmless no-op is reported
+    /// separately from an applied command and from a refusal.
+    pub outcome: &'static str,
     /// Whether this reached the document, as opposed to the view or a panel.
     pub touched_document: bool,
     /// The edit history's depth afterwards, so an agent can tell that one

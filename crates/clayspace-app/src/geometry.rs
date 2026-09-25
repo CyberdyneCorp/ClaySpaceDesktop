@@ -1334,8 +1334,7 @@ impl SurfaceGeometry {
         // meshing them out of the preview would name a level that was never
         // built there.
         if detail == Detail::Reduced && !live {
-            let coarse = document.drawable_coarse_keys()?;
-            if !coarse.is_empty() {
+            if let Some(coarse) = document.complete_coarse_keys()? {
                 // Gradient-shaded, which level 1 could not do until ClayCore
                 // #550. It used to REFUSE gradient normals rather than
                 // downgrade them, so the coarse surface was face-shaded by

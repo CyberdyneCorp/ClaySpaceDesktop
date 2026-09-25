@@ -58,9 +58,40 @@ fn settled() -> Option<ClayDocument> {
 /// rather than assert about mips that were never buildable here.
 fn has_mips(document: &ClayDocument) -> bool {
     document
-        .drawable_coarse_keys()
-        .map(|keys| !keys.is_empty())
+        .complete_coarse_keys()
+        .map(|keys| keys.is_some())
         .unwrap_or(false)
+}
+
+#[test]
+fn incomplete_mips_keep_the_whole_shaded_surface() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = settled() else {
+        return;
+    };
+    if has_mips(&document) {
+        return;
+    }
+    assert!(
+        !document
+            .drawable_coarse_keys()
+            .expect("coarse keys")
+            .is_empty(),
+        "the regression needs a partial mip set"
+    );
+
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("full surface");
+    let full = geometry.triangle_count();
+    geometry
+        .set_detail(&harness.gpu, &mut document, Detail::Reduced)
+        .expect("request reduced detail");
+    assert_eq!(geometry.detail(), Detail::Full);
+    assert_eq!(geometry.triangle_count(), full);
 }
 
 #[test]
