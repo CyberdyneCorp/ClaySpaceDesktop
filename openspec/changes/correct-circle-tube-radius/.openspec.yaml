@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-24
+goal: Measure and enforce circle tube radius across supported sizes and control
+  point densities

@@ -48,6 +48,121 @@ fn reach(document: &ClayDocument, direction: [f32; 3]) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// The YZ plane is transverse to this straight X guide and clear of the
+/// starting form, so the zero crossing is the tube's actual half-width.
+fn section_half_width(document: &ClayDocument, x: f32, direction: [f32; 2], high: f32) -> f32 {
+    let sample = |distance| {
+        document
+            .document()
+            .eval_points(
+                None,
+                &[[x, 2.0 + direction[0] * distance, direction[1] * distance]],
+            )
+            .expect("tube field")[0]
+    };
+    assert!(sample(0.0) < 0.0, "the guide lies outside its tube");
+    assert!(sample(high) > 0.0, "the half-width exceeds {high}");
+    let (mut inside, mut outside) = (0.0, high);
+    for _ in 0..14 {
+        let middle = (inside + outside) * 0.5;
+        if sample(middle) < 0.0 {
+            inside = middle;
+        } else {
+            outside = middle;
+        }
+    }
+    (inside + outside) * 0.5
+}
+
+fn tube_half_width(document: &ClayDocument, x: f32, high: f32) -> f32 {
+    section_half_width(document, x, [0.0, 1.0], high)
+}
+
+#[test]
+fn a_tube_matches_its_radius_independent_of_point_density() {
+    for radius in [0.02, 0.1, 0.5] {
+        let mut widths = Vec::new();
+        for count in [2, 10, 50] {
+            let mut document = document();
+            document.begin_curve();
+            for index in 0..count {
+                let x = index as f32 / (count - 1) as f32;
+                document
+                    .add_curve_point([x, 2.0, 0.0], radius)
+                    .expect("point");
+            }
+            document.set_curve_join(CurveJoin::Corners).expect("join");
+            let middle = tube_half_width(&document, 0.5, radius * 5.0 + 0.1);
+            widths.push(middle);
+            println!("radius={radius} points={count} half-width={middle}");
+            assert!(
+                (middle - radius).abs() <= radius * 0.1,
+                "asked {radius} with {count} points, measured {middle}"
+            );
+        }
+        let spread = widths.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+            - widths.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(
+            spread <= radius * 0.05,
+            "point density changed width by {spread}"
+        );
+    }
+}
+
+#[test]
+fn circle_thickness_is_uniform_along_a_straight_span() {
+    for join in CurveJoin::ALL {
+        for count in [10, 50] {
+            let radius = 0.1;
+            let mut document = document();
+            document.begin_curve();
+            for index in 0..count {
+                let x = index as f32 / (count - 1) as f32;
+                document
+                    .add_curve_point([x, 2.0, 0.0], radius)
+                    .expect("point");
+            }
+            document.set_curve_join(join).expect("join");
+            for x in [0.25, 0.5, 0.75] {
+                let width = tube_half_width(&document, x, 0.3);
+                assert!(
+                    (width - radius).abs() <= radius * 0.1,
+                    "{join:?}, {count} points at {x}: {width} rather than {radius}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn non_circle_sections_have_no_spikes_along_a_straight_span() {
+    for profile in [
+        CurveProfile::Square,
+        CurveProfile::Hexagon,
+        CurveProfile::Triangle,
+    ] {
+        let mut document = document();
+        document.begin_curve();
+        for index in 0..50 {
+            let x = index as f32 / 49.0;
+            document.add_curve_point([x, 2.0, 0.0], 0.1).expect("point");
+        }
+        document.set_curve_profile(profile).expect("profile");
+        for angle in 0..8 {
+            let radians = angle as f32 * std::f32::consts::TAU / 8.0;
+            let direction = [radians.cos(), radians.sin()];
+            let widths =
+                [0.25, 0.5, 0.75].map(|x| section_half_width(&document, x, direction, 0.3));
+            let spread = widths.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                - widths.iter().copied().fold(f32::INFINITY, f32::min);
+            assert!(
+                spread < 0.01,
+                "{profile:?} at angle {angle} has a {spread} spike: {widths:?}"
+            );
+        }
+    }
+}
+
 fn surface_digest(document: &ClayDocument) -> Vec<[i32; 3]> {
     let (mesh, _) = document
         .cache()
