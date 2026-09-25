@@ -98,6 +98,7 @@ fn an_imported_mesh_layer_carries_geometry_and_accepts_a_verb() {
 #[test]
 fn sculpting_a_mesh_layer_never_changes_its_topology() {
     let (mut document, path) = with_imported_mesh("topology");
+    let indices_before = document.visible_mesh_geometry().3;
     let before = document.stats();
 
     for tool in ToolKind::for_representation(Representation::Mesh) {
@@ -106,18 +107,21 @@ fn sculpting_a_mesh_layer_never_changes_its_topology() {
             continue;
         }
         let _ = dab(&mut document, tool, [0.0, 0.0, 1.0]);
+        assert_eq!(
+            document.visible_mesh_geometry().3,
+            indices_before,
+            "{} changed triangle connectivity",
+            tool.label()
+        );
+        let after = document.stats();
+        assert_eq!(
+            (after.triangles, after.vertices),
+            (before.triangles, before.vertices),
+            "{} changed topology counts",
+            tool.label()
+        );
     }
 
-    let after = document.stats();
-    assert_eq!(
-        after.triangles, before.triangles,
-        "sculpting changed the triangle count, which is the one thing these \
-         verbs may never do"
-    );
-    assert_eq!(
-        after.vertices, before.vertices,
-        "sculpting changed the vertex count"
-    );
     let _ = std::fs::remove_file(&path);
 }
 

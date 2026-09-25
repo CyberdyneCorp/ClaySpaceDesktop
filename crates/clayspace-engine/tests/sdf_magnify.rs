@@ -265,6 +265,54 @@ fn a_magnify_across_a_blend_moves_both_items() {
     );
 }
 
+/// Move must act on the assembled surface, including both sides of a smooth
+/// union. A per-item deformer can move only the item under the anchor.
+#[test]
+fn sdf_move_carries_every_contributor() {
+    let probes = [[-0.45, 0.0, 0.9], [0.45, 0.0, 0.9]];
+    let base = blended_form();
+    let before = probes.map(|point| reach(&base, point));
+    let mut document = blended_form();
+    let samples: Vec<GestureSample> = (0..=8)
+        .map(|step| {
+            let t = step as f32 / 8.0;
+            GestureSample {
+                position: [0.0, 0.0, 1.0 + t * 0.2],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect();
+    SculptModel::begin_gesture(&mut document);
+    document
+        .apply_stroke(
+            ToolKind::Mover,
+            BrushSettings {
+                size: 0.7,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("Move across the smooth union");
+    SculptModel::end_gesture(&mut document);
+
+    let moved = probes.map(|point| reach(&document, point));
+    for side in 0..2 {
+        assert!(
+            moved[side] - before[side] > 0.01,
+            "Move left contributor {side} at its old surface: {} -> {}",
+            before[side],
+            moved[side]
+        );
+    }
+    assert!(
+        (moved[0] - before[0] - (moved[1] - before[1])).abs() < 0.02,
+        "the two contributors moved by different amounts"
+    );
+}
+
 // -- what a gesture costs the history ----------------------------------------
 
 /// A stroke is one thing a sculptor did, so it is one thing to take back.
