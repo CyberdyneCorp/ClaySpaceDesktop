@@ -291,8 +291,10 @@ fn a_curve_sweeps_a_tube_that_can_be_gone_back_to() {
         .zip(swept.pixels.chunks_exact(4))
         .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 12))
         .count();
+    // The radius-correct hard union draws a narrower tube than the old soft
+    // union (1,758 pixels on CI), while a missing tube draws no pixels.
     assert!(
-        drawn > 2000,
+        drawn > 1500,
         "the curve swept {drawn} pixels of tube. See \
          target/visual/curve-swept.png"
     );
