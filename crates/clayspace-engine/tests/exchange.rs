@@ -3,7 +3,8 @@
 use clayspace_engine::claycore;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    ExchangeModel, ExportMesher, ExportSettings, Format, ImportAs, ImportSettings, SceneModel,
+    ExchangeModel, ExportMesher, ExportSettings, ExportWarningKind, Format, ImportAs,
+    ImportSettings, SceneModel,
 };
 
 fn document() -> ClayDocument {
@@ -445,7 +446,9 @@ fn an_open_mesh_layer_makes_the_export_say_it_is_not_closed() {
     let _ = std::fs::remove_file(&out);
 
     assert!(
-        findings.iter().any(|w| w.message.contains("fechada")),
+        findings
+            .iter()
+            .any(|warning| warning.kind == ExportWarningKind::OpenBoundary(3)),
         "a document carrying an open mesh layer exported without saying the \
          result is not closed; got {findings:?}. Either the validator is no \
          longer called on the written mesh, or mesh_combined has stopped \
