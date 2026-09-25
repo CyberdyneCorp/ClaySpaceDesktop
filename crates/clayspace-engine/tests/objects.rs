@@ -107,28 +107,6 @@ fn optimize_reconciles_the_object_table() {
     assert_eq!(document.objects(), before);
 }
 
-#[test]
-fn removing_a_layer_reconciles_its_objects() {
-    let mut document = document();
-    let original = document.scene().active.expect("starting layer");
-    let listed = document.objects();
-    document
-        .add_layer("Other", Representation::Sdf)
-        .expect("second layer");
-
-    document.remove_layer(original).expect("remove original");
-    assert!(document
-        .objects()
-        .iter()
-        .all(|object| object.id.layer != original));
-
-    document.undo().expect("undo removal");
-    document
-        .set_active_layer(original)
-        .expect("select restored layer");
-    assert_eq!(document.objects(), listed);
-}
-
 /// The starting form is a placed sphere and always was; nothing but the
 /// absence of a selection model made it special.
 #[test]

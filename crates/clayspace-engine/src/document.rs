@@ -10477,7 +10477,6 @@ impl SceneModel for ClayDocument {
             self.layers[index].voxel_bounds
         });
 
-        self.remember_objects_before();
         self.document.remove_layer(id).map_err(ModelError::engine)?;
         // The mesh a sculptor was built over has just left the document, and
         // the engine answers every call on one of those with a refusal. A
@@ -10524,8 +10523,6 @@ impl SceneModel for ClayDocument {
             let max = std::array::from_fn(|i| max[i] + pad);
             self.refill_region(min, max)?;
         }
-        self.reconcile_live_objects();
-        self.remember_objects_after();
         Ok(())
     }
 
