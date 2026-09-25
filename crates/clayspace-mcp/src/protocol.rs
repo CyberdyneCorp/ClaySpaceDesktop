@@ -117,6 +117,15 @@ impl CallResult {
 pub trait ToolSurface: Send + Sync {
     fn tools(&self) -> Vec<ToolDescriptor>;
     fn call(&self, name: &str, arguments: &Value) -> Result<CallResult, Refusal>;
+    /// The MCP session making a call, for state that belongs to one caller.
+    fn call_scoped(
+        &self,
+        _caller: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<CallResult, Refusal> {
+        self.call(name, arguments)
+    }
     /// What an agent should know before it starts, sent with `initialize`.
     fn instructions(&self) -> String;
 }
@@ -146,11 +155,22 @@ fn refusal_to_result(refusal: &Refusal) -> Value {
 /// Handles one message against a tool surface.
 pub struct Protocol<'a> {
     pub surface: &'a dyn ToolSurface,
+    caller: Option<&'a str>,
 }
 
 impl<'a> Protocol<'a> {
     pub fn new(surface: &'a dyn ToolSurface) -> Self {
-        Self { surface }
+        Self {
+            surface,
+            caller: None,
+        }
+    }
+
+    pub fn for_caller(surface: &'a dyn ToolSurface, caller: &'a str) -> Self {
+        Self {
+            surface,
+            caller: Some(caller),
+        }
     }
 
     /// The answer to one message, or none where the message was a
@@ -214,7 +234,11 @@ impl<'a> Protocol<'a> {
         };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        match self.surface.call(name, &arguments) {
+        let result = match self.caller {
+            Some(caller) => self.surface.call_scoped(caller, name, &arguments),
+            None => self.surface.call(name, &arguments),
+        };
+        match result {
             Ok(result) => jsonrpc::result(id, result.to_json()),
             // An unknown *tool* is the client's mistake and belongs in the
             // transport; an unknown action within a tool is the model's, and
