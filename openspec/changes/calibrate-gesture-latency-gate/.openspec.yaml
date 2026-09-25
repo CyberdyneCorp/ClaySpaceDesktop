@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-24
+goal: Keep the incremental-path regression signal while removing macOS
+  shared-runner wall-time flakes
