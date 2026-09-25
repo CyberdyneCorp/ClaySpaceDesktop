@@ -11,6 +11,8 @@ The release `gesture_end` test compares a single worst segment and pointer-up ag
 - Calibrate the related dab median and 95th-percentile CI gate to its own fixed-scene rebuild; the reference-machine 50/100 ms product targets remain documented.
 - Keep printing raw times in debug and release, and assert the ratios only in release.
 - Add a regression for the gate's scaling and its refusal of a lost incremental path.
+- Calibrate the compaction undo tripwire to require a decisive baked-patch win;
+  near-parity timings on shared runners are diagnostic, not a policy change.
 
 ## Impact
 

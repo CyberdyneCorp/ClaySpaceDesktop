@@ -25,3 +25,17 @@ The release dab regression test SHALL time a fixed full rebuild of its own 24-da
 #### Scenario: Dabs begin remeshing most of the form
 - **WHEN** median or 95th-percentile dab cost approaches the full rebuild
 - **THEN** the release gate fails and reports the dab and rebuild timings
+
+### Requirement: The compaction undo tripwire requires a decisive win
+The compaction undo test SHALL report the baked-patch and chain timings. A
+single near-parity result on a shared runner SHALL NOT change the default-off
+policy or fail CI. A baked undo under 0.6 times the chain undo SHALL fail the
+tripwire and require repeatable measurement before the policy changes.
+
+#### Scenario: Runner contention narrows the measured gap
+- **WHEN** a shared runner measures a baked undo at 0.8 times the chain undo
+- **THEN** the tripwire reports both times and passes
+
+#### Scenario: Baking wins decisively
+- **WHEN** a baked undo measures under 0.6 times the chain undo
+- **THEN** the tripwire fails and calls for a repeatable policy review

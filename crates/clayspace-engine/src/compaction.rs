@@ -51,11 +51,11 @@
 //! item.
 //!
 //! v0.120.1 narrows an undo for a grab to the grab's support, but the tripwire
-//! `a_baked_patch_still_refills_dearer_than_its_chain` still measures the baked
-//! patch at 1.2x the chain on Linux debug and about 4.9x on local macOS debug
-//! and release. A volume that refills near the chain's per-brick cost could
-//! change that direction. Until the measured patch is no dearer, the floor
-//! stays off by default.
+//! `a_baked_patch_has_no_decisive_undo_win` measures the baked patch against
+//! the chain: local macOS debug and release found about 4.9x, while loaded CI
+//! runners have varied through near parity. Only a large win triggers a new
+//! policy review; the floor stays off by default until repeatable measurements
+//! justify enabling it.
 
 use std::collections::HashMap;
 use std::time::Duration;
