@@ -33,7 +33,8 @@ use crate::gate;
 use crate::protocol::{CallResult, ToolDescriptor, ToolSurface};
 use crate::queue::{Answer, JobQueue};
 use crate::session::{
-    CaptureRequest, CaptureWhat, Consent, ConsentOutcome, Frame, Refusal, RefusalCode, StateQuery,
+    CaptureCamera, CaptureRequest, CaptureWhat, Consent, ConsentOutcome, Frame, Refusal,
+    RefusalCode, StateQuery,
 };
 
 use self::args::Args;
@@ -82,7 +83,7 @@ pub struct Catalogue {
     store: PathBuf,
     bounds: Bounds,
     /// Frames a client asked to keep, for a later comparison.
-    remembered: Mutex<HashMap<String, Frame>>,
+    remembered: Mutex<HashMap<(String, String), Frame>>,
 }
 
 impl Catalogue {
@@ -343,19 +344,19 @@ impl Catalogue {
         Ok(CallResult::data(value))
     }
 
-    fn call_viewport(&self, arguments: &Value) -> Result<CallResult, Refusal> {
+    fn call_viewport(&self, caller: &str, arguments: &Value) -> Result<CallResult, Refusal> {
         let action = arguments
             .get("action")
             .and_then(Value::as_str)
             .unwrap_or("capture");
         match action {
-            "capture" => self.capture(arguments),
-            "compare" => self.compare(arguments),
+            "capture" => self.capture(caller, arguments),
+            "compare" => self.compare(caller, arguments),
             "forget" => {
                 self.remembered
                     .lock()
                     .expect("the frame table is not poisoned")
-                    .clear();
+                    .retain(|(owner, _), _| owner != caller);
                 Ok(CallResult::data(json!({ "remembered": 0 })))
             }
             other => Err(Refusal::new(
@@ -365,7 +366,7 @@ impl Catalogue {
         }
     }
 
-    fn capture(&self, arguments: &Value) -> Result<CallResult, Refusal> {
+    fn capture(&self, caller: &str, arguments: &Value) -> Result<CallResult, Refusal> {
         let args = Args::new("viewport", "capture", arguments);
         let request = capture_request(&args)?;
         let settle_first = args.boolean_or("settle", true)?;
@@ -390,7 +391,14 @@ impl Catalogue {
                     .remembered
                     .lock()
                     .expect("the frame table is not poisoned");
-                if remembered.len() >= REMEMBERED_FRAMES && !remembered.contains_key(&name) {
+                let key = (caller.to_owned(), name);
+                if remembered
+                    .keys()
+                    .filter(|(owner, _)| owner == caller)
+                    .count()
+                    >= REMEMBERED_FRAMES
+                    && !remembered.contains_key(&key)
+                {
                     return Err(Refusal::new(
                         RefusalCode::BadArgument,
                         format!(
@@ -399,7 +407,7 @@ impl Catalogue {
                         ),
                     ));
                 }
-                remembered.insert(name, frame);
+                remembered.insert(key, frame);
             }
         }
 
@@ -414,7 +422,7 @@ impl Catalogue {
     /// byte-differing on a frame that was meant to be unchanged. A comparison
     /// that does not carry it is a comparison an agent reads the rasteriser
     /// through.
-    fn compare(&self, arguments: &Value) -> Result<CallResult, Refusal> {
+    fn compare(&self, caller: &str, arguments: &Value) -> Result<CallResult, Refusal> {
         let args = Args::new("viewport", "compare", arguments);
         let before_name = args.text("before")?;
         let after_name = args.text("after")?;
@@ -424,18 +432,24 @@ impl Catalogue {
                 .remembered
                 .lock()
                 .expect("the frame table is not poisoned");
-            let before = remembered.get(&before_name).cloned().ok_or_else(|| {
-                Refusal::new(
-                    RefusalCode::BadArgument,
-                    format!("no frame is remembered as {before_name}"),
-                )
-            })?;
-            let after = remembered.get(&after_name).cloned().ok_or_else(|| {
-                Refusal::new(
-                    RefusalCode::BadArgument,
-                    format!("no frame is remembered as {after_name}"),
-                )
-            })?;
+            let before = remembered
+                .get(&(caller.to_owned(), before_name.clone()))
+                .cloned()
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::BadArgument,
+                        format!("no frame is remembered as {before_name}"),
+                    )
+                })?;
+            let after = remembered
+                .get(&(caller.to_owned(), after_name.clone()))
+                .cloned()
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::BadArgument,
+                        format!("no frame is remembered as {after_name}"),
+                    )
+                })?;
             (before, after)
         };
 
@@ -457,6 +471,7 @@ impl Catalogue {
             what: CaptureWhat::Viewport,
             width: Some(before.width),
             height: Some(before.height),
+            camera: None,
         };
         let through_a_remesh = args.boolean_or("through_a_remesh", false)?;
         let budget = self.bounds.settle.min(self.bounds.capture);
@@ -669,6 +684,10 @@ impl ToolSurface for Catalogue {
                     },
                     "width": { "type": "integer" },
                     "height": { "type": "integer" },
+                    "camera": {
+                        "type": "string", "enum": ["perspective", "front", "side", "top"],
+                        "description": "camera preset for this frame only; the live view is preserved",
+                    },
                     "settle": {
                         "type": "boolean",
                         "description": "wait for pending re-meshing first; true where none is given",
@@ -726,10 +745,19 @@ impl ToolSurface for Catalogue {
     }
 
     fn call(&self, name: &str, arguments: &Value) -> Result<CallResult, Refusal> {
+        self.call_scoped("", name, arguments)
+    }
+
+    fn call_scoped(
+        &self,
+        caller: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<CallResult, Refusal> {
         match name {
             "describe" => self.call_describe(arguments),
             "state" => self.call_state(arguments),
-            "viewport" => self.call_viewport(arguments),
+            "viewport" => self.call_viewport(caller, arguments),
             "wait" => self.call_wait(arguments),
             "measure" => self.call_measure(arguments),
             other => match GROUPS.iter().find(|(group, _, _)| *group == other) {
@@ -830,6 +858,7 @@ fn capture_of(arguments: &Value) -> Result<Option<CaptureRequest>, Refusal> {
         what,
         width: size(&args, "width")?,
         height: size(&args, "height")?,
+        camera: capture_camera(&args)?,
     }))
 }
 
@@ -842,7 +871,22 @@ fn capture_request(args: &Args<'_>) -> Result<CaptureRequest, Refusal> {
         what: args.choice_or("what", WHAT, CaptureWhat::Viewport)?,
         width: size(args, "width")?,
         height: size(args, "height")?,
+        camera: capture_camera(args)?,
     })
+}
+
+fn capture_camera(args: &Args<'_>) -> Result<Option<CaptureCamera>, Refusal> {
+    const CAMERAS: &[(&str, CaptureCamera)] = &[
+        ("perspective", CaptureCamera::Perspective),
+        ("front", CaptureCamera::Front),
+        ("side", CaptureCamera::Side),
+        ("top", CaptureCamera::Top),
+    ];
+    if args.optional_text("camera")?.is_some() {
+        Ok(Some(args.choice("camera", CAMERAS)?))
+    } else {
+        Ok(None)
+    }
 }
 
 fn size(args: &Args<'_>, name: &str) -> Result<Option<u32>, Refusal> {
@@ -938,6 +982,13 @@ fn group_schema(group: &str) -> Value {
             "type": "string",
             "enum": ["none", "viewport", "window"],
             "description": "return the frame after this change, in the same answer",
+        }),
+    );
+    properties.insert(
+        "camera".into(),
+        json!({
+            "type": "string", "enum": ["perspective", "front", "side", "top"],
+            "description": "camera preset for the captured frame only; the live view is preserved",
         }),
     );
 
@@ -1574,6 +1625,61 @@ mod tests {
         // assumed.
         assert_eq!(value["floor"], 0);
         assert_eq!(value["past_the_floor"], 64);
+    }
+
+    #[test]
+    fn remembered_frames_belong_to_the_caller() {
+        let bench = Bench::new();
+        let capture = json!({"action":"capture", "width":8, "height":8, "remember":"same"});
+        bench
+            .catalogue
+            .call_scoped("first", "viewport", &capture)
+            .unwrap();
+        bench.session.lock().unwrap().fill = [255, 0, 0, 255];
+        bench
+            .catalogue
+            .call_scoped("second", "viewport", &capture)
+            .unwrap();
+
+        let compare = json!({"action":"compare", "before":"same", "after":"same"});
+        assert_eq!(
+            structured(
+                &bench
+                    .catalogue
+                    .call_scoped("first", "viewport", &compare)
+                    .unwrap()
+            )["differing_pixels"],
+            0
+        );
+        bench
+            .catalogue
+            .call_scoped("first", "viewport", &json!({"action":"forget"}))
+            .unwrap();
+        assert!(bench
+            .catalogue
+            .call_scoped("first", "viewport", &compare)
+            .is_err());
+        assert!(bench
+            .catalogue
+            .call_scoped("second", "viewport", &compare)
+            .is_ok());
+    }
+
+    #[test]
+    fn capture_camera_is_a_one_frame_override() {
+        let bench = Bench::new();
+        bench
+            .call("viewport", json!({"action":"capture", "camera":"front"}))
+            .unwrap();
+        assert_eq!(
+            bench.session.lock().unwrap().last_capture.unwrap().camera,
+            Some(CaptureCamera::Front)
+        );
+        bench.call("viewport", json!({"action":"capture"})).unwrap();
+        assert_eq!(
+            bench.session.lock().unwrap().last_capture.unwrap().camera,
+            None
+        );
     }
 
     #[test]

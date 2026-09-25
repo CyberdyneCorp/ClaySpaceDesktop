@@ -353,7 +353,7 @@ pub fn actions_of(group: &str) -> Vec<&'static str> {
 
 /// What a group call carries besides its action's own arguments: the action's
 /// name, and the capture that may ride along with the answer.
-const ENVELOPE: &[&str] = &["action", "capture", "width", "height"];
+const ENVELOPE: &[&str] = &["action", "capture", "width", "height", "camera"];
 
 /// Refuses a key the action's row does not declare.
 ///

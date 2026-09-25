@@ -396,7 +396,10 @@ fn post(request: &Request, surface: &dyn ToolSurface, state: &State) -> Response
         return Response::text(404, "no such session; initialize again");
     }
 
-    let answered = Protocol::new(surface).handle(&incoming);
+    let answered = match request.headers.get("mcp-session-id") {
+        Some(caller) if !is_initialize => Protocol::for_caller(surface, caller).handle(&incoming),
+        _ => Protocol::new(surface).handle(&incoming),
+    };
 
     match answered {
         None => Response::empty(202),

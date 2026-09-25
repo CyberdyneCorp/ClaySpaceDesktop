@@ -1002,6 +1002,8 @@ pub struct CaptureRequest {
     /// The window's own size where none is given.
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// Optional view for this frame only; the live camera is left untouched.
+    pub camera: Option<CaptureCamera>,
 }
 
 impl Default for CaptureRequest {
@@ -1010,8 +1012,17 @@ impl Default for CaptureRequest {
             what: CaptureWhat::Viewport,
             width: None,
             height: None,
+            camera: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureCamera {
+    Perspective,
+    Front,
+    Side,
+    Top,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

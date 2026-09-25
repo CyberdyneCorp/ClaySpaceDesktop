@@ -50,6 +50,28 @@ picture of the surface.
 - **WHEN** an agent asks for a capture at a size other than the window's
 - **THEN** the image is at that size and the answer says so
 
+The application SHALL draw the command's requested frame before taking a
+ride-along capture, including updated interface primitives. A whole-window
+capture SHALL place the scene in the same viewport rectangle as the displayed
+window.
+
+An agent SHALL be able to choose a camera preset for one capture. The
+application SHALL preserve the sculptor's live camera after the capture.
+Remembered frames, their comparisons and forget operations SHALL be scoped to
+the caller's MCP session.
+
+#### Scenario: A command opens a panel
+- **WHEN** an agent opens a panel and requests a whole-window capture with the command
+- **THEN** the image shows the open panel and the scene occupies the displayed viewport rectangle
+
+#### Scenario: A capture uses a temporary camera
+- **WHEN** an agent captures with the front camera preset
+- **THEN** the image uses the front view and the sculptor's camera is unchanged
+
+#### Scenario: Callers remember frames independently
+- **WHEN** two MCP sessions remember a frame under the same name
+- **THEN** each session compares and forgets only its own frame
+
 ### Requirement: A capture shows the state it is claimed to show
 A capture returned with a change SHALL show the document *after* that change
 has reached the surface — after the re-mesh the change dirtied, not before it.
