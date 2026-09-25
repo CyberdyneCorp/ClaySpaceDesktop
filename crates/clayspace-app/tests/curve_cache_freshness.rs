@@ -95,23 +95,25 @@ fn a_dragged_control_point_leaves_no_stale_bricks() {
     let _ = document.with(|d| geometry.sync(&harness.gpu, d));
     let whole = harness.capture(geometry.mesh(), &camera, false, "curve-drag-refilled");
 
+    // The macOS debug renderer varied by at most 10 RGB levels at six
+    // isolated pixels on identical 432,538-triangle meshes. Count only a
+    // material image difference. With the old local refill, this same fixture
+    // differs by 664 triangles and 16 pixels even at this threshold.
     let differing = dragged
         .pixels
         .chunks_exact(4)
         .zip(whole.pixels.chunks_exact(4))
-        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 8))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 12))
         .count();
     println!(
         "{dragged_triangles} triangles after the drag, {} after a full refill; \
          {differing} pixels differ",
         geometry.triangle_count()
     );
-    assert!(
-        differing < 40,
-        "{differing} pixels of the drawn surface change when every brick is \
-         refilled, so dragging a control point left bricks holding an older \
-         shape — most likely where the point came from rather than where it \
-         went. See target/visual/curve-drag-incremental.png"
+    assert_eq!(dragged_triangles, geometry.triangle_count());
+    assert_eq!(
+        differing, 0,
+        "a full refill changed {differing} rendered pixels after the drag"
     );
 }
 

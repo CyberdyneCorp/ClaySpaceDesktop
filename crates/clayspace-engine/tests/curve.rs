@@ -11,6 +11,7 @@
 //! `clay_layer_set_stroke_points` edits a placed guide undoably. What was
 //! missing was a tool that placed one.
 
+use claycore::BrickMeshParams;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{CurveJoin, CurveModel, CurveProfile, FieldRefusal, ModelError, SculptModel};
 
@@ -42,6 +43,212 @@ fn reach(document: &ClayDocument, direction: [f32; 3]) -> f32 {
     SculptModel::pick(document, unit.map(|c| c * 6.0), unit.map(|c| -c))
         .map(|hit| (hit[0] * hit[0] + hit[1] * hit[1] + hit[2] * hit[2]).sqrt())
         .unwrap_or(0.0)
+}
+
+fn surface_digest(document: &ClayDocument) -> Vec<[i32; 3]> {
+    let (mesh, _) = document
+        .cache()
+        .mesh(
+            None,
+            BrickMeshParams {
+                gradient_normals: false,
+                ..BrickMeshParams::default()
+            },
+            &[],
+        )
+        .expect("mesh cached surface");
+    let mut positions: Vec<_> = mesh
+        .positions()
+        .iter()
+        .map(|point| point.map(|axis| (axis * 1000.0).round() as i32))
+        .collect();
+    positions.sort_unstable();
+    positions
+}
+
+fn lay_wide_curve(document: &mut ClayDocument, radius: f32) {
+    document.begin_curve();
+    for step in 0..5 {
+        let t = step as f32 / 4.0;
+        document
+            .add_curve_point(
+                [
+                    -1.2 + t * 2.4,
+                    1.45 + (t * 5.0).sin() * 0.25,
+                    (t * 3.0).cos() * 0.15,
+                ],
+                radius,
+            )
+            .expect("point");
+    }
+}
+
+fn settle_curve(document: &mut ClayDocument) {
+    let join = document.curve().join;
+    let other = if join == CurveJoin::Corners {
+        CurveJoin::Through
+    } else {
+        CurveJoin::Corners
+    };
+    document.set_curve_join(other).expect("settle away");
+    document.set_curve_join(join).expect("settle back");
+}
+
+fn assert_matches_full_refill(document: &mut ClayDocument) {
+    let incremental = surface_digest(document);
+    settle_curve(document);
+    let whole = surface_digest(document);
+    assert_eq!(
+        incremental.len(),
+        whole.len(),
+        "the full refill changed vertex count"
+    );
+    if incremental != whole {
+        let stale: Vec<_> = incremental
+            .iter()
+            .filter(|point| whole.binary_search(point).is_err())
+            .take(8)
+            .copied()
+            .collect();
+        let missing: Vec<_> = whole
+            .iter()
+            .filter(|point| incremental.binary_search(point).is_err())
+            .take(8)
+            .copied()
+            .collect();
+        panic!("the full refill moved cached vertices: stale {stale:?}; missing {missing:?}");
+    }
+}
+
+#[test]
+fn a_dense_curve_drag_matches_a_full_refill() {
+    let mut document = document();
+    document.begin_curve();
+    for step in 0..16 {
+        let t = step as f32 / 16.0;
+        document
+            .add_curve_point(
+                [
+                    -1.3 + t * 2.6,
+                    1.35 + (t * 7.0).sin() * 0.45,
+                    (t * 5.0).cos() * 0.25,
+                ],
+                0.09,
+            )
+            .expect("point");
+    }
+    assert_matches_full_refill(&mut document);
+    document.select_curve_point(Some(8));
+    for _ in 0..6 {
+        document.drag_curve([0.0, 0.09, 0.0]).expect("drag");
+    }
+    assert_matches_full_refill(&mut document);
+}
+
+#[test]
+fn a_curve_drag_matches_a_full_refill() {
+    for radius in [0.04, 0.08, 0.16] {
+        for join in [CurveJoin::Corners, CurveJoin::Through, CurveJoin::Rounded] {
+            let mut document = document();
+            lay_wide_curve(&mut document, radius);
+            document.set_curve_join(join).expect("join");
+            settle_curve(&mut document);
+            document.select_curve_point(Some(2));
+            document.drag_curve([0.0, 0.4, 0.0]).expect("drag");
+            assert_matches_full_refill(&mut document);
+        }
+    }
+}
+
+#[test]
+fn a_far_drag_clears_the_old_curve_extent() {
+    let mut document = document();
+    lay_wide_curve(&mut document, 0.08);
+    settle_curve(&mut document);
+    document.select_curve_point(Some(2));
+    document.drag_curve([0.0, 1.5, 0.0]).expect("drag");
+    assert_matches_full_refill(&mut document);
+}
+
+#[test]
+fn an_append_matches_a_full_refill() {
+    let mut document = document();
+    document.begin_curve();
+    for step in 0..5 {
+        let t = step as f32 / 4.0;
+        document
+            .add_curve_point(
+                [
+                    -1.2 + t * 2.4,
+                    1.45 + (t * 5.0).sin() * 0.25,
+                    (t * 3.0).cos() * 0.15,
+                ],
+                0.08,
+            )
+            .expect("point");
+        if step == 1 {
+            settle_curve(&mut document);
+        } else if step >= 2 {
+            assert_matches_full_refill(&mut document);
+        }
+    }
+}
+
+#[test]
+fn dense_appends_match_a_full_refill() {
+    let mut document = document();
+    document.begin_curve();
+    for step in 0..2 {
+        let t = step as f32 / 30.0;
+        document
+            .add_curve_point(
+                [
+                    -1.3 + t * 2.6,
+                    1.35 + (t * 7.0).sin() * 0.45,
+                    (t * 5.0).cos() * 0.3,
+                ],
+                0.09,
+            )
+            .expect("point");
+    }
+    settle_curve(&mut document);
+    document
+        .set_curve_join(CurveJoin::Through)
+        .expect("through join");
+    for step in 2..30 {
+        let t = step as f32 / 30.0;
+        document
+            .add_curve_point(
+                [
+                    -1.3 + t * 2.6,
+                    1.35 + (t * 7.0).sin() * 0.45,
+                    (t * 5.0).cos() * 0.3,
+                ],
+                0.09,
+            )
+            .expect("point");
+    }
+    assert_matches_full_refill(&mut document);
+}
+
+#[test]
+fn a_zero_drag_changes_nothing() {
+    let mut document = document();
+    lay_wide_curve(&mut document, 0.08);
+    settle_curve(&mut document);
+    let before = surface_digest(&document);
+    document.select_curve_point(Some(2));
+    document.take_dirty_keys();
+    document.drag_curve([0.0; 3]).expect("zero drag");
+    assert!(
+        document.dirty_keys().is_empty(),
+        "a zero drag dirtied bricks"
+    );
+    assert_eq!(
+        before,
+        surface_digest(&document),
+        "a zero drag moved cached vertices"
+    );
 }
 
 #[test]
@@ -459,25 +666,13 @@ fn a_point_inserted_into_a_curve_splits_the_span_it_names() {
 }
 
 /// A curve built point by point has the same surface as one built whole.
-///
-/// Appending a control point dirties only the end it added, because dirtying
-/// the node's own bound re-evaluates every brick the tube has ever reached —
-/// measured over a thirty-point stroke, one point went from 2.0 ms to 31.1 ms
-/// while its bricks only went from 440 to 880, since each brick's evaluation
-/// also walks every segment of the curve.
-///
-/// The risk a narrow region carries is staleness: a brick the append changed
-/// but the region did not name keeps its old value, and nothing says so. This
-/// is what catches that. The surface is measured through the brick cache,
-/// then every brick the layer reaches is dirtied and refilled, and the same
-/// measurement is taken again. **A region that named everything it should
-/// leaves the second reading identical to the first.**
+/// The pick path alone cannot detect a stale cache; the mesh digest tests
+/// above compare the cached surface directly.
 #[test]
 fn a_curve_laid_point_by_point_is_not_left_stale() {
     let mut document = document();
     document.begin_curve();
-    // A wandering path, so the tail region has to follow a curve that doubles
-    // back rather than a straight run where any box would do.
+    // A wandering path exposes stale geometry between control points.
     for step in 0..14 {
         let t = step as f32 / 14.0;
         let at = [
@@ -526,58 +721,34 @@ fn a_curve_laid_point_by_point_is_not_left_stale() {
     );
 }
 
-/// Appending a point costs the end it added, not the whole tube.
-///
-/// A count rather than a duration, because a duration on a shared machine is
-/// not something to fail a build over — but the count is what the duration was
-/// made of, and it is deterministic.
+/// An append marks the whole curve until the field supports a local bound.
 #[test]
-fn appending_a_point_dirties_the_end_and_not_the_whole_tube() {
+fn appending_a_point_refills_the_curve_extent() {
     let mut document = document();
     document.begin_curve();
     for step in 0..20 {
         let t = step as f32 / 20.0;
         document
             .add_curve_point([-1.3 + t * 2.6, 1.35 + (t * 7.0).sin() * 0.45, 0.0], 0.09)
-            .expect("refused");
+            .expect("point");
     }
     document.take_dirty_keys();
-
-    // One more point, which is the case a freehand drag makes twenty times a
-    // second.
     document
         .add_curve_point([1.4, 1.5, 0.0], 0.09)
-        .expect("refused");
+        .expect("append");
     let appended = document.dirty_keys().len();
-
-    // And the whole tube, through a join change — which is not an append, so
-    // it takes the node's own bound.
     document.take_dirty_keys();
-    let join = document.curve().join;
-    let other = if join == CurveJoin::Corners {
-        CurveJoin::Through
-    } else {
-        CurveJoin::Corners
-    };
-    document.set_curve_join(other).expect("join");
+    settle_curve(&mut document);
     let whole = document.dirty_keys().len();
-
-    println!("appended {appended} bricks, the whole tube is {whole}");
-    assert!(appended > 0, "the append dirtied nothing at all");
-    assert!(
-        appended * 3 < whole,
-        "appending a point dirtied {appended} bricks where the whole tube is \
-         {whole}, so the tube is still being re-evaluated end to end on every \
-         point a freehand stroke lays"
-    );
+    assert!(appended > 0);
+    assert_eq!(appended, whole, "append left part of the curve stale");
 }
 
 /// Dragging a control point leaves nothing stale — where it went, and where it
 /// came from.
 ///
-/// A drag is not an append, so it takes a different path to a different
-/// region: the neighbourhood of the points that moved, before and after. That
-/// path had no staleness guard of its own, and the append one does not reach
+/// A drag can change the surface beyond adjacent spans. This test compares
+/// the cached result with a full refill so a missed region cannot hide
 /// it — checked, by shrinking the drag region's margin to a twentieth of the
 /// radius and watching `a_curve_laid_point_by_point_is_not_left_stale` pass
 /// anyway. Two code paths, two margins, one test between them.

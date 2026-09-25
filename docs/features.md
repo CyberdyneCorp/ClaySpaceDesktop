@@ -632,27 +632,20 @@ surface for each point is worse than it sounds: by the second one there is a
 tube under the pointer — the one the stroke is drawing — so the ray lands on it
 and the curve climbs its own output.
 
-**Laying a point costs the end it added.** Editing replaces the sweep rather
-than adding another, and the engine dirties a node's own bound — for a swept
-curve, everything the tube has ever reached. That made a freehand stroke
-quadratic in its own length *twice over*: measured across a thirty-point
-stroke, one point went from **2.0 ms to 31.1 ms** while its bricks only went
-from 440 to 880. The bricks doubled and the time went up fifteen times, because
-each brick's evaluation also walks every segment of the curve, so the two
-compound. An appended point now dirties the span it added and every image the
-layer mirror puts it at — 2.9 ms at the thirtieth point instead of 31.1.
+**Curve edits refill the tube's old and new extents.** Appending or dragging a
+control point can change the field beyond the adjacent spans. ClayCore blends
+the round stroke chain; swept profiles use total guide length and sequentially
+transported frames. A box around affected control points or nearby spans can
+therefore leave stale bricks. The cache now marks the curve's old extent before
+replacing its guide and its new extent afterward, then drains both. A zero
+displacement skips the rebuild. Geometry tests compare the cached result with
+a full refill across joins and radii; the rendered drag fixture agrees pixel
+for pixel.
 
-**Dragging a point costs what the drag disturbed**, likewise: the
-neighbourhood of the points that moved, both where they were and where they now
-are, since refilling only the destination leaves the shape the point left
-standing on the surface. That is 168 bricks against 1452, and 5.1 ms against
-13.4. One box per affected point rather than one around them all — a bent
-tube's enclosing box is mostly air, and the boxes together dirty 168 where the
-single box dirties 256.
-
-A thickness, a join or a profile change still takes the node's own bound,
-because any of those can move the whole tube. Correct is the direction to fail
-in.
+This makes each append cost the curve's current extent. The earlier bounded
+append path measured 240 dirty bricks on a twenty-point fixture, while a full
+refill marks 1452. The UI-thread performance issue tracks how to regain local
+refills without leaving stale geometry.
 
 **No brush ring while a curve is up.** A ring says the next press leaves a
 stroke, and on a curve a press puts a control point down, takes hold of one, or
