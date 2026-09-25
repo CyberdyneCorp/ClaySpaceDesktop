@@ -4068,15 +4068,15 @@ sculpt.
 
 ### What it can ask for
 
-Twenty-four tools, one per domain the interface already has a panel for, each
+Twenty-nine tools, one per domain the interface already has a panel for, each
 taking an action and that action's arguments:
 
 | | |
 |---|---|
-| Sculpting | `tool`, `brush`, `stroke`, `mask`, `curve` |
+| Sculpting | `tool`, `brush`, `stroke`, `mask`, `cut`, `curve` |
 | Forms | `shape`, `object`, `transform`, `lattice`, `subtool`, `boolean` |
 | The scene | `layer`, `passes`, `hierarchy` |
-| The document | `document`, `exchange`, `repair`, `convert`, `deform` |
+| The document | `document`, `exchange`, `repair`, `convert`, `retopo`, `uv`, `conform`, `bake`, `deform` |
 | The rest | `armature`, `history`, `view`, `reference`, `session` |
 
 and five that are not commands: `describe`, `state`, `viewport`, `wait` and
@@ -4088,6 +4088,12 @@ answer cannot go stale. Every action names its arguments, which are required,
 what a choice's whole set is, and an example that is exercised by the test
 suite — a row that stopped building the command it claims is a row the build
 fails on.
+
+The `cut`, `retopo`, `uv`, `conform` and `bake` groups expose their model
+commands through the same catalogue as the other tools. Baking can be
+configured or cancelled here; starting a bake still opens the application's
+file panel to choose a destination. The catalogue test checks that every
+dispatched action is offered and every offered action has a dispatch route.
 
 One choice is answered against the session rather than from the table: the
 tools. A tool with no verb on the layer in hand is not on the sculptor's shelf,

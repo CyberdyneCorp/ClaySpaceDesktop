@@ -252,6 +252,12 @@ fn axes() -> Vec<&'static str> {
 fn gestures() -> Vec<&'static str> {
     tags::tags_of(tags::GESTURES)
 }
+fn cut_gestures() -> Vec<&'static str> {
+    tags::tags_of(tags::CUT_GESTURES)
+}
+fn quad_methods() -> Vec<&'static str> {
+    tags::tags_of(tags::QUAD_METHODS)
+}
 fn joins() -> Vec<&'static str> {
     tags::tags_of(tags::JOINS)
 }
@@ -360,6 +366,7 @@ pub const GROUPS: &[(&str, &str, &str)] = &[
         "Máscara",
         "Freezing and thawing parts of a surface, by op or by outline.",
     ),
+    ("cut", "Corte", "Cutting a form with a line or outline."),
     ("curve", "Curva", "A swept form along control points."),
     (
         "shape",
@@ -398,6 +405,18 @@ pub const GROUPS: &[(&str, &str, &str)] = &[
     ("exchange", "Troca", "Import and export."),
     ("repair", "Reparo", "Closing holes and filling voids."),
     ("convert", "Conversão", "Crossing between representations."),
+    (
+        "retopo",
+        "Retopologia",
+        "Building a quad mesh from the active form.",
+    ),
+    ("uv", "UV", "Laying out UV charts on a mesh."),
+    ("conform", "Conformar", "Fitting a mesh to its source form."),
+    (
+        "bake",
+        "Bake",
+        "Settings and cancellation for texture baking.",
+    ),
     (
         "deform",
         "Deformação",
@@ -465,6 +484,48 @@ pub const TABLE: &[ActionSpec] = &[
         summary: "How much the dab is broken up.",
         arguments: &[r("noise", Kind::Number, "0 to 1")],
         example: r#"{"noise":0.2}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_pressure_size",
+        summary: "How pressure changes the brush radius.",
+        arguments: &[r("amount", Kind::Number, "pressure influence on size")],
+        example: r#"{"amount":0.5}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_pressure_strength",
+        summary: "How pressure changes dab strength.",
+        arguments: &[r("amount", Kind::Number, "pressure influence on strength")],
+        example: r#"{"amount":0.5}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_pressure_curve",
+        summary: "The response curve for stylus pressure.",
+        arguments: &[r("exponent", Kind::Number, "the pressure exponent")],
+        example: r#"{"exponent":1.0}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_taper_start",
+        summary: "How the start of a stroke tapers.",
+        arguments: &[r("fraction", Kind::Number, "the fraction of the stroke")],
+        example: r#"{"fraction":0.2}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_taper_end",
+        summary: "How the end of a stroke tapers.",
+        arguments: &[r("fraction", Kind::Number, "the fraction of the stroke")],
+        example: r#"{"fraction":0.2}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_rake",
+        summary: "Whether a directional brush follows the stroke direction.",
+        arguments: &[r("rake", Kind::Boolean, "on or off")],
+        example: r#"{"rake":true}"#,
     },
     ActionSpec {
         group: "brush",
@@ -584,6 +645,52 @@ pub const TABLE: &[ActionSpec] = &[
         arguments: &[],
         example: "{}",
     },
+    // -- cut ----------------------------------------------------------------
+    ActionSpec {
+        group: "cut",
+        name: "set_gesture",
+        summary: "Chooses how the cut is drawn on the view.",
+        arguments: &[r(
+            "gesture",
+            Kind::Choice(cut_gestures),
+            "line, lasso or rectangle",
+        )],
+        example: r#"{"gesture":"line"}"#,
+    },
+    ActionSpec {
+        group: "cut",
+        name: "begin",
+        summary: "Starts a cut outline at a point on the view.",
+        arguments: &[r("at", Kind::Vec2, "the point on the view")],
+        example: r#"{"at":[0.1,0.2]}"#,
+    },
+    ActionSpec {
+        group: "cut",
+        name: "extend",
+        summary: "Adds a point to the cut outline.",
+        arguments: &[r("at", Kind::Vec2, "the point on the view")],
+        example: r#"{"at":[0.4,0.5]}"#,
+    },
+    ActionSpec {
+        group: "cut",
+        name: "end",
+        summary: "Applies the drawn cut in the given view frame.",
+        arguments: &[
+            r("origin", Kind::Vec3, "the view frame's origin"),
+            r("right", Kind::Vec3, "the view frame's right axis"),
+            r("up", Kind::Vec3, "the view frame's up axis"),
+            r("forward", Kind::Vec3, "the view frame's forward axis"),
+            r("scale", Kind::Vec2, "the view frame's two axis scales"),
+        ],
+        example: r#"{"origin":[0,0,0],"right":[1,0,0],"up":[0,1,0],"forward":[0,0,1],"scale":[1,1]}"#,
+    },
+    ActionSpec {
+        group: "cut",
+        name: "cancel",
+        summary: "Drops the cut outline without applying it.",
+        arguments: &[],
+        example: "{}",
+    },
     // -- mask ---------------------------------------------------------------
     ActionSpec {
         group: "mask",
@@ -698,6 +805,21 @@ pub const TABLE: &[ActionSpec] = &[
             o("radius", Kind::Number, "how thick the tube is there"),
         ],
         example: r#"{"at":[0,0,0],"radius":0.1}"#,
+    },
+    ActionSpec {
+        group: "curve",
+        name: "insert_point",
+        summary: "Inserts a control point at a position in the guide.",
+        arguments: &[
+            r(
+                "index",
+                Kind::Integer,
+                "the position in the control-point list",
+            ),
+            r("at", Kind::Vec3, "where"),
+            o("radius", Kind::Number, "how thick the tube is there"),
+        ],
+        example: r#"{"index":1,"at":[0,0,0],"radius":0.1}"#,
     },
     ActionSpec {
         group: "curve",
@@ -1273,6 +1395,134 @@ pub const TABLE: &[ActionSpec] = &[
         group: "convert",
         name: "run",
         summary: "Runs the conversion the panel is set to, as one undo step.",
+        arguments: &[],
+        example: "{}",
+    },
+    // -- retopo -------------------------------------------------------------
+    ActionSpec {
+        group: "retopo",
+        name: "set",
+        summary: "Sets the method and target for the next retopology job.",
+        arguments: &[
+            o("target_quads", Kind::Integer, "the target quad count"),
+            o("method", Kind::Choice(quad_methods), "the quadrangulator"),
+            o(
+                "sharp_edge_degrees",
+                Kind::Number,
+                "the sharp-edge threshold",
+            ),
+            o("pure_quads", Kind::Boolean, "whether triangles are refused"),
+            o(
+                "adaptivity",
+                Kind::Number,
+                "how much density follows the form",
+            ),
+        ],
+        example: r#"{"target_quads":10000,"method":"quadcover"}"#,
+    },
+    ActionSpec {
+        group: "retopo",
+        name: "run",
+        summary: "Starts retopology with the current settings.",
+        arguments: &[],
+        example: "{}",
+    },
+    ActionSpec {
+        group: "retopo",
+        name: "cancel",
+        summary: "Cancels the retopology job in progress.",
+        arguments: &[],
+        example: "{}",
+    },
+    // -- uv -----------------------------------------------------------------
+    ActionSpec {
+        group: "uv",
+        name: "set",
+        summary: "Sets chart and packing options for the next UV atlas.",
+        arguments: &[
+            o(
+                "max_chart_angle_degrees",
+                Kind::Number,
+                "the maximum chart angle",
+            ),
+            o("pack_margin", Kind::Number, "space between charts"),
+            o(
+                "texture_size",
+                Kind::Integer,
+                "the texture's side in pixels",
+            ),
+            o("reorient_charts", Kind::Boolean, "whether charts may turn"),
+            o(
+                "merge_charts",
+                Kind::Boolean,
+                "whether compatible charts join",
+            ),
+            o("max_chart_distortion", Kind::Number, "the distortion limit"),
+        ],
+        example: r#"{"texture_size":2048,"pack_margin":0.01}"#,
+    },
+    ActionSpec {
+        group: "uv",
+        name: "atlas",
+        summary: "Starts a UV atlas for the active mesh.",
+        arguments: &[],
+        example: "{}",
+    },
+    ActionSpec {
+        group: "uv",
+        name: "cancel",
+        summary: "Cancels the UV atlas job in progress.",
+        arguments: &[],
+        example: "{}",
+    },
+    // -- conform ------------------------------------------------------------
+    ActionSpec {
+        group: "conform",
+        name: "set",
+        summary: "Sets the distance limit for fitting a mesh to its source.",
+        arguments: &[o("threshold", Kind::Number, "the distance limit")],
+        example: r#"{"threshold":0.05}"#,
+    },
+    ActionSpec {
+        group: "conform",
+        name: "run",
+        summary: "Starts conforming the active mesh to its source.",
+        arguments: &[],
+        example: "{}",
+    },
+    ActionSpec {
+        group: "conform",
+        name: "cancel",
+        summary: "Cancels the conform job in progress.",
+        arguments: &[],
+        example: "{}",
+    },
+    // -- bake ---------------------------------------------------------------
+    ActionSpec {
+        group: "bake",
+        name: "set",
+        summary: "Sets texture bake options; choosing a destination still uses the panel.",
+        arguments: &[
+            o(
+                "maps",
+                Kind::Text,
+                "comma-separated normal, ao, curvature or cavity",
+            ),
+            o("size", Kind::Integer, "the texture's side in pixels"),
+            o("cage_distance", Kind::Number, "the sampling cage distance"),
+            o(
+                "ao_samples",
+                Kind::Integer,
+                "ambient-occlusion sample count",
+            ),
+            o("ao_radius", Kind::Number, "ambient-occlusion radius"),
+        ],
+        example: r#"{"maps":"normal,ao","size":2048}"#,
+    },
+    ActionSpec {
+        group: "bake",
+        name: "cancel",
+        summary: "Cancels the texture bake in progress.",
         arguments: &[],
         example: "{}",
     },

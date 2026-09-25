@@ -16,7 +16,7 @@ use clayspace_model::CutGesture;
 use clayspace_model::{
     BlendProfile, BooleanOp, Combine, CurveJoin, CurveProfile, DeformVerb, Direction, DragFalloff,
     ExportMesher, ExtrudeSide, Falloff, GizmoMode, ImportAs, InsertAs, Locale, MaskGesture,
-    RefPlane, Representation, Shape, ToolKind, ViewPresetKind, VoxelDisplay,
+    QuadMethod, RefPlane, Representation, Shape, ToolKind, ViewPresetKind, VoxelDisplay,
 };
 use clayspace_vm::Axis;
 
@@ -125,6 +125,14 @@ pub const CUT_GESTURES: &[(&str, CutGesture)] = &[
     ("line", CutGesture::Line),
     ("lasso", CutGesture::Lasso),
     ("rectangle", CutGesture::Rectangle),
+];
+
+pub const QUAD_METHODS: &[(&str, QuadMethod)] = &[
+    ("quadcover", QuadMethod::QuadCover),
+    ("zremesher", QuadMethod::ZRemesher),
+    ("field_aligned", QuadMethod::FieldAligned),
+    ("instant_meshes", QuadMethod::InstantMeshes),
+    ("integer", QuadMethod::Integer),
 ];
 
 pub const JOINS: &[(&str, CurveJoin)] = &[
