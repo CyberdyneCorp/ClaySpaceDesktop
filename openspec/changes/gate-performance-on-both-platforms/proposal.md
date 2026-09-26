@@ -31,7 +31,7 @@ application is developed on, and not reliably on the other one either:
   pin: a hosted Mac moves single figures by up to 10x between runs, and a scale
   of 6.6 was the smallest that made no pair of those runs disagree (7.5
   against the committed baseline itself). Linux
-  passes 3: two runs on two different processors needed 1.18.
+  passes 3: four runs on four different processors needed at most 1.89.
 - **The Performance job runs on macOS and Linux**, each against a baseline
   recorded by the `Record a baseline` job on the same runner image and
   committed to `benchmarks/`. The recording job gained the Linux build

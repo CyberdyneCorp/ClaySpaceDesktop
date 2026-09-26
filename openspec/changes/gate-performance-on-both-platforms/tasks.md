@@ -12,7 +12,7 @@
 ## 3. A threshold measured on the runner
 
 - [x] 3.1 `--tolerance-scale K`, refused below 1 or when not a finite number, applied to every figure's tolerance
-- [x] 3.2 Measure run-to-run variance from twelve `macos-14` runs and two `ubuntu-24.04` runs at engine 0.120.1 and derive each platform's CI scale from it; record the data in `benchmarks/ci-gate.md`
+- [x] 3.2 Measure run-to-run variance from twelve `macos-14` runs and four `ubuntu-24.04` runs at engine 0.120.1 and derive each platform's CI scale from it; record the data in `benchmarks/ci-gate.md`
 
 ## 4. Both platforms
 

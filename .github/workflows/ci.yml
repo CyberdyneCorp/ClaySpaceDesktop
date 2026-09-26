@@ -346,8 +346,8 @@ jobs:
   # pair of them disagreed, and 7.5 against the committed baseline itself,
   # because a hosted Mac is a three-core VM at a load
   # of 4-8 per core and single figures moved by up to 10x between runs. Linux
-  # is 3: its runners are quieter, and the worst figure between runs on two
-  # different processors needed 1.18. What the macOS row catches is an
+  # is 3: its runners are quieter, and the worst figure across four runs on
+  # four different processors needed 1.89. What the macOS row catches is an
   # order-of-magnitude regression; the Linux row, a 4.5x one on a mean. Both
   # fail on a figure that stops being measured and on a baseline they cannot
   # compare against. The 1x tolerances belong on a quiet workstation.

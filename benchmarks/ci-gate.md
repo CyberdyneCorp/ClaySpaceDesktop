@@ -67,19 +67,35 @@ runner put it: its `brush.sdf.pincar.mean` is 145 ms, where the twelve read
 between 172 and 1,628 ms. Held against it, the twelve need a scale of **7.46**
 (that figure, in the 1,628 ms run) before every one passes. Ten is that with a
 third to spare. It is coarse, and it is what a hosted Mac supports; a
-self-hosted macOS runner would be the way to tighten it.
+self-hosted macOS runner would be the way to tighten it. This pull request's
+own macOS Performance job — the same tree as the recording, run again on
+another runner — needed 1.11 against the committed file
+(`brush.mesh.inflar.p95`, 12.70 → 28.27 ms), so a run that lands close to the
+recording is the common case and the 7.46 is the tail.
 
 The Linux runners are a different kind of machine: four cores, 15 GiB, a load
 of about one per core, and no GPU, so the view renders through Mesa's software
-Vulkan driver (lavapipe), which is slow and the same every run. The two whole
-runs available when this was written — the recording itself, on an Intel Xeon
-Platinum 8370C, and the Performance job of the same dispatch, on an AMD EPYC
-7763 — agreed on all 206 figures to within the workstation tolerances except
-one, `locality.dab_ms_10x` (18.74 → 10.61 ms), which needed a scale of 1.18.
-Three is that with room for the processors a hosted runner may be given,
-without giving up the several-fold regressions the macOS row cannot see. If a
-Linux run ever disagrees with its own baseline on an unchanged tree, that is
-the evidence to raise it, and this file is where to put it.
+Vulkan driver (lavapipe), which is slow and the same every run. Four whole
+runs of the measured code were available when this was written, each landing
+on a different processor: the recording itself (Intel Xeon Platinum 8370C),
+the Performance job of the same dispatch (AMD EPYC 7763), this pull request's
+own Performance job (AMD EPYC 9V45), and a scratch branch whose only change was
+in code the benchmark never reaches (AMD EPYC 9V74). Compared pairwise in the
+direction the gate tests, the worst figure was `locality.dab_ms_10x` at 6.62 ms
+on the 9V45 against 18.74 ms on the Xeon, which needed a scale of **1.89**;
+held against the committed baseline, no run needed more than 1.0. Three is
+1.89 with room for processors not yet seen, and keeps the several-fold
+regressions the macOS row cannot see. If a Linux run ever disagrees with its
+own baseline on an unchanged tree, that is the evidence to raise it, and this
+file is where to put it.
+
+**The gate fails when it should.** A scratch branch that put a 100 ms sleep at
+the top of `ClayDocument::apply_stroke` — every brush, every stroke — was run
+through CI (run 36258612853). The Linux Performance job failed with 51 figures
+marked `REGRESSED`, every mesh brush among them at about 6x its baseline
+(`brush.mesh.padrao.mean` 18.94 → 116.31 ms), and exited 1. The same branch
+with the sleep in a function the benchmark never reaches passed, which is the
+fourth Linux run above.
 
 **What this gate does and does not catch.** It catches the regressions that
 matter most and are easiest to ship without noticing: a figure that goes up by

@@ -139,7 +139,7 @@ a mean) and **10 on macOS** (15x for a mean, 20x for a p95 or a one-shot
 figure) — on a figure the baseline measured that stopped being measured, and on
 a baseline it refuses to compare against. The scales are measured, not chosen:
 a hosted Mac moves single figures by up to 10x between two runs of an unchanged
-tree, a Linux runner by barely 1.8x, and `benchmarks/ci-gate.md` has the runs
+tree, a Linux runner by under 3x, and `benchmarks/ci-gate.md` has the runs
 behind both numbers. So macOS CI catches an order-of-magnitude regression,
 Linux CI a several-fold one, and both catch a measurement that went missing;
 the workstation tolerances (1.5x a mean) are for a quiet machine, with
