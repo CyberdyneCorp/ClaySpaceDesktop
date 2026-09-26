@@ -1122,3 +1122,81 @@ fn a_refused_cage_command_is_an_error() {
         "the cage was refused without saying why: {refusal}"
     );
 }
+
+/// A retopology is a job an agent can see, wait for and take back.
+///
+/// It ran through the catalogue with no job anybody could see: `wait` said the
+/// session was quiet while the worker was still busy, and the published result
+/// pushed no count onto the history Cmd+Z reads, so the next undo took back the
+/// action before it.
+#[test]
+fn a_retopology_is_a_job_with_a_new_layer_and_one_undo() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    call(
+        &running,
+        &session,
+        "convert",
+        json!({ "action": "set", "direction": "field-to-mesh", "cell_size": 0.05 }),
+    );
+    call(&running, &session, "convert", json!({ "action": "run" }));
+    settle(&running, &session);
+    let source = active_layer(&running, &session);
+    let layers = layer_count(&running, &session);
+    let depth = history_depth(&running, &session);
+
+    call(
+        &running,
+        &session,
+        "retopo",
+        json!({ "action": "set", "target_quads": 800 }),
+    );
+    call(&running, &session, "retopo", json!({ "action": "run" }));
+    // Not quiet while it runs, and the job is named.
+    let busy = call(&running, &session, "wait", json!({ "bound_ms": 0 }));
+    assert_eq!(
+        busy["structuredContent"]["quiet"], false,
+        "the session reported quiet over a running retopology: {busy}"
+    );
+    let named = busy["structuredContent"]["outstanding"]
+        .as_array()
+        .is_some_and(|work| work.iter().any(|item| item["what"] == "retopology"));
+    assert!(named, "the running retopology was not named: {busy}");
+
+    let landed = call(&running, &session, "wait", json!({ "bound_ms": 90000 }));
+    assert_eq!(
+        landed["structuredContent"]["quiet"], true,
+        "the retopology never landed: {landed}"
+    );
+    assert_eq!(
+        layer_count(&running, &session),
+        layers + 1,
+        "the result did not arrive as a new layer"
+    );
+    assert_ne!(
+        active_layer(&running, &session),
+        source,
+        "the new layer is not the active one"
+    );
+    assert_eq!(
+        history_depth(&running, &session),
+        depth + 1,
+        "the retopology banked no single undo step"
+    );
+
+    call(&running, &session, "history", json!({ "action": "undo" }));
+    settle(&running, &session);
+    assert_eq!(
+        layer_count(&running, &session),
+        layers,
+        "one undo left the retopology standing"
+    );
+    assert_eq!(
+        history_depth(&running, &session),
+        depth,
+        "undoing the retopology took back more than the retopology"
+    );
+}

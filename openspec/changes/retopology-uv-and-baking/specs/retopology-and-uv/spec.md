@@ -4,14 +4,21 @@
 A mesh subtool SHALL be retopologisable through `cyber_remesh`, with the quad
 methods the pinned release carries and a target quad count.
 
-The accepted result SHALL become a new mesh subtool, leaving the sculpt source
-available for comparison. Its creation SHALL be one undo entry. The stack is
-not the record of an operation the history records.
+The accepted result SHALL become a new mesh subtool by default, standing where
+the source stands, leaving the sculpt source intact and available for
+comparison. Its creation SHALL be one undo entry, and undoing it SHALL remove
+the new subtool whole. A sculptor MAY ask for the source subtool to be rebuilt
+in place instead; that SHALL also be one undo entry.
 
-The commit SHALL be a compare-and-swap against the layer revision read before
-the work was dispatched, and SHALL refuse rather than overwrite when the layer
-has moved since — the work runs off the interface thread and the source remains
-strokeable while it does.
+Only the active subtool SHALL be read as the source. Other visible subtools
+SHALL NOT be folded into it.
+
+The result SHALL be published only if the source still stands at the layer
+revision read before the work was dispatched, whichever placement was asked
+for. A source that has moved, or has gone, SHALL receive nothing, and the
+discard SHALL be reported — the work runs off the interface thread and the
+source remains strokeable while it does. In place, the commit SHALL also be a
+compare-and-swap in the engine that leaves the layer unchanged when it refuses.
 
 The operation SHALL be offered on mesh subtools only. A field is not a mesh, and
 crossing one for the sculptor silently would perform a representation change
@@ -28,6 +35,21 @@ the result. The sculptor SHALL explicitly accept or discard that preview.
 #### Scenario: A result is discarded
 - **WHEN** the sculptor discards a completed retopology preview
 - **THEN** neither a new subtool nor a history entry is created
+
+#### Scenario: The source moves while the job runs
+- **WHEN** the source subtool is edited, or removed, after the job started and
+  before its result is published
+- **THEN** the result is discarded with a notice, and neither a new subtool nor
+  a history entry is created
+
+#### Scenario: A running job is cancelled
+- **WHEN** the sculptor or an agent cancels a retopology in progress
+- **THEN** nothing is published and the document is unchanged
+
+#### Scenario: The source is rebuilt in place
+- **WHEN** the sculptor asks for the retopology in place
+- **THEN** the source subtool holds the quads, the subtool count is unchanged,
+  and one undo puts the original topology back
 
 ### Requirement: A retopology is one undo entry
 Placing the result SHALL be one entry in the history, as a crossing and a

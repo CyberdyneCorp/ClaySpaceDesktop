@@ -75,6 +75,13 @@ pub struct JobRunner<T: Send + 'static> {
     generation: Generation,
     running: Option<Generation>,
     results: Option<Receiver<Finished<T>>>,
+    /// What the worker last reported, shared with it.
+    ///
+    /// Copied into `progress` on each poll. The worker cannot touch the
+    /// observable — it lives on the interface thread — and without the copy
+    /// the fraction a job reported never left the worker: every job read 0%
+    /// from start to finish.
+    reported: Option<Arc<Mutex<Progress>>>,
     last: Observable<Option<Outcome>>,
     last_error: Observable<Option<String>>,
 }
@@ -92,6 +99,7 @@ impl<T: Send + 'static> JobRunner<T> {
             generation: Generation::default(),
             running: None,
             results: None,
+            reported: None,
             last: Observable::new(None),
             last_error: Observable::new(None),
         }
@@ -151,6 +159,7 @@ impl<T: Send + 'static> JobRunner<T> {
         ));
         self.running = Some(generation);
         self.results = Some(receiver);
+        self.reported = Some(shared.clone());
 
         let reporter = ChannelReporter {
             shared: shared.clone(),
@@ -174,12 +183,16 @@ impl<T: Send + 'static> JobRunner<T> {
         let receiver = self.results.as_ref()?;
         let finished = match receiver.try_recv() {
             Ok(finished) => finished,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.forward_progress();
+                return None;
+            }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 // The worker died without sending, which is a panic in the
                 // job rather than a result.
                 self.running = None;
                 self.results = None;
+                self.reported = None;
                 self.progress.set(None);
                 let why = "the job stopped unexpectedly".to_string();
                 self.last.set(Some(Outcome::Failed));
@@ -190,6 +203,7 @@ impl<T: Send + 'static> JobRunner<T> {
 
         self.running = None;
         self.results = None;
+        self.reported = None;
         self.progress.set(None);
 
         let completion = if finished.generation != self.generation {
@@ -213,6 +227,18 @@ impl<T: Send + 'static> JobRunner<T> {
             _ => None,
         });
         Some(completion)
+    }
+
+    /// Brings the observable up to what the worker last reported. Marks it
+    /// changed only when the report moved, so an idle poll schedules nothing.
+    fn forward_progress(&mut self) {
+        let Some(reported) = self.reported.as_ref() else {
+            return;
+        };
+        let Ok(now) = reported.lock().map(|progress| progress.clone()) else {
+            return;
+        };
+        self.progress.set_if_changed(Some(now));
     }
 }
 
@@ -341,6 +367,34 @@ mod tests {
         );
         drain(&mut runner);
         assert!(runner.start("third", |_| Ok(3)), "the runner stayed busy");
+        drain(&mut runner);
+    }
+
+    /// The fraction a worker reports reaches the observable the interface
+    /// and an agent read. It used to stop at the worker: every job showed the
+    /// 0% it started with until it finished.
+    #[test]
+    fn reported_progress_reaches_the_observable() {
+        let (reached, release) = (
+            Arc::new(std::sync::Barrier::new(2)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        let (worker_reached, worker_release) = (reached.clone(), release.clone());
+        let mut runner = JobRunner::new();
+        runner.start("retopologia", move |reporter| {
+            reporter.report(0.5);
+            worker_reached.wait();
+            worker_release.wait();
+            Ok(())
+        });
+        reached.wait();
+        assert!(runner.poll().is_none(), "the job finished early");
+        assert_eq!(
+            runner.progress().get().as_ref().and_then(|p| p.fraction),
+            Some(0.5),
+            "the worker reported half-way and the observable did not move"
+        );
+        release.wait();
         drain(&mut runner);
     }
 

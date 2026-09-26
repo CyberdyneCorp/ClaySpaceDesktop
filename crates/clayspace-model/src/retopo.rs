@@ -78,6 +78,15 @@ pub struct RetopoSettings {
     pub pure_quads: bool,
     /// 0 uniform, 1 fully curvature-adaptive.
     pub adaptivity: f32,
+    /// Rebuild the source subtool itself rather than adding the result as a
+    /// new mesh subtool beside it.
+    ///
+    /// Off by default. The production crossing ends in a *new* fixed-mesh
+    /// layer with the sculpt kept intact, because a sculpt replaced by its
+    /// retopology is detail a sculptor can only get back through the history.
+    /// Offered, the way a conversion's `in_place` is, for a sculptor who wants
+    /// the subtool in front of them rebuilt the way Rebuild does it.
+    pub in_place: bool,
 }
 
 impl Default for RetopoSettings {
@@ -93,6 +102,7 @@ impl Default for RetopoSettings {
             sharp_edge_degrees: 40.0,
             pure_quads: true,
             adaptivity: 0.0,
+            in_place: false,
         }
     }
 }
@@ -173,6 +183,12 @@ pub struct RetopoSource {
     /// What the subtool is called, so the result can be named beside it
     /// without reaching back into a document on another thread.
     pub name: String,
+    /// The source subtool's geometry revision when it was read.
+    ///
+    /// The work runs off the interface thread and the source stays strokeable
+    /// while it does, so a result is published only if the source still
+    /// stands at this revision — see [`RetopoModel::retopo_source_revision`].
+    pub revision: u64,
 }
 
 /// What came back, owned and thread-safe, ready to be placed.
@@ -228,7 +244,8 @@ pub trait RetopoModel {
     fn can_retopologise(&self) -> Result<(), String>;
 
     /// Rebuilds the active mesh subtool's topology as quads, arriving as a
-    /// **new subtool** beside the source.
+    /// **new subtool** beside the source unless `settings.in_place` asks for
+    /// the source itself to be rebuilt.
     ///
     /// A retopology a sculptor cannot compare against the sculpt is one they
     /// cannot judge, and replacing the source is a decision that cannot be
@@ -242,9 +259,23 @@ pub trait RetopoModel {
     /// that will run off this thread.
     fn retopo_source(&mut self) -> Result<RetopoSource, crate::ModelError>;
 
-    /// Places a finished retopology as a new subtool beside its source, in one
-    /// undo entry.
-    fn place_retopology(&mut self, result: &RetopoResult) -> Result<(), crate::ModelError>;
+    /// The revision the subtool the last [`RetopoModel::retopo_source`] read
+    /// stands at *now*.
+    ///
+    /// Compared against [`RetopoSource::revision`] before a finished result is
+    /// published: a sculpt that moved while the job ran must not have a stale
+    /// mesh placed against it. An error means the subtool is gone, which is
+    /// stale too.
+    fn retopo_source_revision(&mut self) -> Result<u64, crate::ModelError>;
+
+    /// Places a finished retopology in one undo entry: as a new subtool
+    /// beside its source by default, or over the source when the settings
+    /// asked for `in_place`.
+    fn place_retopology(
+        &mut self,
+        result: &RetopoResult,
+        settings: RetopoSettings,
+    ) -> Result<(), crate::ModelError>;
 }
 
 // -- UV ---------------------------------------------------------------------

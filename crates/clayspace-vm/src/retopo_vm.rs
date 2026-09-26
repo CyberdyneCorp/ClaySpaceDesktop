@@ -9,8 +9,9 @@
 //!    document is an `Rc<RefCell>` and cannot cross to a worker;
 //! 2. retopologise **on a worker**, reporting progress and asking about
 //!    cancellation between stages;
-//! 3. place the result **on this thread**, in one undo entry — and discard it
-//!    if the document has moved on since, which `JobRunner` already does.
+//! 3. publish the result **on this thread**, in one undo entry — and only if
+//!    the source still stands at the revision step one read. A sculpt that
+//!    moved while the job ran gets nothing rather than a stale mesh.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -32,6 +33,12 @@ pub struct RetopoViewModel {
     last: Observable<Option<RetopoOutcome>>,
     notice: Observable<Option<String>>,
     jobs: JobRunner<RetopoResult>,
+    /// The source revision and the settings the job in flight started from.
+    ///
+    /// The settings are the ones the run was *asked* with: a sculptor who
+    /// flips `in_place` while a job runs has changed the next run, not where
+    /// this one lands.
+    started: Option<(u64, RetopoSettings)>,
     /// Set from the interface thread and read from the worker.
     ///
     /// An `Arc<AtomicBool>` rather than a channel because the question is
@@ -50,6 +57,7 @@ impl RetopoViewModel {
             last: Observable::new(None),
             notice: Observable::new(None),
             jobs: JobRunner::new(),
+            started: None,
             stop: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -125,6 +133,7 @@ impl RetopoViewModel {
         };
 
         let settings = *self.settings.get();
+        self.started = Some((source.revision, settings));
         let engine = self.engine.clone();
         // Cleared here rather than on completion. A cancellation asked for
         // before a job exists cannot apply to it, and a flag left set would
@@ -147,23 +156,49 @@ impl RetopoViewModel {
         });
     }
 
-    /// Collects a finished retopology and places it. Once per frame.
+    /// Collects a finished retopology and publishes it. Once per frame.
     pub fn poll(&mut self) {
-        match self.jobs.poll() {
-            Some(Completion::Finished(result)) => match self.model.place_retopology(&result) {
-                Ok(()) => {
-                    self.last.set(Some(result.outcome));
-                    self.notice.set(None);
-                }
-                Err(e) => self.notice.set(Some(e.to_string())),
-            },
-            Some(Completion::Failed(why)) => self.notice.set(Some(why)),
+        let Some(completion) = self.jobs.poll() else {
+            return;
+        };
+        let started = self.started.take();
+        match completion {
+            Completion::Finished(result) => self.publish(result, started),
+            // A cancelled run arrives here as the engine's refusal, and
+            // nothing was placed: the document is exactly as it was.
+            Completion::Failed(why) => self.notice.set(Some(why)),
             // The document moved on while this ran, so the result describes a
-            // scene that no longer exists. Dropped rather than placed — a
-            // retopology of a subtool that has since been deleted would
-            // otherwise arrive beside nothing.
-            Some(Completion::Superseded) => {}
-            None => {}
+            // scene that no longer exists. Dropped rather than placed.
+            Completion::Superseded => {}
+        }
+    }
+
+    /// Places a finished result — if its source has not moved since the run
+    /// started.
+    ///
+    /// Checked here, before the document is asked to change, so a stale
+    /// result is refused by one rule whatever the model does with it: the
+    /// source stayed strokeable the whole time the job ran, and a mesh made
+    /// from a sculpt that no longer exists is not a retopology of this one.
+    fn publish(&mut self, result: RetopoResult, started: Option<(u64, RetopoSettings)>) {
+        let Some((revision, settings)) = started else {
+            return;
+        };
+        let current = self.model.retopo_source_revision();
+        if current.ok() != Some(revision) {
+            self.notice.set(Some(
+                "a camada de origem mudou enquanto a retopologia corria; \
+                 o resultado foi descartado"
+                    .to_string(),
+            ));
+            return;
+        }
+        match self.model.place_retopology(&result, settings) {
+            Ok(()) => {
+                self.last.set(Some(result.outcome));
+                self.notice.set(None);
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
         }
     }
 }

@@ -852,11 +852,18 @@ impl clayspace_model::RetopoModel for SharedDocument {
         self.document.borrow_mut().retopo_source()
     }
 
+    fn retopo_source_revision(&mut self) -> Result<u64, ModelError> {
+        self.document.borrow_mut().retopo_source_revision()
+    }
+
     fn place_retopology(
         &mut self,
         result: &clayspace_model::RetopoResult,
+        settings: clayspace_model::RetopoSettings,
     ) -> Result<(), ModelError> {
-        self.document.borrow_mut().place_retopology(result)
+        self.document
+            .borrow_mut()
+            .place_retopology(result, settings)
     }
 }
 
