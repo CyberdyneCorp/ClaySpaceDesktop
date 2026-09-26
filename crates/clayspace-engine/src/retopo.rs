@@ -35,31 +35,22 @@ fn engine_method(method: QuadMethod) -> cyberremesh::QuadMethod {
 }
 
 impl ClayDocument {
-    /// Takes the active mesh subtool across to the retopology engine.
+    /// The active mesh subtool as owned geometry, checked and read, with no
+    /// retopology target recorded.
     ///
-    /// **The handle it returns is valid for one operation.** The engine's
-    /// element-id stability contract is that most retopology calls reassign
-    /// vertex and face ids and subdivision reassigns all of them, with nothing
-    /// to announce it — so nothing here keeps one, and any correspondence back
-    /// into ClayCore is positional and rebuilt rather than an id that was
-    /// kept.
-    fn hand_off_active_mesh(&mut self) -> Result<cyberremesh::Mesh, ModelError> {
-        let (positions, normals, _colours, indices, _spans) = self.visible_mesh_geometry();
-        if indices.is_empty() {
-            return Err(ModelError::engine(
-                "esta camada de malha ainda não carrega triângulos",
-            ));
-        }
-        let flat_positions: Vec<f32> = positions.iter().flat_map(|p| *p).collect();
-        let flat_normals: Vec<f32> = normals.iter().flat_map(|n| *n).collect();
-        cyberremesh::Mesh::from_handoff(
-            &flat_positions,
-            &flat_normals,
-            &indices,
-            claycore::HANDOFF_VERSION,
-            "ClaySpaceDesktop",
-        )
-        .map_err(|e| ModelError::engine(format!("a entrega da malha foi recusada: {e}")))
+    /// Shared by the retopology and the UV layout. Only the retopology
+    /// stashes a target: a layout started while a retopology runs must not
+    /// move the layer that retopology will be published against.
+    fn active_mesh_source(&mut self) -> Result<RetopoSource, ModelError> {
+        self.can_retopologise().map_err(ModelError::engine)?;
+        let (positions, normals, indices) = self.active_mesh_geometry()?;
+        Ok(RetopoSource {
+            positions,
+            normals,
+            indices,
+            name: self.scene_layers_name(),
+            revision: 0,
+        })
     }
 }
 
@@ -78,107 +69,67 @@ impl RetopoModel for ClayDocument {
         Ok(())
     }
 
+    /// The whole workflow on this thread: read, retopologise, publish.
+    ///
+    /// The same three steps the ViewModel runs across a worker, through the
+    /// same calls, so the synchronous path and the job cannot disagree about
+    /// where a result lands or what makes it stale.
     fn retopologise(&mut self, settings: RetopoSettings) -> Result<RetopoOutcome, ModelError> {
-        self.can_retopologise().map_err(ModelError::engine)?;
-        let settings = settings.sanitized();
-
-        let source = self.hand_off_active_mesh()?;
-        let triangles_before = source.triangle_count();
-
-        let quads = cyberremesh::remesh(
-            &source,
-            cyberremesh::RemeshParams {
-                target_quads: settings.target_quads,
-                method: engine_method(settings.method),
-                sharp_edge_degrees: settings.sharp_edge_degrees,
-                pure_quads: settings.pure_quads,
-                adaptivity: settings.adaptivity,
-            },
-            &mut cyberremesh::Unwatched,
-        )
-        .map_err(|e| ModelError::engine(format!("a retopologia foi recusada: {e}")))?;
-
-        let outcome = RetopoOutcome {
-            triangles_before,
-            faces: quads.face_count(),
-            triangles: quads.triangle_count(),
-            vertices: quads.vertex_count(),
-        };
-
-        // Back into ClayCore as a **new** subtool beside the source. A
-        // retopology a sculptor cannot compare against the sculpt is one they
-        // cannot judge, and replacing the source is a decision that cannot be
-        // undone by looking at it.
-        //
-        // The triangulation is what crosses back, not the quads: ClayCore's
-        // mesh layers hold triangles, and the engine carries the quads beside
-        // its own triangulation of them rather than instead of it — so this is
-        // the same surface, drawn the way this application already draws one.
-        // The subtool this is about, and the revision the commit will check
-        // against. Read through the same call the worker path uses, so the two
-        // cannot disagree about what "the target" means.
-        self.remember_retopo_target()?;
-        let Some((key, revision)) = self.take_retopo_target() else {
-            return Err(ModelError::engine(
-                "não há camada registada para receber esta retopologia",
-            ));
-        };
-
-        let positions = quads.positions();
-        let indices = quads.triangle_indices();
-        // The faces themselves, as edges. `triangle_indices` carries the fan
-        // triangulation and a wireframe drawn from it shows every diagonal,
-        // so a 100%-quad result looked like triangles — the engine's own
-        // words for this buffer are "a quad contributes 4 edges, never its
-        // triangulation diagonal".
-        let edges = authored_edges(&quads);
-        drop(quads);
-
-        // In place, on the subtool the sculptor asked about. Nothing ran off
-        // the interface thread on this path, so the revision cannot have
-        // moved — it is passed anyway rather than passing 0, because the one
-        // call that commits a retopology should not have two contracts.
-        self.replace_mesh_with_quads(key, revision, &positions, &indices, &edges, outcome.faces)?;
-        Ok(outcome)
+        let source = self.retopo_source()?;
+        let result = EngineRetopologiser
+            .run(&source, settings, &|_, _| {}, &|| false)
+            .map_err(ModelError::engine)?;
+        self.place_retopology(&result, settings)?;
+        Ok(result.outcome)
     }
 
     fn retopo_source(&mut self) -> Result<RetopoSource, ModelError> {
-        self.can_retopologise().map_err(ModelError::engine)?;
+        let mut source = self.active_mesh_source()?;
         // Which layer this is about and what revision it is at, read before
         // the work is dispatched. `RetopoResult` carries a name and not an
-        // identity, and the commit is a compare-and-swap.
+        // identity, and the publish is checked against the revision.
         self.remember_retopo_target()?;
-        let (positions, normals, _colours, indices, _spans) = self.visible_mesh_geometry();
-        if indices.is_empty() {
-            return Err(ModelError::engine(
-                "esta camada de malha ainda não carrega triângulos",
-            ));
-        }
-        Ok(RetopoSource {
-            positions,
-            normals,
-            indices,
-            name: self.scene_layers_name(),
-        })
+        source.revision = self.retopo_target_revision()?;
+        Ok(source)
     }
 
-    fn place_retopology(&mut self, result: &RetopoResult) -> Result<(), ModelError> {
+    fn retopo_source_revision(&mut self) -> Result<u64, ModelError> {
+        self.retopo_target_revision()
+    }
+
+    fn place_retopology(
+        &mut self,
+        result: &RetopoResult,
+        settings: RetopoSettings,
+    ) -> Result<(), ModelError> {
         // The layer `retopo_source` was asked about, at the revision it was
         // then. Taken rather than read, so a second commit cannot land on a
-        // target the first one already replaced.
+        // target the first one already used.
         let Some((key, revision)) = self.take_retopo_target() else {
             return Err(ModelError::engine(
                 "não há camada registada para receber esta retopologia",
             ));
         };
-        self.replace_mesh_with_quads(
+        if settings.in_place {
+            return self.replace_mesh_with_quads(
+                key,
+                revision,
+                &result.positions,
+                &result.indices,
+                &result.edges,
+                result.outcome.faces,
+            );
+        }
+        self.attach_quads_beside(
             key,
             revision,
             &result.positions,
             &result.indices,
             &result.edges,
             result.outcome.faces,
+            &result.name,
         )
+        .map(|_| ())
     }
 }
 
@@ -284,7 +235,7 @@ impl UvModel for ClayDocument {
     }
 
     fn uv_source(&mut self) -> Result<UvSource, ModelError> {
-        let source = self.retopo_source()?;
+        let source = self.active_mesh_source()?;
         Ok(UvSource {
             positions: source.positions,
             normals: source.normals,

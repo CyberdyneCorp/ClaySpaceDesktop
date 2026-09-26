@@ -1767,6 +1767,17 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
         }
         pure.on_hover_text(s.retopo_pure_hint);
 
+        let in_place = ui.checkbox(
+            &mut settings.in_place,
+            egui::RichText::new(s.retopo_in_place)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        if in_place.changed() {
+            changed = true;
+        }
+        in_place.on_hover_text(s.retopo_in_place_hint);
+
         for (label, hint, value, range) in [
             (
                 s.retopo_sharp,

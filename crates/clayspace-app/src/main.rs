@@ -1094,7 +1094,70 @@ impl App {
                 fraction: None,
             });
         }
+        outstanding.extend(self.background_jobs());
         outstanding
+    }
+
+    /// The model jobs running off the interface thread, and how far along
+    /// each one says it is.
+    ///
+    /// Outstanding like a pending re-mesh is: a retopology still running is a
+    /// result the document has not received, and `wait` reported the session
+    /// quiet over one.
+    fn background_jobs(&self) -> Vec<Outstanding> {
+        [
+            ("retopology", self.retopo.jobs().progress().get()),
+            ("UV layout", self.uv.jobs().progress().get()),
+            ("conform", self.conform.jobs().progress().get()),
+            ("bake", self.bake.jobs().progress().get()),
+        ]
+        .into_iter()
+        .filter_map(|(what, progress)| {
+            progress.as_ref().map(|progress| Outstanding {
+                what: what.to_string(),
+                fraction: progress.fraction,
+            })
+        })
+        .collect()
+    }
+
+    /// Collects whatever the model jobs have finished, and publishes it.
+    ///
+    /// Once per frame, and from `settle`: an agent waiting for quiet is
+    /// waiting for the result to land, and a window that is not drawing — a
+    /// minimised one, or none at all — would otherwise never collect it.
+    fn poll_background_jobs(&mut self) {
+        let before = self.engine_undo_depth();
+        self.retopo.poll();
+        self.after_background_publish(Command::RunRetopology.label(), before);
+        let before = self.engine_undo_depth();
+        self.conform.poll();
+        self.after_background_publish(Command::RunConform.label(), before);
+        // Neither writes into the document: a layout's atlas stays in the
+        // retopology engine and a bake writes files.
+        self.uv.poll();
+        self.bake.poll();
+    }
+
+    /// What a job that just published into the document owes the rest of
+    /// the application — the same as a crossing run on this thread.
+    ///
+    /// Banked on the history Cmd+Z reads. A published retopology recorded
+    /// its engine entry and pushed nothing here, so the next Cmd+Z popped the
+    /// *previous* action's count: it took back whatever came before and left
+    /// the retopology standing.
+    fn after_background_publish(&mut self, label: &str, before: usize) {
+        let entries = self.engine_undo_depth().saturating_sub(before);
+        if entries == 0 {
+            return;
+        }
+        self.sculpt.record_external_action(label, entries);
+        self.scene.refresh();
+        self.sculpt.refresh_for_active_layer();
+        self.retopo.refresh();
+        self.document_vm.touched();
+        self.settle_geometry();
+        self.request_redraw();
     }
 
     /// Every channel a refusal arrives on, in the order the answer belongs to
@@ -5023,10 +5086,7 @@ impl App {
         // A retopology that has finished is placed here, before the interface
         // is built, so the frame that shows the new subtool is the frame that
         // learns about it. Never blocks: a job still running reports nothing.
-        self.retopo.poll();
-        self.uv.poll();
-        self.bake.poll();
-        self.conform.poll();
+        self.poll_background_jobs();
 
         // The interface is built first, because it decides where the viewport
         // is and therefore what a pointer position means.
@@ -6812,10 +6872,21 @@ impl Session for App {
         // progress instead of spinning until the budget expires.
         loop {
             let before = self.outstanding_work();
+            self.poll_background_jobs();
             self.finish_pending_geometry();
             let after = self.outstanding_work();
-            if after.is_empty() || after == before || started.elapsed() >= budget {
+            if after.is_empty() || started.elapsed() >= budget {
                 break;
+            }
+            // A job on a worker moves without this thread, so an unchanged
+            // list is not a stuck one while a job runs: it is waited on, a
+            // few milliseconds at a time, until it lands or the budget ends.
+            if self.background_jobs().is_empty() {
+                if after == before {
+                    break;
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
         let outstanding = self.outstanding_work();

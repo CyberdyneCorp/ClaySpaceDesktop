@@ -5,10 +5,11 @@
 //! the first test that says the feature is *reachable* rather than merely
 //! implemented.
 
-use clayspace_engine::{BackendPolicy, ClayDocument};
+use clayspace_engine::{BackendPolicy, ClayDocument, EngineRetopologiser};
 use clayspace_model::{
-    Combine, CombineSettings, Direction, ObjectModel, QuadMethod, Representation, RetopoModel,
-    RetopoSettings, SceneModel, SculptModel, Shape,
+    Combine, CombineSettings, ConformModel, ConformOutcome, ConformResult, Direction, LayerKey,
+    ObjectModel, QuadMethod, Representation, RetopoModel, RetopoSettings, Retopologiser,
+    SceneModel, SculptModel, Shape,
 };
 
 /// A sculpt that has become a mesh: the starting form, crossed.
@@ -22,7 +23,7 @@ fn meshed() -> Option<ClayDocument> {
 }
 
 #[test]
-fn a_mesh_subtool_is_retopologised_in_place() {
+fn an_in_place_retopology_rebuilds_the_subtool() {
     let Some(mut document) = meshed() else {
         return;
     };
@@ -47,6 +48,7 @@ fn a_mesh_subtool_is_retopologised_in_place() {
     let outcome = document
         .retopologise(RetopoSettings {
             target_quads: 600,
+            in_place: true,
             ..RetopoSettings::default()
         })
         .expect("the retopology runs");
@@ -71,12 +73,9 @@ fn a_mesh_subtool_is_retopologised_in_place() {
     );
     assert!(outcome.triangles_before > 0);
 
-    // **On the subtool itself.** This placed the result beside its source at
-    // first, which left a sculptor deleting one of two subtools after every
-    // retopology and made the stack the record of an operation history
-    // already records. ZBrush's ZRemesher, its Dynamesh and this
-    // application's own Rebuild all rebuild the thing in front of you;
-    // reported from a session as the difference that mattered.
+    // **On the subtool itself**, because that is what `in_place` asks for:
+    // the subtool in front of the sculptor rebuilt, as ZBrush's ZRemesher,
+    // its Dynamesh and this application's own Rebuild do it.
     assert_eq!(
         document.scene().layers.len(),
         subtools_before,
@@ -323,6 +322,7 @@ fn a_retopologised_subtool_and_a_triangle_one_keep_their_own_wireframes() {
     document
         .retopologise(RetopoSettings {
             target_quads: 400,
+            in_place: true,
             ..RetopoSettings::default()
         })
         .expect("the retopology runs");
@@ -400,12 +400,18 @@ fn a_retopology_and_a_hierarchy_built_from_it_are_lit() {
     let Some(mut document) = meshed() else {
         return;
     };
+    let source = active_key(&document);
     document
         .retopologise(RetopoSettings {
             target_quads: 600,
             ..RetopoSettings::default()
         })
         .expect("the retopology runs");
+    // Only the result is measured: the sculpt it was made from stays beside
+    // it, lit by its own normals, and would hide a flat result.
+    document
+        .set_layer_visible(source, false)
+        .expect("the source can be hidden");
     let (positions, normals, _, indices, _) = document.visible_mesh_geometry();
     let retopology = shading_error(&positions, &normals, &indices);
     assert!(
@@ -427,5 +433,201 @@ fn a_retopology_and_a_hierarchy_built_from_it_are_lit() {
         hierarchy < 20.0,
         "the hierarchy over the retopology draws its level {hierarchy:.1} \
          degrees off its triangles on average — unlit, like the cage it came from"
+    );
+}
+
+fn active_key(document: &ClayDocument) -> LayerKey {
+    document
+        .scene()
+        .active_layer()
+        .expect("an active layer")
+        .key
+}
+
+/// One subtool's drawn triangles and the box they fill, read from the spans
+/// the viewport is handed.
+fn drawn(document: &mut ClayDocument, layer: LayerKey) -> Option<(usize, [f32; 3], [f32; 3])> {
+    let (positions, _, _, indices, spans) = document.visible_mesh_geometry();
+    let span = spans.iter().find(|span| span.layer == layer)?;
+    let range = span.indices.start as usize..span.indices.end as usize;
+    let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for &vertex in &indices[range.clone()] {
+        let point = positions[vertex as usize];
+        for axis in 0..3 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    Some((range.len() / 3, min, max))
+}
+
+/// Retopologises the active mesh subtool with the defaults and checks the
+/// production crossing's contract: a new fixed-mesh layer, standing where the
+/// source stands, quads rather than triangles, the source untouched, and one
+/// undo that takes the whole thing back.
+fn retopologised_beside_the_source(mut document: ClayDocument, what: &str) {
+    let source = active_key(&document);
+    let subtools_before = document.scene().layers.len();
+    let history_before = document.history().depth;
+    let (triangles_before, min_before, max_before) =
+        drawn(&mut document, source).expect("the source is drawn");
+
+    let outcome = document
+        .retopologise(RetopoSettings {
+            target_quads: 600,
+            ..RetopoSettings::default()
+        })
+        .unwrap_or_else(|e| panic!("{what}: the retopology runs: {e}"));
+    assert!(outcome.is_quads(), "{what}: the result is not quads");
+
+    let scene = document.scene();
+    assert_eq!(
+        scene.layers.len(),
+        subtools_before + 1,
+        "{what}: the result did not arrive as a new subtool"
+    );
+    let result = scene.active_layer().expect("an active layer");
+    assert_ne!(result.key, source, "{what}: the source was rebuilt");
+    assert_eq!(result.representation, Representation::Mesh);
+    assert!(
+        result.name.ends_with("quads"),
+        "{what}: the result is called {:?}",
+        result.name
+    );
+    let result = result.key;
+
+    // The source, exactly as it was.
+    let (triangles_after, min_after, max_after) =
+        drawn(&mut document, source).expect("the source is still drawn");
+    assert_eq!(
+        triangles_after, triangles_before,
+        "{what}: the source's topology changed"
+    );
+    assert_eq!(
+        (min_after, max_after),
+        (min_before, max_before),
+        "{what}: the source moved"
+    );
+
+    // The result, where the source is: same box to within the surface the
+    // quadrangulator re-samples.
+    let (triangles, min, max) = drawn(&mut document, result).expect("the result is drawn");
+    assert_eq!(
+        triangles, outcome.triangles,
+        "{what}: the layer holds a different mesh than the engine reported"
+    );
+    for axis in 0..3 {
+        let extent = max_before[axis] - min_before[axis];
+        let tolerance = extent * 0.1;
+        assert!(
+            (min[axis] - min_before[axis]).abs() <= tolerance
+                && (max[axis] - max_before[axis]).abs() <= tolerance,
+            "{what}: the result's box {min:?}..{max:?} does not match the source's \
+             {min_before:?}..{max_before:?} on axis {axis}"
+        );
+    }
+
+    // One thing a sculptor did, and one undo takes it back whole.
+    assert_eq!(
+        document.history().depth,
+        history_before + 1,
+        "{what}: the retopology reached the history as more than one entry"
+    );
+    assert!(document.undo().expect("undo"), "{what}: nothing to undo");
+    assert_eq!(
+        document.scene().layers.len(),
+        subtools_before,
+        "{what}: undo left the result layer standing"
+    );
+    assert_eq!(
+        drawn(&mut document, source).map(|(triangles, _, _)| triangles),
+        Some(triangles_before),
+        "{what}: undo disturbed the source"
+    );
+}
+
+/// SDF → mesh → retopology → a new fixed-mesh layer.
+#[test]
+fn a_field_sculpt_retopologises_into_a_new_fixed_mesh_layer() {
+    let Some(document) = meshed() else {
+        return;
+    };
+    retopologised_beside_the_source(document, "SDF");
+}
+
+/// Voxel → mesh → retopology → a new fixed-mesh layer.
+#[test]
+fn a_voxel_sculpt_retopologises_into_a_new_fixed_mesh_layer() {
+    let Some(policy) = BackendPolicy::discover(None).ok() else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    document
+        .convert_layer(Direction::SdfToVoxel, 0.05, 0)
+        .expect("the starting form rasterises");
+    document
+        .convert_layer(Direction::VoxelToMesh, 0.05, 0)
+        .expect("the grid meshes");
+    retopologised_beside_the_source(document, "Voxel");
+}
+
+/// A result whose source moved while the work ran is not published.
+///
+/// The work runs off the interface thread and the sculpt stays editable, so
+/// the revision read with the source is checked at publish time — here with
+/// the new-layer placement, which has no engine compare-and-swap to lean on.
+#[test]
+fn a_stale_result_is_not_published() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let source = document.retopo_source().expect("the source is read");
+    let subtools_before = document.scene().layers.len();
+
+    // The sculpt moves while the "worker" runs: every vertex nudged, which is
+    // a real edit through a real path and moves the layer's revision.
+    let nudged: Vec<[f32; 3]> = source
+        .positions
+        .iter()
+        .map(|p| [p[0] + 0.01, p[1], p[2]])
+        .collect();
+    document
+        .apply_conform(&ConformResult {
+            positions: nudged,
+            outcome: ConformOutcome {
+                moved_vertices: source.positions.len(),
+                max_deviation: 0.01,
+                rms_deviation: 0.01,
+                flagged_count: 0,
+                flagged_returned: 0,
+            },
+        })
+        .expect("the source can be edited");
+    assert_ne!(
+        document.retopo_source_revision().ok(),
+        Some(source.revision),
+        "the edit did not move the source's revision, so this test proves nothing"
+    );
+
+    let result = EngineRetopologiser
+        .run(
+            &source,
+            RetopoSettings {
+                target_quads: 400,
+                ..RetopoSettings::default()
+            },
+            &|_, _| {},
+            &|| false,
+        )
+        .expect("the retopology runs");
+    let refused = document.place_retopology(&result, RetopoSettings::default());
+    assert!(refused.is_err(), "a stale retopology was published");
+    assert_eq!(
+        document.scene().layers.len(),
+        subtools_before,
+        "a refused publish still added a layer"
     );
 }

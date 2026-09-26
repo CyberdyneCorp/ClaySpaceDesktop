@@ -1064,6 +1064,26 @@ struct AuthoredFaces {
     triangles: usize,
 }
 
+impl AuthoredFaces {
+    /// The faces a retopology authored, or `None` when its edge list cannot
+    /// describe the vertices it came with — in which case the polyframe
+    /// derives edges from the triangulation, which is right for triangles.
+    fn checked(
+        positions: &[[f32; 3]],
+        indices: &[u32],
+        edges: &[u32],
+        faces: usize,
+    ) -> Option<Self> {
+        let bound = positions.len() as u32;
+        let usable = !edges.is_empty() && edges.len() % 2 == 0 && edges.iter().all(|&v| v < bound);
+        usable.then(|| Self {
+            edges: edges.to_vec(),
+            faces,
+            triangles: indices.len() / 3,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarriedSpan {
     pub layer: LayerKey,
@@ -1489,10 +1509,10 @@ pub struct ClayDocument {
     /// Which layer a retopology now running on a worker was asked about, and
     /// what revision it was at when the work started.
     ///
-    /// A retopology rebuilds the layer **in place**, which is what ZBrush's
-    /// ZRemesher and this application's own Rebuild both do — so the result
-    /// has to find its way back to the layer the sculptor asked about, and
-    /// `RetopoResult` carries a name rather than an identity. Stashed here at
+    /// A retopology lands beside the layer it read, or over it when asked to
+    /// work in place — either way the result has to find its way back to the
+    /// layer the sculptor asked about, and `RetopoResult` carries a name
+    /// rather than an identity. Stashed here at
     /// `retopo_source` time instead of widening the domain trait, because the
     /// identity is the *document's* business: the interface asked about "the
     /// active subtool" and which one that was is not a fact the worker should
@@ -2421,26 +2441,36 @@ impl ClayDocument {
         }
         // Recorded so undo takes the whole crossing back rather than emptying
         // the layer it just made. See `crossing_undo`.
-        if let Ok(row) = self.index_of(made) {
-            let layer = self.layers[row].id;
-            // The stamp on the entry the crossing left on top, which is what
-            // names the crossing as that entry. Taken after the entries are
-            // noticed, so it is the crossing's own and not the one under it.
-            self.note_engine_entries();
-            let Some(&stamp) = self.engine_undo_marks.last() else {
-                return Ok(made);
-            };
-            self.crossing_undo.push(Crossing {
-                layer,
-                stamp,
-                // Measured across the whole crossing rather than assumed to be
-                // one: an in-place crossing removes a layer and moves another,
-                // and neither goes into the group.
-                steps: self.engine_undo_depth().saturating_sub(depth_before).max(1),
-            });
-            self.crossing_redo.clear();
-        }
+        self.record_crossing(made, depth_before);
         Ok(made)
+    }
+
+    /// Records a layer an operation added as a crossing, so one undo takes
+    /// the whole operation back and the layer leaves the scene with it.
+    ///
+    /// `depth_before` is the engine's undo depth before the operation opened
+    /// its group.
+    fn record_crossing(&mut self, made: LayerKey, depth_before: usize) {
+        let Ok(row) = self.index_of(made) else {
+            return;
+        };
+        let layer = self.layers[row].id;
+        // The stamp on the entry the crossing left on top, which is what
+        // names the crossing as that entry. Taken after the entries are
+        // noticed, so it is the crossing's own and not the one under it.
+        self.note_engine_entries();
+        let Some(&stamp) = self.engine_undo_marks.last() else {
+            return;
+        };
+        self.crossing_undo.push(Crossing {
+            layer,
+            stamp,
+            // Measured across the whole crossing rather than assumed to be
+            // one: an in-place crossing removes a layer and moves another,
+            // and neither goes into the group.
+            steps: self.engine_undo_depth().saturating_sub(depth_before).max(1),
+        });
+        self.crossing_redo.clear();
     }
 
     /// The engine entries the recorded crossings hold past their first: what
@@ -14554,12 +14584,12 @@ impl ClayDocument {
     ) -> Result<(), ModelError> {
         let index = self.index_of(self.active_layer().key)?;
         let (key, id) = (self.layers[index].key, self.layers[index].id);
-        let (_, _, _, indices, _) = self.visible_mesh_geometry();
-        // The vertex count the layer already has, read from the geometry this
-        // side has just taken out rather than from the engine again: the two
-        // are the same numbers and asking twice needs a mutable borrow the
-        // caller does not have.
-        let existing_vertices = self.visible_mesh_geometry().0.len();
+        // This subtool's own triangles and nothing else. The whole visible
+        // scene used to be read here, so a second visible mesh subtool — the
+        // sculpt a retopology now keeps beside its result — made every
+        // conform refuse on a vertex count it could never match.
+        let (existing, _, indices) = self.active_mesh_geometry()?;
+        let existing_vertices = existing.len();
         if existing_vertices != positions.len() {
             return Err(ModelError::engine(format!(
                 "a conformação devolveu {} vértices e a camada tem {}; \
@@ -14590,6 +14620,51 @@ impl ClayDocument {
         Ok(())
     }
 
+    /// The active mesh subtool's own triangles, in its own coordinates.
+    ///
+    /// One subtool, where [`ClayDocument::visible_mesh_geometry`] assembles
+    /// every visible one: a retopology, a layout and a conform are all about
+    /// the subtool the sculptor picked, and reading the scene handed them any
+    /// other visible mesh or grid as well. In the layer's own coordinates
+    /// because that is what a replacement writes back into; a result placed
+    /// beside the source takes the source's layer transform with it.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn active_mesh_geometry(
+        &mut self,
+    ) -> Result<(Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>), ModelError> {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Mesh {
+            return Err(ModelError::engine(
+                "esta camada não é uma malha; não há triângulos para ler",
+            ));
+        }
+        let name = layer.engine_name.clone();
+        let (positions, normals, _colours, indices) = self
+            .document
+            .read_mesh_layer(&name)
+            .map_err(ModelError::engine)?;
+        if indices.is_empty() {
+            return Err(ModelError::engine(
+                "esta camada de malha ainda não carrega triângulos",
+            ));
+        }
+        Ok((positions, normals, indices))
+    }
+
+    /// The revision the layer a running retopology was asked about stands at
+    /// now. An error when it has gone, which makes any result for it stale.
+    pub(crate) fn retopo_target_revision(&mut self) -> Result<u64, ModelError> {
+        let Some((key, _)) = self.retopo_target else {
+            return Err(ModelError::engine(
+                "não há camada registada para receber esta retopologia",
+            ));
+        };
+        let id = self.layers[self.index_of(key)?].id;
+        self.document
+            .mesh_layer_revision(id)
+            .map_err(ModelError::engine)
+    }
+
     /// The revision the active mesh layer is at, and the key it belongs to.
     ///
     /// Read before a retopology is dispatched so the commit can be a
@@ -14607,14 +14682,12 @@ impl ClayDocument {
 
     /// Rebuilds a mesh layer's topology **in place**, from a retopology.
     ///
-    /// The same shape as [`ClayDocument::remesh_layer`] and for the same
-    /// reason: a sculptor asked to rebuild the topology of the thing they are
-    /// looking at, and ZBrush's ZRemesher, its Dynamesh and this
-    /// application's own Rebuild all answer that on the subtool itself.
-    /// Placing the result beside the source instead — which is what this did
-    /// first — leaves the sculptor to delete one of two subtools every time,
-    /// and makes the *stack* the record of an operation that history already
-    /// records.
+    /// What `RetopoSettings::in_place` asks for. The same shape as
+    /// [`ClayDocument::remesh_layer`]: the subtool in front of the sculptor is
+    /// rebuilt, as ZBrush's ZRemesher, its Dynamesh and this application's own
+    /// Rebuild do it. Not the default — the production crossing keeps the
+    /// sculpt and adds the fixed mesh beside it, which is
+    /// [`ClayDocument::attach_quads_beside`].
     ///
     /// `expected_revision` is what the layer was at when the work started.
     /// The engine refuses with `FORWARD_VERSION` if it has moved since, and
@@ -14661,20 +14734,82 @@ impl ClayDocument {
 
         // And the new faces, now that the geometry they describe is the one
         // the layer holds.
-        if !edges.is_empty() {
-            let bound = positions.len() as u32;
-            if edges.len() % 2 == 0 && edges.iter().all(|&v| v < bound) {
-                self.layers[index].authored = Some(AuthoredFaces {
-                    edges: edges.to_vec(),
-                    faces,
-                    triangles: indices.len() / 3,
-                });
-            }
-        }
+        self.layers[index].authored = AuthoredFaces::checked(positions, indices, edges, faces);
 
         self.refresh_mesh_bounds(key);
         self.settle_geometry_revisions();
         Ok(())
+    }
+
+    /// Adds a retopology as a **new** mesh subtool beside its source, in one
+    /// undo entry, leaving the source exactly as it was.
+    ///
+    /// The production crossing's default: the sculpt stays the sculpt, and
+    /// the fixed mesh arrives as a layer of its own that the rest of the
+    /// pipeline — a hierarchy, a layout, a bake — can be built on. Recorded as
+    /// a crossing, so one undo removes the layer rather than emptying it.
+    ///
+    /// `expected_revision` is what the source was at when the work started.
+    /// A source that moved since, or has gone, gets nothing: the result
+    /// describes a sculpt that no longer exists.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn attach_quads_beside(
+        &mut self,
+        source: LayerKey,
+        expected_revision: u64,
+        positions: &[[f32; 3]],
+        indices: &[u32],
+        edges: &[u32],
+        faces: usize,
+        name: &str,
+    ) -> Result<LayerKey, ModelError> {
+        let index = self.index_of(source).map_err(|_| {
+            ModelError::engine(
+                "a camada de origem desapareceu enquanto a retopologia corria, \
+                 por isso o resultado não foi publicado",
+            )
+        })?;
+        let revision = self
+            .document
+            .mesh_layer_revision(self.layers[index].id)
+            .map_err(ModelError::engine)?;
+        if revision != expected_revision {
+            return Err(ModelError::engine(
+                "a camada de origem mudou enquanto a retopologia corria, por \
+                 isso o resultado não foi publicado",
+            ));
+        }
+        // Where the source stands, so the result is drawn where the sculpt
+        // it was made from is drawn: the triangles came out in the source's
+        // own coordinates.
+        let transform = self.layers[index].transform;
+        let name = self.unique_layer_name(name);
+        let mesh =
+            claycore::Mesh::from_triangles(positions, indices).map_err(ModelError::engine)?;
+
+        let depth_before = self.engine_undo_depth();
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let made = self.attach_meshed_layer(mesh, &name).and_then(|made| {
+            if transform != clayspace_model::Transform::default() {
+                let row = self.index_of(made)?;
+                self.write_layer_transform(self.layers[row].id, transform)?;
+                self.layers[row].transform = transform;
+            }
+            Ok(made)
+        });
+        // Closed on the failing path too, as a crossing's group is.
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let made = made?;
+        closed?;
+
+        let row = self.index_of(made)?;
+        self.layers[row].authored = AuthoredFaces::checked(positions, indices, edges, faces);
+        self.record_crossing(made, depth_before);
+        self.refresh_mesh_bounds(made);
+        self.settle_geometry_revisions();
+        Ok(made)
     }
 
     /// The stashed retopology target, taken so it cannot be used twice.
@@ -14686,15 +14821,6 @@ impl ClayDocument {
     pub(crate) fn scene_layers_name(&self) -> String {
         self.active_layer().name.clone()
     }
-
-    // NO `attach_quads_*` HERE ANY MORE. A retopology used to arrive as a new
-    // subtool beside its source, on the reasoning that a sculptor who cannot
-    // compare the result against the sculpt cannot judge it. Reported from a
-    // session as the wrong trade: it left two subtools to choose between after
-    // every retopology, and made the *stack* the record of an operation the
-    // history already records. ZBrush's ZRemesher, its Dynamesh and this
-    // application's own Rebuild all rebuild the subtool in front of you, and
-    // one undo is the comparison. See `replace_mesh_with_quads`.
 
     /// The scene's face count, or `None` when every drawn face is a triangle.
     ///

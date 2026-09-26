@@ -2617,22 +2617,38 @@ edge loops go a *result* rather than a consequence), **field-aligned**
 **integer** parametrisation. *Pure quads* subdivides and relaxes onto the
 surface until no triangles remain.
 
-The subtool is rebuilt **in place**, in one undo entry.
+**The result is a new fixed-mesh subtool**, named after its source with
+` · quads`, standing where the source stands, in one undo entry — and the
+sculpt it was made from is left exactly as it was. That is the production
+crossing's shape: SDF, voxel or hierarchy crosses to a mesh, the mesh is
+retopologised, and the fixed mesh is the layer a hierarchy, a layout and a bake
+are built on. A field or a grid is crossed to a mesh first, explicitly, through
+the conversion panel; retopology refuses a subtool that is not a mesh rather
+than crossing it silently. Undo takes the new subtool away whole.
 
-This placed the result beside its source at first, reasoning that a retopology a
-sculptor cannot compare against the sculpt is one they cannot judge. Reported
-from a session as the wrong trade: it left two subtools to choose between after
-every retopology, and made the *stack* the record of an operation that the
-history already records. ZBrush's ZRemesher, its Dynamesh and *Refazer a malha*
-here all rebuild the subtool in front of you, and one undo is the comparison —
-so the convention won over the argument.
+*Substituir a origem* rebuilds the source subtool itself instead, which is what
+ZBrush's ZRemesher, its Dynamesh and *Refazer a malha* here do; then one undo is
+the comparison. It is offered, not defaulted: a sculpt replaced by its
+retopology is detail that comes back only through the history.
 
-The commit is a **compare-and-swap**. The work runs off the interface thread, so
-nothing stops a sculptor stroking the source while it runs;
-`clay_document_replace_mesh_layer` is given the revision the layer was at when
-the work started and refuses if it has moved, leaving the layer byte-identical.
-A stroke landing mid-retopology therefore costs the retopology rather than the
-stroke.
+Only the active subtool is read. The retopology, the UV layout and a conform's
+edit mesh used to take the whole visible scene — every visible mesh and grid —
+so a second subtool beside the one being retopologised was quietly folded into
+it.
+
+**It is a job.** The work runs off the interface thread with the engine's
+progress, and it can be cancelled; a cancelled run publishes nothing. While it
+runs it is *outstanding*: the agent's `jobs` section lists it with its
+fraction, a capture names it, and `wait` does not report the session quiet
+until it has landed.
+
+**A stale result is not published.** Nothing stops a sculptor stroking the
+source while the job runs, so the source's revision is read with its geometry
+and checked again before the result lands. A source that has moved, or has
+gone, gets nothing, and the sculptor is told the result was discarded. In place,
+`clay_document_replace_mesh_layer` also refuses on the same revision and leaves
+the layer byte-identical. A stroke landing mid-retopology therefore costs the
+retopology rather than the stroke.
 
 **It is lit by its own shape.** The result crosses back as positions and a
 triangulation and nothing else — `clay_mesh_from_triangles` takes no normals —

@@ -443,6 +443,9 @@ pub struct Strings {
     pub bake_map_names: [&'static str; clayspace_model::BakeMap::ALL.len()],
     pub retopo_pure: &'static str,
     pub retopo_pure_hint: &'static str,
+    /// Replacing the source rather than adding the result beside it.
+    pub retopo_in_place: &'static str,
+    pub retopo_in_place_hint: &'static str,
     pub retopo_sharp: &'static str,
     pub retopo_sharp_hint: &'static str,
     pub retopo_adaptivity: &'static str,
@@ -1069,8 +1072,9 @@ libera em vez de congelar.",
     remesh_uvs_dropped: "as coordenadas de textura foram descartadas",
     remesh_not_watertight: "o resultado não ficou fechado",
     retopo_heading: "Retopologia para quads",
-    retopo_hint: "reconstrói a topologia desta subferramenta como quads, com \
-                  anéis de aresta, numa só entrada do histórico",
+    retopo_hint: "constrói uma malha de quads com anéis de aresta a partir \
+                  desta subferramenta, numa nova subferramenta e numa só \
+                  entrada do histórico; a escultura fica intacta",
     retopo_target: "Quads",
     retopo_target_hint: "quantidade pretendida; o motor procura pelo \
                          comprimento de aresta, portanto aproxima e nunca acerta",
@@ -1088,6 +1092,10 @@ libera em vez de congelar.",
     retopo_pure: "Só quads",
     retopo_pure_hint: "subdivide e relaxa sobre a superfície até não sobrar \
                        triângulo nenhum",
+    retopo_in_place: "Substituir a origem",
+    retopo_in_place_hint: "reconstrói esta subferramenta em vez de acrescentar \
+                           o resultado numa nova; a escultura só volta pelo \
+                           histórico",
     retopo_sharp: "Arestas vivas",
     retopo_sharp_hint: "ângulo diedro abaixo do qual uma aresta conta como \
                         característica",
@@ -1647,8 +1655,8 @@ instead.",
     remesh_uvs_dropped: "texture coordinates were dropped",
     remesh_not_watertight: "the result did not come out closed",
     retopo_heading: "Retopologise to quads",
-    retopo_hint: "rebuilds this subtool's topology as quads with edge loops, \
-                  in one undo entry",
+    retopo_hint: "builds a quad mesh with edge loops from this subtool, as a \
+                  new subtool in one undo entry; the sculpt stays intact",
     retopo_target: "Quads",
     retopo_target_hint: "how many to aim at; the engine searches over edge \
                          length, so it is approached and never hit",
@@ -1666,6 +1674,10 @@ instead.",
     retopo_pure: "Pure quads",
     retopo_pure_hint: "subdivides and relaxes onto the surface until no \
                        triangles remain",
+    retopo_in_place: "Replace the source",
+    retopo_in_place_hint: "rebuilds this subtool instead of adding the result \
+                           as a new one; the sculpt comes back only through \
+                           the history",
     retopo_sharp: "Sharp edges",
     retopo_sharp_hint: "the dihedral angle below which an edge counts as a \
                         feature",
@@ -2226,8 +2238,9 @@ lados. Con Ctrl, libera en vez de congelar.",
     remesh_uvs_dropped: "se descartaron las coordenadas de textura",
     remesh_not_watertight: "el resultado no quedó cerrado",
     retopo_heading: "Retopología a quads",
-    retopo_hint: "reconstruye la topología de esta subherramienta como quads \
-                  con anillos de aristas, en una sola entrada del historial",
+    retopo_hint: "construye una malla de quads con anillos de aristas a partir \
+                  de esta subherramienta, como una nueva subherramienta y en \
+                  una sola entrada del historial; la escultura queda intacta",
     retopo_target: "Quads",
     retopo_target_hint: "cantidad pretendida; el motor busca por la longitud \
                          de arista, así que se aproxima y nunca acierta",
@@ -2247,6 +2260,10 @@ lados. Con Ctrl, libera en vez de congelar.",
     retopo_pure: "Solo quads",
     retopo_pure_hint: "subdivide y relaja sobre la superficie hasta que no \
                        queden triángulos",
+    retopo_in_place: "Reemplazar el origen",
+    retopo_in_place_hint: "reconstruye esta subherramienta en lugar de añadir \
+                           el resultado como una nueva; la escultura solo \
+                           vuelve por el historial",
     retopo_sharp: "Aristas vivas",
     retopo_sharp_hint: "ángulo diedro por debajo del cual una arista cuenta \
                         como característica",
