@@ -86,6 +86,20 @@ impl Direction {
         }
     }
 
+    /// Whether the crossing changes the distance field the brick surface is
+    /// meshed from.
+    ///
+    /// Only a crossing that produces a field layer, or one that removes a field
+    /// layer by replacing it in place, does. Every other crossing leaves the
+    /// field exactly as it was — the source stays, and the result is a grid or
+    /// a mesh drawn through the carried path — so re-meshing the brick surface
+    /// after one rebuilds a surface that cannot have moved. Measured on a
+    /// grid-to-field crossing that re-mesh of the unchanged layer was 160 to
+    /// 240 ms of the crossing's time.
+    pub fn changes_the_field(self, in_place: bool) -> bool {
+        self.to() == Representation::Sdf || (in_place && self.from() == Representation::Sdf)
+    }
+
     /// The crossings available from a representation.
     pub fn from_representation(representation: Representation) -> Vec<Direction> {
         Self::ALL
@@ -229,6 +243,67 @@ pub struct RepairReport {
     pub largest_void: usize,
     /// Set when there are no enclosed voids at all.
     pub airtight: bool,
+}
+
+/// Which repair a [`RepairOutcome`] is the answer to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairKind {
+    /// Holes: single-cell perforations and the openings that let the outside
+    /// into a hollow.
+    CloseHoles,
+    /// Enclosed voids.
+    FillVoids,
+}
+
+impl RepairKind {
+    /// The repair's name, in the words the command uses for it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CloseHoles => "close holes",
+            Self::FillVoids => "fill voids",
+        }
+    }
+
+    /// What `count` of this repair's subject are called.
+    pub fn subject(self, count: usize) -> &'static str {
+        match (self, count == 1) {
+            (Self::CloseHoles, true) => "hole",
+            (Self::CloseHoles, false) => "holes",
+            (Self::FillVoids, true) => "void",
+            (Self::FillVoids, false) => "voids",
+        }
+    }
+}
+
+/// What a repair found and what it did about it.
+///
+/// Stated after the repair rather than inferred from the report before it,
+/// because a hole is not a void: the report counts regions the outside cannot
+/// reach, and a perforated shell is exactly the shape whose inside the outside
+/// *can* reach. A caller that only had the report could not tell a repair that
+/// closed three holes from one that found nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepairOutcome {
+    pub kind: RepairKind,
+    /// Holes or voids the repair identified.
+    pub found: usize,
+    /// How many of those it closed.
+    pub closed: usize,
+    /// How many are still there when it has finished.
+    pub remaining: usize,
+    /// Cells the repair added. A repair only ever adds.
+    pub cells_added: usize,
+}
+
+impl std::fmt::Display for RepairOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = self.kind.subject(self.found);
+        write!(
+            f,
+            "{} {what} found, {} closed, {} remaining ({} cells added)",
+            self.found, self.closed, self.remaining, self.cells_added
+        )
+    }
 }
 
 /// What is wrong with a mesh that stops it being a subdivision cage.
@@ -518,6 +593,40 @@ mod tests {
     /// anything — which is the input a retopology pass replaces. A cage is the
     /// opposite: it is somebody's retopology, kept exactly, which is why the
     /// engine refuses a mesh it would have to mend.
+    #[test]
+    fn only_a_crossing_into_or_out_of_the_field_changes_it() {
+        for direction in Direction::ALL {
+            let into = direction.to() == Representation::Sdf;
+            let out_of = direction.from() == Representation::Sdf;
+            assert_eq!(direction.changes_the_field(false), into, "{direction:?}");
+            assert_eq!(
+                direction.changes_the_field(true),
+                into || out_of,
+                "{direction:?} in place"
+            );
+        }
+        // The two from the issue by name: a grid-to-field crossing does change
+        // the field, and a field-to-grid one beside its source does not.
+        assert!(Direction::VoxelToSdf.changes_the_field(false));
+        assert!(!Direction::SdfToVoxel.changes_the_field(false));
+        assert!(!Direction::VoxelToMesh.changes_the_field(true));
+    }
+
+    #[test]
+    fn a_repair_outcome_says_what_it_counted() {
+        let outcome = RepairOutcome {
+            kind: RepairKind::CloseHoles,
+            found: 3,
+            closed: 2,
+            remaining: 1,
+            cells_added: 40,
+        };
+        assert_eq!(
+            outcome.to_string(),
+            "3 holes found, 2 closed, 1 remaining (40 cells added)"
+        );
+    }
+
     #[test]
     fn a_cage_keeps_its_topology_and_a_baked_level_settles_into_one() {
         assert!(!Direction::MeshToMultires.ends_in_fixed_topology());

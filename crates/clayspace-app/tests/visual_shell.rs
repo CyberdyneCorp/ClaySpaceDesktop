@@ -288,6 +288,7 @@ fn state<'a>(
         conversion: clayspace_model::ConversionSettings::default(),
         remesh: clayspace_model::RemeshSettings::default(),
         remesh_outcome: None,
+        repair_outcome: None,
         retopo: clayspace_model::RetopoSettings::default(),
         retopo_outcome: None,
         retopo_unavailable: None,

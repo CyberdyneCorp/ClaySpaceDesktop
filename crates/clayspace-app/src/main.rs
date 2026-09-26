@@ -658,6 +658,14 @@ struct App {
     /// the door counts it. Nothing here is drawn twice for a repeat — see
     /// `Observable::announce`.
     operation_refusal: clayspace_vm::Observable<Option<String>>,
+    /// What the last repair found and closed, said beside its answer.
+    ///
+    /// A remark rather than a refusal: the repair happened, and "three holes
+    /// found, three closed" is the part of it nobody can see by looking. The
+    /// panel shows the same outcome; this is how the door hears it.
+    operation_remark: clayspace_vm::Observable<Option<String>>,
+    /// What the last repair found and closed, for the panel.
+    repair_outcome: Option<clayspace_model::RepairOutcome>,
     /// When the clock on "an agent acted" was last advanced.
     ///
     /// Here rather than in the ViewModel because that layer has no clock,
@@ -894,6 +902,8 @@ impl App {
             agent_gesture: AgentGesture::default(),
             sculpt_refusal: None,
             operation_refusal: clayspace_vm::Observable::new(None),
+            operation_remark: clayspace_vm::Observable::new(None),
+            repair_outcome: None,
             agent_ticked: Instant::now(),
             last_ui: Vec::new(),
             last_ppp: 1.0,
@@ -1150,6 +1160,8 @@ impl App {
             // sculptor did not type, and a door that answered this as an error
             // would report a placement that happened as one that did not.
             self.objects.remark(),
+            // What a repair found and closed.
+            &self.operation_remark,
         ]
     }
 
@@ -4473,11 +4485,31 @@ impl App {
             // repair back along with part of that stroke.
             self.sculpt
                 .record_external_action(label, self.engine_undo_depth().saturating_sub(before));
+            if matches!(
+                operation,
+                LayerOperation::CloseHoles { .. } | LayerOperation::FillVoids
+            ) {
+                self.state_repair();
+            }
             self.scene.refresh();
             self.document_vm.touched();
             self.sync_geometry();
             self.sync_mesh_layers();
             self.sync_mask();
+        }
+    }
+
+    /// Says what the repair that just ran found and closed, on the panel and
+    /// to the door.
+    ///
+    /// Announced rather than set: two repairs in a row that each found nothing
+    /// say the same sentence, and each is its own answer.
+    fn state_repair(&mut self) {
+        let outcome = self.document.with(|document| document.last_repair());
+        self.repair_outcome = outcome;
+        if let Some(outcome) = outcome {
+            self.operation_remark
+                .announce(Some(format!("{}: {outcome}", outcome.kind.label())));
         }
     }
 
@@ -4606,7 +4638,16 @@ impl App {
             self.scene.refresh();
             self.sculpt.refresh_for_active_layer();
             self.document_vm.touched();
-            self.settle_geometry();
+            // The whole-surface settle only where the field moved. Every other
+            // crossing leaves the brick surface as it was — its source stays,
+            // and a grid or a mesh is drawn through the carried path — so a
+            // settle re-meshed an unchanged layer, 160 to 240 ms of nothing.
+            // The incremental sync still picks up anything that is dirty.
+            if settings.direction.changes_the_field(settings.in_place) {
+                self.settle_geometry();
+            } else {
+                self.sync_geometry();
+            }
         }
     }
 
@@ -5194,6 +5235,7 @@ impl App {
             conversion: self.conversion,
             remesh: self.remesh,
             remesh_outcome: self.remesh_outcome,
+            repair_outcome: self.repair_outcome,
             retopo: *self.retopo.settings().get(),
             retopo_outcome: *self.retopo.last().get(),
             retopo_unavailable: localized_vm_text(
@@ -6401,7 +6443,7 @@ const NOTICE_REFUSAL_CHANNELS: usize = 15;
 
 /// How many channels carry a remark — something that did happen, said beside
 /// the answer rather than in place of it.
-const NOTICE_REMARK_CHANNELS: usize = 3;
+const NOTICE_REMARK_CHANNELS: usize = 4;
 
 /// How many channels a refusal or a remark can arrive on.
 const NOTICE_CHANNELS: usize = NOTICE_REFUSAL_CHANNELS + NOTICE_REMARK_CHANNELS;
@@ -8017,6 +8059,7 @@ mod tests {
                 (true, Some("Padrão no lugar de Raspar")),
                 (false, None),
                 (false, None),
+                (false, None),
             ],
         );
         assert_eq!(refused, None);
@@ -8068,6 +8111,10 @@ mod tests {
                     true,
                     Some("radius reaches 4.08 here, not the 400 asked for"),
                 ),
+                (
+                    true,
+                    Some("close holes: 1 hole found, 1 closed, 0 remaining (9 cells added)"),
+                ),
             ],
         );
         assert_eq!(refused, None);
@@ -8077,6 +8124,7 @@ mod tests {
                 "Padrão no lugar de Raspar".to_string(),
                 "a máscara não congelou nada".to_string(),
                 "radius reaches 4.08 here, not the 400 asked for".to_string(),
+                "close holes: 1 hole found, 1 closed, 0 remaining (9 cells added)".to_string(),
             ]
         );
     }

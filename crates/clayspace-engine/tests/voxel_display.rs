@@ -357,3 +357,46 @@ fn a_display_change_does_not_remesh_a_hidden_grid() {
         "the deferred rebuild produced a different surface"
     );
 }
+
+#[test]
+fn a_crossing_leaves_the_source_alone() {
+    // A crossing reads its source and adds a layer beside it. The grid it read
+    // has not moved a cell, so drawing the document afterwards must not mesh
+    // it again — neither its chunks nor its smooth surface.
+    use clayspace_model::Direction;
+    let mut document = sculpted();
+    let source = drawn(&mut document);
+    document
+        .convert_layer(Direction::VoxelToSdf, 0.04, 1)
+        .expect("grid to field");
+    let after = drawn(&mut document);
+    assert_eq!(
+        (document.meshed_chunks(), document.smoothed_grids()),
+        (0, 0),
+        "the crossing re-meshed the grid it read"
+    );
+    assert_eq!(after.0, source.0, "the source grid is drawn differently");
+}
+
+#[test]
+fn a_crossing_out_of_the_field_leaves_the_field_alone() {
+    // The other direction's half of the same rule: a field-to-grid crossing
+    // beside its source changes no brick, so it leaves nothing for the brick
+    // surface to re-mesh — which is what lets the application skip the
+    // whole-surface settle it used to pay after every crossing.
+    use clayspace_model::Direction;
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a starting form");
+    document.take_dirty_keys();
+    document
+        .convert_layer(Direction::SdfToVoxel, 0.05, 1)
+        .expect("field to grid");
+    assert!(!Direction::SdfToVoxel.changes_the_field(false));
+    assert!(
+        document.dirty_keys().is_empty(),
+        "a crossing that leaves the field alone dirtied {} bricks",
+        document.dirty_keys().len()
+    );
+}
