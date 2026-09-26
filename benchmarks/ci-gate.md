@@ -134,8 +134,11 @@ machines, but the ratio of the two within one run can:
 | v0.84.0 | Linux reference, CUDA | 2.54x |
 | v0.120.1 | `macos-14`, Metal, twelve runs | 2.73x median, 1.80–3.75 |
 
-It has not gone away. It is not unexplained either: the A/B report's
-addendum traced it to an intersect's influence bound being its whole layer, so
-every drag frame refills the layer, and that is now issue #282 with the figure
-to watch. Both committed baselines carry `object.drag_frame_intersect`, so it
-cannot quietly get worse.
+The A/B report's addendum traced it to an intersect's influence bound being its
+whole layer, so every drag frame refilled the layer. Issue #282 fixed it: an
+object move now refills the region the engine says the move changed
+(`clay_layer_set_transform_bound`), which for an intersect is the sweep. In
+`crates/clayspace-engine/tests/intersect_drag.rs` the intersect frame refills
+the same bricks as the subtracting control. Both committed baselines carry
+`object.drag_frame_intersect`, which was recorded before the fix, so the gate
+holds it to the old, slower figure until the baselines are re-recorded.
