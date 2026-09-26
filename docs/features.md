@@ -1774,6 +1774,28 @@ until something needs the model to be solid — a print, a boolean, a
 fabrication — so the panel reports what is wrong *before* offering to change
 anything, and offers *Preencher vazios* only when there is something to fill.
 
+**Fechar furos closes holes a sculptor can see through.** The engine's pass
+fills by a local rule — an empty cell with four of its six faces occupied —
+which seals a single-cell pinhole and nothing wider: a hole two cells across
+has two occupied faces per cell and was left open, while the repair added a few
+hundred cells elsewhere and said nothing. After the engine's pass the
+application closes every opening up to six cells across (one more per extra
+pass) that leads into a hollow, decided by flooding the way enclosure is: grow
+the solid until the openings are bridged, find the hollow the bridges seal off,
+keep only a hollow the outside reached before, and fill what lies between it
+and the outside. A dent, a groove, the hole of a ring and a wide mouth are not
+holes by that rule and are left alone; a hollow that is already sealed is a void
+and belongs to *Preencher vazios*. The whole repair is one undo step.
+
+**Each repair says what it did.** The report counts enclosed voids, and a
+perforated shell has none — its inside is reachable, which is the whole
+problem — so the report read the same before and after its holes were closed.
+Once a repair runs, the panel states the holes or voids it **found**, how many
+it **closed**, how many **remain** and how many **cells it added**, and the
+agent door hears the same as a remark beside the answer — `close holes: 1 hole
+found, 1 closed, 0 remaining (9 cells added)`. A repair that adds nothing is a
+no-op: no change, no history entry.
+
 **Regional refinement is bound and not routed.** `clay_voxel_add_level_region`
 adds a level over a region rather than everywhere, which is the point of the
 level stack: block out coarse, then pay for detail only where the detail goes.
@@ -3200,6 +3222,14 @@ other SDF layers across the call and puts them back. That is exact rather than
 approximate: a hidden layer contributes nothing to the field and showing it
 again restores the field exactly, and it is measured. Voxel and mesh layers are
 left alone, because neither carries SDF content and neither reaches that mesher.
+
+**A crossing re-meshes only what it changed.** Every crossing used to end with
+a whole-surface settle of the brick field, which re-meshed the unchanged layer
+it had read — 160 to 240 ms of a grid-to-field crossing, and pure waste for a
+crossing that never touched the field at all. The settle now runs only when the
+crossing produces a field layer or replaces one in place; every other crossing
+leaves the surface to the incremental sync, and the source grid's chunks and
+smooth surface are not meshed again (`a_crossing_leaves_the_source_alone`).
 
 **The panel states what the crossing costs before it runs**, computed from the
 cell size rather than written down, so the figures move as you move the slider:

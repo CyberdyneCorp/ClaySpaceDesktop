@@ -732,6 +732,24 @@ pub fn repair_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
                 readout(ui, s.repair_largest, thousands(report.largest_void));
             }
 
+            // What the last repair did, which the report above cannot say.
+            if let Some(outcome) = state.repair_outcome {
+                ui.add_space(space::SECTION);
+                let title = match outcome.kind {
+                    clayspace_model::RepairKind::CloseHoles => s.repair_close_holes,
+                    clayspace_model::RepairKind::FillVoids => s.repair_fill_voids,
+                };
+                ui.label(
+                    egui::RichText::new(title)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                readout(ui, s.repair_found, thousands(outcome.found));
+                readout(ui, s.repair_closed, thousands(outcome.closed));
+                readout(ui, s.repair_remaining, thousands(outcome.remaining));
+                readout(ui, s.repair_cells_added, thousands(outcome.cells_added));
+            }
+
             ui.add_space(space::SECTION);
             if ui.button(s.repair_close_holes).clicked() {
                 queue.push(Command::CloseHoles);

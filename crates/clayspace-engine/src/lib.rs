@@ -15,6 +15,7 @@ pub mod alpha;
 pub mod backend;
 pub mod compaction;
 pub mod document;
+mod holes;
 mod live;
 mod maintenance;
 pub mod multires;

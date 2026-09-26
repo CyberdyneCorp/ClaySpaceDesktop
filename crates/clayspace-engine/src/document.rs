@@ -17,8 +17,9 @@ use clayspace_model::{
     GestureSample, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, HistoryState, ImportAs,
     ImportSettings, Inserted, ItemKind, LatticeModel, LatticeState, LayerKey, LayerSummary,
     MaskModel, MaskOp, MaskOutline, MaskState, ModelError, NodeIndex, ObjectId, ObjectModel,
-    OpenError, Protection, Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats,
-    SculptModel, Shape, SkinSettings, SmoothBlur, ToolKind, VoxelDisplay, OBJECT_VERBS,
+    OpenError, Protection, Refusal, RepairKind, RepairOutcome, Representation, Scene, SceneModel,
+    SceneNode, SceneStats, SculptModel, Shape, SkinSettings, SmoothBlur, ToolKind, VoxelDisplay,
+    OBJECT_VERBS,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -1301,6 +1302,8 @@ pub struct ClayDocument {
     /// pass skips is the thing worth holding a test to, and a count says it
     /// without timing anything.
     smoothed_grids: usize,
+    /// What the last repair found and closed. See [`ClayDocument::last_repair`].
+    last_repair: Option<clayspace_model::RepairOutcome>,
     /// Whether a gesture is open and should be previewed rather than banked.
     ///
     /// Written only by [`ClayDocument::set_previewing`], because two other
@@ -1700,6 +1703,7 @@ impl ClayDocument {
             surface_epoch: 0,
             meshed_chunks: 0,
             smoothed_grids: 0,
+            last_repair: None,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
             picked_seed: std::cell::Cell::default(),
@@ -6524,25 +6528,26 @@ impl ClayDocument {
     ) -> Result<EditOutcome, ModelError> {
         let engine_name = self.active_layer().engine_name.clone();
         let layer_id = self.active_layer().id;
-        {
-            let (_, mut grid) = self
-                .document
-                .voxel_layer(&engine_name)
-                .map_err(ModelError::engine)?;
-            match operation {
-                clayspace_model::LayerOperation::CloseHoles { passes } => grid
-                    .repair_close_holes(passes.clamp(1, 16), None)
-                    .map_err(ModelError::engine)?,
-                clayspace_model::LayerOperation::FillVoids => {
-                    grid.repair_fill_voids(None).map_err(ModelError::engine)?
-                }
-                clayspace_model::LayerOperation::RefineRegion { min, max } => {
-                    grid.add_level_region(min, max)
-                        .map(|_| ())
-                        .map_err(ModelError::engine)?;
-                }
-                _ => return Ok(EditOutcome::NOTHING),
+        let changed = match operation {
+            clayspace_model::LayerOperation::CloseHoles { passes } => {
+                self.repair(|grid| Self::close_holes(grid, passes))?
             }
+            clayspace_model::LayerOperation::FillVoids => self.repair(Self::fill_voids)?,
+            clayspace_model::LayerOperation::RefineRegion { min, max } => {
+                let (_, mut grid) = self
+                    .document
+                    .voxel_layer(&engine_name)
+                    .map_err(ModelError::engine)?;
+                grid.add_level_region(min, max)
+                    .map_err(ModelError::engine)?;
+                true
+            }
+            _ => return Ok(EditOutcome::NOTHING),
+        };
+        // A repair that found nothing to close adds no cell, and saying it
+        // changed the sculpt would put an entry nobody can see in the history.
+        if !changed {
+            return Ok(EditOutcome::NOTHING);
         }
         // The whole layer may have moved: a repair is not bounded by a brush.
         self.refill(layer_id, &[])?;
@@ -6550,6 +6555,104 @@ impl ClayDocument {
             changed: true,
             dirty_bricks: self.dirty.len(),
         })
+    }
+
+    /// Runs one repair on the active grid as one undo step, and keeps what it
+    /// found for [`Self::last_repair`]. Answers whether it added anything.
+    ///
+    /// Bracketed because closing holes is the engine's pinhole pass followed
+    /// by the plugs this side places a cell at a time, and a sculptor asked for
+    /// one repair.
+    fn repair(
+        &mut self,
+        run: impl FnOnce(&mut claycore::VoxelField) -> claycore::Result<RepairOutcome>,
+    ) -> Result<bool, ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let outcome = self
+            .document
+            .voxel_layer(&engine_name)
+            .and_then(|(_, mut grid)| run(&mut grid));
+        // Closed on the failing path too, for the reason `cross` gives.
+        let closed = self.document.end_undo_group();
+        let outcome = outcome.map_err(ModelError::engine)?;
+        closed.map_err(ModelError::engine)?;
+        self.last_repair = Some(outcome);
+        Ok(outcome.cells_added > 0)
+    }
+
+    /// How far past a pinhole the hole closing reaches, at one pass.
+    ///
+    /// Openings up to twice this across are closed, so the default seals a
+    /// hole six cells wide. Each further pass reaches one cell further, the
+    /// same way it lets the engine's pinhole rule grow one cell further.
+    const HOLE_REACH: usize = 3;
+
+    /// Seals pinholes by the engine's pocket rule, then the wider openings
+    /// into a hollow that rule cannot see. See [`crate::holes`].
+    fn close_holes(
+        grid: &mut claycore::VoxelField,
+        passes: i32,
+    ) -> claycore::Result<RepairOutcome> {
+        let passes = passes.clamp(1, 16);
+        let reach = Self::HOLE_REACH + passes as usize - 1;
+        let cells_before = grid.occupied_count()?;
+        let Some(before) = crate::holes::Cells::read(grid, reach)? else {
+            return Ok(RepairOutcome {
+                kind: RepairKind::CloseHoles,
+                found: 0,
+                closed: 0,
+                remaining: 0,
+                cells_added: 0,
+            });
+        };
+        grid.repair_close_holes(passes, None)?;
+        // The pinhole pass only adds cells with four occupied neighbours,
+        // which are inside the bounds it started from, so the same window
+        // holds everything it did.
+        let mut after = before.reread(grid)?;
+        let pinholes = crate::holes::added_pieces(&before, &after);
+        let closing = after.close_through_holes(reach);
+        for &i in &closing.cells {
+            grid.set(after.cell(i), after.index_at(i))?;
+        }
+        let closed = pinholes + closing.found;
+        Ok(RepairOutcome {
+            kind: RepairKind::CloseHoles,
+            found: closed + closing.remaining,
+            closed,
+            remaining: closing.remaining,
+            cells_added: grid.occupied_count()?.saturating_sub(cells_before),
+        })
+    }
+
+    /// Fills every enclosed void, counted by the report either side of it.
+    fn fill_voids(grid: &mut claycore::VoxelField) -> claycore::Result<RepairOutcome> {
+        let cells_before = grid.occupied_count()?;
+        let before = grid.repair_report()?;
+        grid.repair_fill_voids(None)?;
+        let after = grid.repair_report()?;
+        Ok(RepairOutcome {
+            kind: RepairKind::FillVoids,
+            found: before.enclosed_voids,
+            closed: before.enclosed_voids.saturating_sub(after.enclosed_voids),
+            remaining: after.enclosed_voids,
+            cells_added: grid.occupied_count()?.saturating_sub(cells_before),
+        })
+    }
+
+    /// What the last repair found, closed and left, where one has run.
+    ///
+    /// Asked after the repair rather than returned by it, because the repair
+    /// runs through [`SculptModel::apply_operation`], whose answer is the same
+    /// for every operation. The report the panel shows beforehand counts
+    /// enclosed voids only, and a perforated shell has none — its inside is
+    /// reachable, which is the whole problem — so without this a repair that
+    /// closed three holes and one that found nothing looked the same.
+    pub fn last_repair(&self) -> Option<RepairOutcome> {
+        self.last_repair
     }
 
     /// What fraction of a stamp's spacing NUDGE pushes by.
@@ -11547,6 +11650,7 @@ impl ClayDocument {
             surface_epoch: 0,
             meshed_chunks: 0,
             smoothed_grids: 0,
+            last_repair: None,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
             picked_seed: std::cell::Cell::default(),
