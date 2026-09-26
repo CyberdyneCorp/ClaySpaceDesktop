@@ -274,16 +274,16 @@ mod tests {
     /// display are in the table now; these are not, so a sculptor on English
     /// or Spanish still meets Portuguese in them.
     ///
-    /// Ten until the representation bar took the viewport bar's line: that one
-    /// drew `Representation::label`, the engine's own word, under a translated
-    /// prefix.
+    /// The five remaining calls are locale-invariant symbols or user-supplied
+    /// names: SI units, keyboard chords, axis letters, locale autonyms, and
+    /// imported object names. They need no translation.
     ///
     /// The number may go **down** freely. It going *up* means a new control
     /// was wired to a domain label instead of to the table, which is the
     /// mistake this exists to stop repeating while the backlog is worked off.
     /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
     /// fill all three locales, add an accessor, and call it here.
-    const DOMAIN_STRINGS_STILL_DRAWN: usize = 10;
+    const DOMAIN_STRINGS_STILL_DRAWN: usize = 5;
 
     /// The domain accessors that return a *localisable* string.
     ///
@@ -358,6 +358,38 @@ mod tests {
              `DOMAIN_STRINGS_STILL_DRAWN` to {drawn} so the ratchet holds the \
              ground that was just taken"
         );
+    }
+
+    #[test]
+    fn the_shell_does_not_add_literal_user_facing_labels() {
+        for (path, source) in crate_source()
+            .into_iter()
+            .filter(|(path, _)| path.contains("shell"))
+        {
+            for (line, text) in source.lines().enumerate() {
+                let visible_literal = [
+                    "ui.label(\"",
+                    "ui.button(\"",
+                    "ui.checkbox(\"",
+                    "ui.radio(\"",
+                    "ui.selectable_label(\"",
+                    "on_hover_text(\"",
+                    "egui::Window::new(\"",
+                    "RichText::new(\"",
+                    "selected_text(\"",
+                    "ui.heading(\"",
+                ]
+                .iter()
+                .any(|sink| text.contains(sink));
+                let diagnostic_literal =
+                    text.contains("readout(ui, \"") && !text.contains("readout(ui, \"GPU\"");
+                assert!(
+                    !visible_literal && !diagnostic_literal,
+                    "{path}:{} adds a visible literal outside Strings: {text}",
+                    line + 1
+                );
+            }
+        }
     }
 
     /// What a component writes above a `Color32::from_*` that shades a colour

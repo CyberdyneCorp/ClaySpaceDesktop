@@ -177,17 +177,21 @@ impl ToolDiagnostics {
     /// upstream of the shelf put it in hand — which is the kind of thing a
     /// report exists to surface.
     pub fn describe(self) -> String {
+        let representation = match self.representation {
+            crate::Representation::Multires => "hierarchy",
+            other => other.label(),
+        };
         match self.tool.binding_on(self.representation) {
             Some(binding) => format!(
                 "{} on {} — {}",
-                self.tool.label(),
-                self.representation.label(),
+                self.tool.key(),
+                representation,
                 binding.describe()
             ),
             None => format!(
                 "{} on {} — no binding here",
-                self.tool.label(),
-                self.representation.label()
+                self.tool.key(),
+                representation
             ),
         }
     }
@@ -873,7 +877,7 @@ mod tests {
             representation: crate::Representation::Sdf,
         });
         let text = diagnostics.to_report();
-        assert!(text.contains("tool: Padrão on SDF"), "{text}");
+        assert!(text.contains("tool: standard on SDF"), "{text}");
         assert!(
             text.contains("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
             "{text}"
@@ -891,7 +895,7 @@ mod tests {
             representation: crate::Representation::Voxel,
         });
         let grid = diagnostics.to_report();
-        assert!(grid.contains("tool: Padrão on voxel"), "{grid}");
+        assert!(grid.contains("tool: standard on voxel"), "{grid}");
         assert!(grid.contains("clay_voxel_set_brush"), "{grid}");
     }
 
@@ -910,7 +914,7 @@ mod tests {
         assert!(
             diagnostics
                 .to_report()
-                .contains("Raspar on SDF — no binding here"),
+                .contains("scrape on SDF — no binding here"),
             "{}",
             diagnostics.to_report()
         );

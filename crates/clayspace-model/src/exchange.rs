@@ -170,10 +170,10 @@ impl Format {
     pub fn drops(self) -> &'static [&'static str] {
         match self {
             // PLY carries colour well and has no standard texture coordinates.
-            Self::Ply => &["coordenadas de textura"],
+            Self::Ply => &["texture coordinates"],
             // FBX round trips through the engine's writer without vertex
             // colour, which is what a sculpt's polypaint would need.
-            Self::Fbx => &["cores de vértice"],
+            Self::Fbx => &["vertex colors"],
             Self::Obj | Self::Glb => &[],
         }
     }
@@ -183,6 +183,18 @@ impl Format {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportWarning {
     pub message: String,
+    pub kind: ExportWarningKind,
+}
+
+/// The cause of a warning, retained so each interface locale can word it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportWarningKind {
+    DropsTextureCoordinates(Format),
+    DropsVertexColors(Format),
+    Mesher(ExportMesher),
+    MissingNormals,
+    NonManifold(usize),
+    OpenBoundary(usize),
 }
 
 impl ExportWarning {
@@ -197,14 +209,35 @@ impl ExportWarning {
         has_mesh_layers: bool,
     ) -> Vec<Self> {
         let mut warnings = Vec::new();
-        for dropped in format.drops() {
+        let dropped = match format {
+            Format::Ply => Some((
+                ExportWarningKind::DropsTextureCoordinates(format),
+                "texture coordinates",
+            )),
+            Format::Fbx => Some((
+                ExportWarningKind::DropsVertexColors(format),
+                "vertex colors",
+            )),
+            Format::Obj | Format::Glb => None,
+        };
+        if let Some((kind, attribute)) = dropped {
             warnings.push(Self {
-                message: format!("{} não guarda {dropped}", format.extension().to_uppercase()),
+                message: format!(
+                    "{} does not store {attribute}",
+                    format.extension().to_uppercase()
+                ),
+                kind,
             });
         }
-        if let Some(caveat) = settings.mesher.caveat() {
+        if settings.mesher.caveat().is_some() {
+            let (name, caveat) = match settings.mesher {
+                ExportMesher::Fast => ("Fast", "not manifold"),
+                ExportMesher::Sharp => ("Sharp features", "experimental in the engine"),
+                ExportMesher::Watertight => unreachable!(),
+            };
             warnings.push(Self {
-                message: format!("{}: {caveat}", settings.mesher.label()),
+                message: format!("{name}: {caveat}"),
+                kind: ExportWarningKind::Mesher(settings.mesher),
             });
         }
         if has_mesh_layers {
@@ -213,7 +246,8 @@ impl ExportWarning {
             // field always carries normals, so any mesh layer without them
             // costs the export its normals entirely.
             warnings.push(Self {
-                message: "camadas de malha sem normais removem as normais do resultado".to_string(),
+                message: "mesh layers without normals remove normals from the result".to_string(),
+                kind: ExportWarningKind::MissingNormals,
             });
         }
         warnings
@@ -245,17 +279,19 @@ impl ExportWarning {
         if !mesh.manifold {
             warnings.push(Self {
                 message: format!(
-                    "a malha exportada não é manifold: {} aresta(s) com mais de duas faces",
+                    "exported mesh is not manifold: {} edges have more than two faces",
                     mesh.non_manifold_edges
                 ),
+                kind: ExportWarningKind::NonManifold(mesh.non_manifold_edges),
             });
         }
         if !mesh.watertight {
             warnings.push(Self {
                 message: format!(
-                    "a malha exportada não é fechada: {} aresta(s) de borda",
+                    "exported mesh is not watertight: {} boundary edges",
                     mesh.boundary_edges
                 ),
+                kind: ExportWarningKind::OpenBoundary(mesh.boundary_edges),
             });
         }
         warnings
@@ -327,7 +363,7 @@ mod tests {
         let warnings = ExportWarning::for_export(Format::Ply, ExportSettings::default(), false);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("PLY"));
-        assert!(warnings[0].message.contains("textura"));
+        assert!(warnings[0].message.contains("texture"));
     }
 
     #[test]
@@ -355,7 +391,7 @@ mod tests {
         // layer with no normals costs the entire export its normals.
         let warnings = ExportWarning::for_export(Format::Obj, ExportSettings::default(), true);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("normais"));
+        assert!(warnings[0].message.contains("normals"));
     }
 
     #[test]
@@ -422,7 +458,7 @@ mod tests {
             boundary_edges: 12,
         });
         assert_eq!(open.len(), 1, "{open:?}");
-        assert!(open[0].message.contains("fechada"), "{open:?}");
+        assert!(open[0].message.contains("watertight"), "{open:?}");
 
         let both = ExportWarning::for_written_mesh(WrittenMesh {
             watertight: false,
