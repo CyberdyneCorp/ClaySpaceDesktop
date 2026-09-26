@@ -222,6 +222,7 @@ fn detail_survives_a_change_to_the_form_beneath_it() {
         "the two hierarchies are the same subject, so they are the same size"
     );
     let (peak_vertex, height_before, direction_before) = tallest_difference(&before, &flat);
+    let detail_before = detail_signature(&before, &flat);
 
     // Now the form underneath, at the cage. A broad dab centred elsewhere, so
     // the sheet under the wrinkle tilts rather than merely rising.
@@ -252,6 +253,11 @@ fn detail_survives_a_change_to_the_form_beneath_it() {
     let after: Vec<[f32; 3]> = drawn(&mut wrinkled);
     let moved_flat: Vec<[f32; 3]> = drawn(&mut plain);
     let (peak_after, height_after, direction_after) = tallest_difference(&after, &moved_flat);
+    assert_eq!(
+        detail_signature(&after, &moved_flat),
+        detail_before,
+        "the top-level detail magnitude changed at a vertex after the cage edit"
+    );
 
     assert_eq!(
         peak_vertex, peak_after,
@@ -273,6 +279,20 @@ fn detail_survives_a_change_to_the_form_beneath_it() {
          form that has rolled underneath it; a frame carried up from the cage \
          turns with the cage, which is the entire claim of this tier"
     );
+}
+
+/// Quantized per-vertex detail magnitudes, independent of the cage's rotation.
+fn detail_signature(detailed: &[[f32; 3]], plain: &[[f32; 3]]) -> Vec<i32> {
+    detailed
+        .iter()
+        .zip(plain)
+        .map(|(here, there)| {
+            let squared = (0..3)
+                .map(|axis| (here[axis] - there[axis]).powi(2))
+                .sum::<f32>();
+            (squared.sqrt() * 1_000.0).round() as i32
+        })
+        .collect()
 }
 
 /// The tallest per-vertex difference between two same-sized point sets, as

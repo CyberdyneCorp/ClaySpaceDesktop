@@ -6,6 +6,6 @@
 - [x] Bind signed SDF surface magnify for Inflate and Pinch. (#201)
 - [ ] Decide each SDF duplicate by a measured distinction or remove its binding with a `ToolNote`. (#203)
 - [x] Offer voxel Crease as a narrow-erode recipe and pin its profile; never claim a dedicated engine verb. (#204)
-- [ ] Add per-representation behavioural fixtures for every fidelity claim, including existing promises. (#216)
+- [x] Add per-representation behavioural fixtures for every fidelity claim, including existing promises. Dynamic locality remains pending in `a-representation-that-adapts`. (#216)
 - [x] Preserve settings per tool and representation, and report substitutions to UI and MCP callers. (#217)
 - [ ] Update `docs/features.md` and diagnostics to describe the bindings that actually ship; run `openspec validate --all --strict`.
