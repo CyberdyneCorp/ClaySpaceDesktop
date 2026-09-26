@@ -23,6 +23,7 @@ mod figures;
 mod groups;
 mod json;
 mod load;
+mod machine;
 mod report;
 mod run;
 mod skip;
@@ -32,6 +33,7 @@ use clayspace_engine::BackendPolicy;
 
 use figures::Figure;
 use groups::VIEWPORT;
+use machine::Machine;
 use run::Run;
 
 fn main() {
@@ -58,8 +60,19 @@ fn main() {
         std::process::exit(2);
     };
 
+    // Read before anything is measured, so a bad value costs nothing.
+    let scale = match tolerance_scale(flag("--tolerance-scale").as_deref()) {
+        Ok(scale) => scale,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
+
     let where_ = conditions(&policy, VIEWPORT);
-    println!("measuring: {}\n", where_.describe());
+    let machine = Machine::sample();
+    println!("measuring: {}", where_.describe());
+    println!("on: {}\n", machine.describe());
 
     // Sampled before the warm-up: once this process is sculpting, the load is
     // mostly this process, and says nothing about who else is competing.
@@ -120,7 +133,7 @@ fn main() {
                 eprintln!("\nrecording a baseline anyway: {}", load.describe());
             }
         }
-        match json::write(&path, &where_, load.as_ref(), &run) {
+        match json::write(&path, &where_, &machine, load.as_ref(), &run) {
             Ok(()) => println!("\nwritten to {path}"),
             Err(e) => {
                 eprintln!("could not write {path}: {e}");
@@ -133,7 +146,7 @@ fn main() {
     let mut failed = report_budgets(&run, enforce);
 
     if let Some(path) = baseline {
-        match compare::compare(&path, &where_, load.as_ref(), &run) {
+        match compare::compare(&path, &where_, &machine, load.as_ref(), &run, scale) {
             Ok(regressions) => failed |= regressions,
             Err(e) => {
                 eprintln!("\ncould not compare against {path}: {e}");
@@ -208,6 +221,23 @@ fn refuses_a_busy_run(comparing: bool, busy: bool, allow_busy: bool) -> bool {
     !comparing && busy && !allow_busy
 }
 
+/// `--tolerance-scale`: how many times wider than a workstation's tolerances
+/// this machine's comparison runs. Absent means 1.
+///
+/// Below 1 is refused rather than honoured: a gate tighter than the tolerances
+/// were measured to allow fails on noise, which is how a gate gets ignored.
+fn tolerance_scale(given: Option<&str>) -> Result<f64, String> {
+    let Some(text) = given else {
+        return Ok(1.0);
+    };
+    match text.parse::<f64>() {
+        Ok(scale) if scale.is_finite() && scale >= 1.0 => Ok(scale),
+        _ => Err(format!(
+            "--tolerance-scale takes a number of at least 1, not {text:?}"
+        )),
+    }
+}
+
 fn report_budgets(run: &Run, enforce: bool) -> bool {
     let over: Vec<String> = run
         .figures()
@@ -267,5 +297,27 @@ mod busy_machine {
     #[test]
     fn saying_you_mean_it_gets_past_the_refusal() {
         assert!(!refuses_a_busy_run(false, true, true));
+    }
+}
+
+#[cfg(test)]
+mod tolerance_scale {
+    use super::tolerance_scale;
+
+    #[test]
+    fn absent_is_the_workstation_tolerance() {
+        assert_eq!(tolerance_scale(None), Ok(1.0));
+    }
+
+    #[test]
+    fn the_ci_value_is_taken() {
+        assert_eq!(tolerance_scale(Some("8")), Ok(8.0));
+    }
+
+    #[test]
+    fn a_tighter_or_meaningless_scale_is_refused() {
+        for bad in ["0.5", "0", "-2", "NaN", "inf", "eight"] {
+            assert!(tolerance_scale(Some(bad)).is_err(), "{bad}");
+        }
     }
 }

@@ -6,36 +6,71 @@
 //! measurement that quietly stopped running looks exactly like a measurement
 //! that did not regress — so it fails the gate.
 
+use std::collections::BTreeMap;
+
 use clayspace_app::Conditions;
 
 use crate::json::{self, Baseline};
 use crate::load::Load;
+use crate::machine::Machine;
 use crate::run::Run;
 use crate::skip::Skip;
 
 /// Compares against a recorded baseline, refusing to compare unlike runs.
+///
+/// A refusal is an error, not a pass. The performance job compared against a
+/// baseline recorded before the reference suite existed, `unlike` declined,
+/// this returned "nothing regressed", and the job was green for every commit
+/// for months (#32, #189). A gate that declines to compare says exactly what a
+/// gate that compared and found nothing says, so declining has to fail.
+///
+/// `scale` multiplies every figure's tolerance; see `Figure::regressed_against`.
 pub fn compare(
     path: &str,
     where_: &Conditions,
+    machine: &Machine,
     load: Option<&Load>,
     run: &Run,
+    scale: f64,
 ) -> std::io::Result<bool> {
     let baseline = json::read(path)?;
-    if let Some(refusal) = unlike(where_, &baseline) {
-        println!("\n{refusal} Not comparing.");
-        return Ok(false);
+    judge(&baseline, where_, machine, load, run, scale)
+}
+
+fn judge(
+    baseline: &Baseline,
+    where_: &Conditions,
+    machine: &Machine,
+    load: Option<&Load>,
+    run: &Run,
+    scale: f64,
+) -> std::io::Result<bool> {
+    if let Some(refusal) = unlike(where_, baseline) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{refusal} A gate that declines to compare is not a gate that passed."),
+        ));
     }
 
-    if let Some(note) = across_engines(where_, &baseline) {
+    for note in [
+        across_engines(where_, baseline),
+        across_machines(machine, baseline),
+    ]
+    .into_iter()
+    .flatten()
+    {
         println!("\n{note}");
     }
-    let regressed = table(&baseline, run);
-    let missing = missing(&baseline, run);
+    if scale != 1.0 {
+        println!("\ntolerances widened {scale}x for this machine's noise (--tolerance-scale)");
+    }
+    let regressed = table(baseline, run, scale);
+    let missing = missing(baseline, run);
     // Said after the table rather than before it: a regression on a busy box
     // is still worth reading, it just is not yet worth acting on. Whoever
     // sees red needs this line next to the red, not scrolled off above it.
     if regressed {
-        if let Some(note) = noise(load, &baseline) {
+        if let Some(note) = noise(load, baseline) {
             println!("\n{note}");
         }
     }
@@ -66,6 +101,41 @@ fn across_engines(where_: &Conditions, baseline: &Baseline) -> Option<String> {
             "Note: the baseline was recorded against engine {theirs} and this run \
              is engine {mine}. Every change below is that difference plus whatever \
              else moved."
+        )
+    })
+}
+
+/// Says out loud when the baseline was recorded on a different machine.
+///
+/// Not a refusal, for the same reason `across_engines` is not: platform,
+/// architecture and backend already refuse the comparisons that cannot mean
+/// anything, and a developer's Mac against the CI runner's baseline is still
+/// worth reading. But a workstation several times faster than a hosted runner
+/// makes every row below look like an improvement, and the reader should know
+/// why before believing it.
+fn across_machines(machine: &Machine, baseline: &Baseline) -> Option<String> {
+    if baseline.machine.is_empty() {
+        return Some("Note: the baseline does not name the machine it was recorded on.".into());
+    }
+    let mine: BTreeMap<String, String> = machine
+        .fields()
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+    let differs = ["cpu", "cores", "memory_gib"]
+        .iter()
+        .any(|key| mine.get(*key) != baseline.machine.get(*key));
+    differs.then(|| {
+        let theirs: Vec<String> = baseline
+            .machine
+            .iter()
+            .map(|(key, value)| format!("{key} {value}"))
+            .collect();
+        format!(
+            "Note: the baseline was recorded on another machine ({}); this run is on \
+             {}. Absolute figures differ by the machines as well as the code.",
+            theirs.join(", "),
+            machine.describe()
         )
     })
 }
@@ -137,7 +207,7 @@ fn unlike(where_: &Conditions, baseline: &Baseline) -> Option<String> {
 }
 
 /// Every figure this run measured, against what the baseline says.
-fn table(baseline: &Baseline, run: &Run) -> bool {
+fn table(baseline: &Baseline, run: &Run, scale: f64) -> bool {
     println!(
         "\n{:<40} {:>10} {:>10} {:>9}",
         "figure", "baseline", "now", "change"
@@ -149,7 +219,7 @@ fn table(baseline: &Baseline, run: &Run) -> bool {
             continue;
         };
         let ratio = figure.value / value.max(f64::MIN_POSITIVE);
-        let worse = figure.regressed_against(value);
+        let worse = figure.regressed_against(value, scale);
         println!(
             "{name:<40} {value:>10.2} {:>10.2} {:>8.0}%{}{}",
             figure.value,
@@ -337,6 +407,7 @@ mod tests {
             spread: BTreeMap::new(),
             skipped: BTreeMap::new(),
             load_per_core: None,
+            machine: BTreeMap::new(),
         }
     }
 
@@ -427,14 +498,100 @@ mod tests {
     fn a_regression_fails() {
         let mut run = Run::new(None);
         run.insert("dab.median", Figure::ms(10.0, None));
-        assert!(table(&baseline(&[("dab.median", 2.0)]), &run));
+        assert!(table(&baseline(&[("dab.median", 2.0)]), &run, 1.0));
     }
 
     #[test]
     fn holding_steady_does_not() {
         let mut run = Run::new(None);
         run.insert("dab.median", Figure::ms(2.1, None));
-        assert!(!table(&baseline(&[("dab.median", 2.0)]), &run));
+        assert!(!table(&baseline(&[("dab.median", 2.0)]), &run, 1.0));
+    }
+
+    /// Issue #189, the defect this change exists for: a baseline `unlike`
+    /// declines used to return "nothing regressed", so a gate comparing
+    /// against a stale file was green for every commit.
+    #[test]
+    fn a_refusal_to_compare_fails_rather_than_passes() {
+        let mut stale = baseline(&[("dab.median", 2.0)]);
+        stale.scenes.clear();
+        let mut run = Run::new(None);
+        run.insert("dab.median", Figure::ms(2.0, None));
+        let refusal = judge(&stale, &conditions(), &Machine::default(), None, &run, 1.0)
+            .expect_err("a refusal is a failure");
+        assert!(
+            refusal.to_string().contains("does not state its scenes"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_like_baseline_is_judged() {
+        let mut run = Run::new(None);
+        run.insert("dab.median", Figure::ms(2.0, None));
+        let regressed = judge(
+            &baseline(&[("dab.median", 2.0)]),
+            &conditions(),
+            &Machine::default(),
+            None,
+            &run,
+            1.0,
+        )
+        .expect("compared");
+        assert!(!regressed);
+    }
+
+    /// The CI gate's scale: a slowdown hosted-runner noise produces passes,
+    /// and one past the stated threshold still fails.
+    #[test]
+    fn the_ci_scale_still_fails_an_order_of_magnitude() {
+        let recorded = baseline(&[("dab.median", 2.0)]);
+        let mut noisy = Run::new(None);
+        noisy.insert("dab.median", Figure::ms(10.0, None));
+        assert!(!table(&recorded, &noisy, 10.0));
+        let mut broken = Run::new(None);
+        broken.insert("dab.median", Figure::ms(40.0, None));
+        assert!(table(&recorded, &broken, 10.0));
+    }
+
+    #[test]
+    fn another_machine_is_announced() {
+        let mut theirs = baseline(&[]);
+        theirs.machine = [("cpu".to_string(), "Apple M1 (Virtual)".to_string())]
+            .into_iter()
+            .collect();
+        let mine = Machine {
+            cpu: Some("Apple M3 Max".into()),
+            ..Machine::default()
+        };
+        let note = across_machines(&mine, &theirs).expect("announced");
+        assert!(note.contains("Apple M1 (Virtual)"), "{note}");
+        assert!(note.contains("Apple M3 Max"), "{note}");
+    }
+
+    #[test]
+    fn the_same_machine_says_nothing() {
+        let mine = Machine {
+            cpu: Some("Apple M1 (Virtual)".into()),
+            cores: Some(3),
+            runner: Some("macos14 1".into()),
+            ..Machine::default()
+        };
+        let mut theirs = baseline(&[]);
+        theirs.machine = mine
+            .fields()
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        // A new runner image on the same hardware is not a different machine.
+        theirs.machine.insert("runner".into(), "macos14 2".into());
+        assert_eq!(across_machines(&mine, &theirs), None);
+    }
+
+    #[test]
+    fn a_baseline_that_names_no_machine_is_announced() {
+        let note = across_machines(&Machine::default(), &baseline(&[])).expect("announced");
+        assert!(note.contains("does not name"), "{note}");
     }
 
     #[test]

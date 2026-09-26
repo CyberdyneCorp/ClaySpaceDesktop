@@ -39,9 +39,14 @@ suite existed, so the comparison was refused, `compare` returned "nothing
 failed", and the job went green for every commit for months. A gate in that
 state says exactly what a working gate says.
 
+Once a baseline the gate can compare against is committed for the platform, a
+refusal SHALL fail the run: it exits non-zero, which fails the job, because a
+refusal that exits cleanly is still a green check on every commit (#189).
+
 #### Scenario: The baseline cannot be compared against
 - **WHEN** a run is given a baseline it refuses to compare with
 - **THEN** it states the refusal and the reason, rather than reporting success
+- **THEN** it exits non-zero, and the job fails
 
 ### Requirement: A crash is told apart from a verdict
 A benchmark run that dies on a signal SHALL be distinguished from one that

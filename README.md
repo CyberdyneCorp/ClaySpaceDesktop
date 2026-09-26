@@ -106,9 +106,12 @@ report says which part of a document a byte belongs to.
 | Sculpting tools | 21 across five representations · 15 SDF, 13 voxel, 17 mesh, 16 on a subdivision hierarchy, 16 on an adaptive surface |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
-The timing figures are `benchmarks/baseline-linux-x86_64.json`: Linux x86_64 on
-CUDA, recorded against ClayCore 0.52.2 on a quiet machine — 0.13 load per core,
-stamped in the file beside the rest of the conditions. The nine `subtool.*`
+The timing figures are `benchmarks/archive/linux-x86_64-cuda-engine-0.52.2.json`:
+Linux x86_64 on CUDA, recorded against ClayCore 0.52.2 on a quiet workstation —
+0.13 load per core, stamped in the file beside the rest of the conditions. It
+was the Linux gate's baseline until #189 moved both gates onto baselines the CI
+runners recorded, and it is kept because it is still the quietest whole run
+anyone has taken. The nine `subtool.*`
 figures were added to that file from a later whole run on the same machine, at
 0.08 load per core, rather than by re-recording it: a re-recording moves the
 value every future run is judged against, and the comparison that run made
@@ -125,14 +128,24 @@ refused as unbounded. It runs, so it is measured rather than excused. The
 comparison that run made found nothing else moved by more than 1.19x, inside
 the 1.5 tolerance.
 
-There is a baseline per platform, and `just bench-compare` picks by `os()` —
-comparing a Linux run against a macOS recording measures the difference between
-two machines and calls it a regression. The macOS reference,
-`benchmarks/baseline-macos-aarch64.json`, still reads ClayCore 0.29.1 and
-predates the reference suite: it names one scene where the suite has five, so a
-macOS comparison refuses to run and says which scenes it does not have, rather
-than reporting the difference between two suites as ninety regressions.
-Re-recording it needs a macOS machine.
+**Performance is gated on both platforms.** CI's Performance job runs the whole
+suite on `macos-14` and on `ubuntu-24.04` and compares each against
+`benchmarks/baseline-macos-aarch64.json` or `benchmarks/baseline-linux-x86_64.json`,
+both recorded on those runner images at the current pin by the dispatchable
+`Record a baseline` job; each file's `conditions.machine` names the processor,
+cores, memory, OS and runner image that produced it. The job fails on a figure
+worse than its tolerance times a per-platform scale — **3 on Linux** (4.5x for
+a mean) and **10 on macOS** (15x for a mean, 20x for a p95 or a one-shot
+figure) — on a figure the baseline measured that stopped being measured, and on
+a baseline it refuses to compare against. The scales are measured, not chosen:
+a hosted Mac moves single figures by up to 10x between two runs of an unchanged
+tree, a Linux runner by under 3x, and `benchmarks/ci-gate.md` has the runs
+behind both numbers. So macOS CI catches an order-of-magnitude regression,
+Linux CI a several-fold one, and both catch a measurement that went missing;
+the workstation tolerances (1.5x a mean) are for a quiet machine, with
+`just bench-to` and `just bench-against`. The baselines were recorded
+before the performance work in epic #150 lands, as a floor, and each change
+from it re-records them with the reason.
 
 Two things about reading a comparison against either file. Each figure now
 carries the spread it was reduced from — the sample count, the minimum, the
@@ -1436,7 +1449,7 @@ long-form commands live in one place. `just` on its own lists them.
 | `just visual` | Render every visual test and open the captures |
 | `just bench` | The performance table: every brush, operation, conversion and bake |
 | `just bench-only brush` | One group of it, for when the whole table is too long to wait for |
-| `just bench-compare` | Against the recorded baseline for this platform. CI runs it on macOS, where the baseline predates the reference suite, so the job refuses rather than compares — see the note on the facts table |
+| `just bench-compare` | Against the recorded baseline for this platform, which the CI runner recorded. CI runs it on macOS (`--tolerance-scale 10`) and Linux (`--tolerance-scale 3`) — see the note on the facts table |
 | `just bench-to run.json` | Record a whole run somewhere that is not the committed baseline |
 | `just bench-against run.json` | Compare against a run recorded elsewhere — the other half of an engine A/B |
 | `just segments` | Per-segment cost of every brush, which is what a sculptor feels as lag |

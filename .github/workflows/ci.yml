@@ -328,23 +328,38 @@ jobs:
           path: target/visual
           if-no-files-found: ignore
 
-  # Figures, not assertions. The gate is a *regression* against a recorded
-  # baseline — the specification asks for performance to be measured in CI
-  # rather than asserted there, and absolute budgets that hold on a developer's
-  # machine and not on a shared runner teach people to ignore the gate.
-  # Budget breaches are printed either way.
+  # Figures, not assertions. The gate is a *regression* against a baseline
+  # recorded on the same runner image — the specification asks for performance
+  # to be measured in CI rather than asserted there, and absolute budgets that
+  # hold on a developer's machine and not on a shared runner teach people to
+  # ignore the gate. Budget breaches are printed either way.
   #
-  # STATE OF THIS GATE: it is not comparing anything yet, and says so rather
-  # than implying otherwise. `baseline-macos-aarch64.json` predates the
-  # reference suite, so it states one scene where the reader expects a map,
-  # `compare::unlike` declines, and a declining comparison is reported as "not
-  # comparing" rather than as a pass. Recording a replacement needed a Mac
-  # nobody had — except that this workflow already runs on one. `record-baseline`
-  # below is that Mac. Once its artifact is committed, the refusal becomes a
-  # failure (a gate that declines is indistinguishable from a gate that passed).
+  # One row per platform, each against its own baseline: comparing a Linux run
+  # with a macOS recording measures two machines and calls the difference a
+  # regression. Both baselines were recorded by `record-baseline` below, on
+  # these runner images, so the file's `conditions.machine` names the hardware
+  # the comparison assumes.
+  #
+  # `--tolerance-scale` multiplies every figure's tolerance, and each value is
+  # measured, not chosen (`benchmarks/ci-gate.md` has the data). macOS is 10:
+  # twelve runs of the suite on macos-14 at engine 0.120.1 needed 6.6 before no
+  # pair of them disagreed, and 7.5 against the committed baseline itself,
+  # because a hosted Mac is a three-core VM at a load
+  # of 4-8 per core and single figures moved by up to 10x between runs. Linux
+  # is 3: its runners are quieter, and the worst figure across four runs on
+  # four different processors needed 1.89. What the macOS row catches is an
+  # order-of-magnitude regression; the Linux row, a 4.5x one on a mean. Both
+  # fail on a figure that stops being measured and on a baseline they cannot
+  # compare against. The 1x tolerances belong on a quiet workstation.
   benchmark:
-    name: Performance
-    runs-on: macos-14
+    name: Performance (${{ matrix.slug }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, slug: macos-aarch64, tolerance_scale: 10 }
+          - { os: ubuntu-24.04, slug: linux-x86_64, tolerance_scale: 3 }
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -353,11 +368,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: benchmark
+          key: benchmark-${{ matrix.slug }}
 
+      # The packages the test job's Linux rows install — winit and wgpu need
+      # the X11 and Wayland headers to build even where no window opens, rfd
+      # needs GTK, and the retopology engine requires TBB on Linux — plus
+      # Mesa's software Vulkan driver. The runner has no GPU, and without an
+      # adapter every group that renders or sculpts through the view skips
+      # with "no headless GPU": the first Linux run measured startup, memory
+      # and little else. Lavapipe is slow and it is the same every run, which
+      # is what a regression gate needs.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libgtk-3-dev \
+            libtbb-dev \
+            libvulkan1 mesa-vulkan-drivers
       # See the note in the test job: `CYBER_REQUIRE_QUADCOVER=ON` makes these
       # a build requirement rather than an optimisation.
       - name: macOS build dependencies
+        if: runner.os == 'macOS'
         # Best effort, not a requirement: `CYBER_REQUIRE_QUADCOVER` is Linux
         # only (the engine's own posture — see `cyberremesh-sys/build.rs`), so
         # this gives macOS the same quadrangulator when it can and the build
@@ -372,33 +406,18 @@ jobs:
         # and `tee` always succeeds — so the exit code the gate uses to fail a
         # regression was being thrown away before anyone could read it.
         #
-        # The first thing that surfaced once it stopped being thrown away was
-        # not a regression: the benchmark segfaults on this runner, in the
-        # warm-up, and has been doing so unnoticed. So the two kinds of
-        # non-zero are told apart rather than lumped together. A verdict the
-        # gate reached — 1 for a regression, 2 for a refusal — fails the job,
-        # which is the whole point of the change. A signal is the crash, and
-        # it is reported loudly and tracked in #34 rather than failing every
-        # branch for something no branch caused.
-        #
-        # When #34 is closed, delete the `>= 128` arm. It is quarantine, not
-        # policy, and a quarantine with no expiry becomes the `tee` it replaced.
+        # Every non-zero status fails the job: 1 for a regression or a figure
+        # that stopped being measured, 2 for a baseline the run refuses to
+        # compare against, and a signal for a crash. The quarantine that let a
+        # crash through while #34 was open went with #34.
         shell: bash
         run: |
           set -o pipefail
-          status=0
           cargo run --release --bin bench -- \
             --json "$RUNNER_TEMP/now.json" \
-            --baseline benchmarks/baseline-macos-aarch64.json \
-            | tee "$RUNNER_TEMP/report.txt" || status=$?
-
-          if [ "$status" -ge 128 ]; then
-            signal=$((status - 128))
-            echo "::warning title=Benchmark crashed::the benchmark died on signal \
-              $signal (exit $status) before reaching a verdict. Tracked in #34."
-            exit 0
-          fi
-          exit "$status"
+            --baseline "benchmarks/baseline-${{ matrix.slug }}.json" \
+            --tolerance-scale ${{ matrix.tolerance_scale }} \
+            | tee "$RUNNER_TEMP/report.txt"
 
       # The figures outlive the run, so a regression can be looked at rather
       # than re-measured.
@@ -406,18 +425,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-${{ github.sha }}
+          name: benchmark-${{ matrix.slug }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/now.json
             ${{ runner.temp }}/report.txt
 
-  # The Mac nobody had.
+  # Re-recording the baselines the performance job compares against.
   #
-  # `baseline-macos-aarch64.json` has been stale since before the reference
-  # suite existed, and the reason it stayed stale is that re-recording it needs
-  # an aarch64 Mac. This workflow has been running on one all along. Dispatched
-  # by hand rather than on every push, because a baseline should be a decision
-  # someone made, not a file that quietly moves under the gate.
+  # On the runners, because those are the machines the gate runs on: a
+  # baseline recorded on a workstation compares two machines, not two
+  # revisions. Dispatched by hand rather than on every push, because a
+  # baseline should be a decision someone made, not a file that quietly moves
+  # under the gate — the artifacts are committed to `benchmarks/` with the
+  # reason in the commit message.
   #
   # `--allow-busy` is passed deliberately: a shared runner is never quiet by the
   # threshold `load.rs` measured on a workstation, and refusing forever would
@@ -425,7 +445,7 @@ jobs:
   # two failures. The load it was recorded under is written into the file, so
   # the noise is visible to whoever reads it rather than hidden.
   record-baseline:
-    name: Record a baseline
+    name: Record a baseline (${{ matrix.slug }})
     if: inputs.record_baseline
     strategy:
       fail-fast: false
@@ -442,22 +462,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: benchmark-record-${{ matrix.slug }}
+          key: benchmark-${{ matrix.slug }}
 
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build libtbb-dev
+            cmake ninja-build \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libgtk-3-dev \
+            libtbb-dev \
+            libvulkan1 mesa-vulkan-drivers
       - name: macOS build dependencies
         if: runner.os == 'macOS'
-        # Best effort, not a requirement: `CYBER_REQUIRE_QUADCOVER` is Linux
-        # only (the engine's own posture — see `cyberremesh-sys/build.rs`), so
-        # this gives macOS the same quadrangulator when it can and the build
-        # announces the fallback when it cannot. Guarded rather than bare,
-        # because `brew install` on an already-present formula is a non-zero
-        # exit and would fail the job for a dependency that is satisfied.
         run: brew list --formula tbb libomp >/dev/null 2>&1 || brew install tbb libomp
 
       - name: Record
