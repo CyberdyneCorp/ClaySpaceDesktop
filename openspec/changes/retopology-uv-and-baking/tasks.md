@@ -205,11 +205,29 @@ field evaluator with no field. We are the first of either.
 - [ ] 12.1 Route Create Hierarchy from an accepted retopology result and state
       the level cost against current document usage before allocating; refuse
       with current usage, added cost and limit. (#214; depends on #184)
-- [ ] 12.2 Label and control sculpt and display levels independently; report
-      level counts and detail checksum in agent state. (#214)
+- [x] 12.2 Label and control sculpt and display levels independently; report
+      level counts and detail checksum in agent state. (#214) The two levels
+      were already separate inspector rows; `state` now carries each level's
+      vertex and face count and the detail checksum as sixteen hex digits,
+      computed when `state` is read rather than on the layer summary.
+      Held by `the_state_reports_what_each_level_holds` (engine) and
+      `a_hierarchy_reports_its_sizes_checksum_bake_and_release` (agent).
 - [ ] 12.3 Surface cache drop, trim and pass compaction with measured freed
       bytes; benchmark level creation and preflight on three cage sizes. (#214)
-- [ ] 12.4 Report what a selected-level bake carries and loses, and verify
-      coarse edits preserve fine-detail checksum. (#214)
-- [ ] 12.5 Require undo or consent for removing the highest level before
-      routing that action in this workflow. (#214; depends on #194)
+      **Half done.** `release_caches` (inspector button and agent `level` op)
+      drops inactive caches and compacts passes, measures the hierarchy's
+      total either side and checks the detail checksum did not move —
+      `a_cache_release_reports_what_it_freed_and_keeps_the_detail`. Trimming
+      at a pressure stays with the memory governor. The three-cage benchmark
+      is not written yet.
+- [x] 12.4 Report what a selected-level bake carries and loses, and verify
+      coarse edits preserve fine-detail checksum. (#214) `MultiresState::bake`
+      states the displayed level, the finer levels lost and the passes that
+      contribute nothing; drawn in the inspector and reported in `state`.
+      `baking_reports_what_it_drops` walks fixed mesh -> hierarchy -> sculpt at
+      two levels -> bake with the checksum read at each step, and
+      `a_coarse_edit_preserves_detail` holds the checksum across cage edits.
+- [x] 12.5 Require undo or consent for removing the highest level before
+      routing that action in this workflow. (#214; depends on #194) Undo:
+      the hierarchy's bytes are banked before the removal, into the same
+      history a hierarchy gesture uses — `removing_the_highest_level_is_one_undo`.

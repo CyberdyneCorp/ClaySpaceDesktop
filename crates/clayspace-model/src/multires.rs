@@ -351,6 +351,74 @@ impl SubdivisionCost {
     }
 }
 
+// -- what a level holds, what a release gave back, what a bake keeps ----------
+
+/// How many vertices and faces one level holds, as the engine counts them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LevelSize {
+    pub vertices: u64,
+    pub faces: u64,
+}
+
+/// What releasing a hierarchy's caches gave back, measured either side.
+///
+/// Measured rather than taken from one of the engine's reports, because there
+/// are two levers — dropping the caches of levels nothing is using, and
+/// compacting the storage passes that undid themselves left behind — and a
+/// sculptor asked one question: how much came back. The hierarchy's own
+/// memory total before and after answers it for both at once.
+///
+/// `detail_kept` is the other half and is not a formality. Both levers are
+/// documented as releasing only what rebuilds bit-identically; the detail
+/// checksum is how that is checked rather than trusted, and a release that
+/// moved it released work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheRelease {
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    pub detail_kept: bool,
+}
+
+impl CacheRelease {
+    /// What came back. Never negative: a release that ended holding more than
+    /// it began with gave nothing back, it did not give back a negative.
+    pub fn freed_bytes(&self) -> u64 {
+        self.before_bytes.saturating_sub(self.after_bytes)
+    }
+}
+
+/// What baking a hierarchy into an ordinary mesh carries, and what it drops.
+///
+/// Stated **before** the bake, which is the point of it: the crossing keeps the
+/// displayed level's vertices exactly, and a sculptor who sculpted pores at the
+/// top level while looking at a coarser one finds out afterwards that a bake
+/// takes what is drawn. A coarser level does not see the detail stored above
+/// it, so every level above the displayed one goes with its detail; the levels
+/// below go too, as levels, though their shape is in what is kept.
+///
+/// The passes are the same question about the stack. A pass that contributes
+/// is in the baked vertices and is no longer adjustable; a hidden pass or one
+/// at zero strength contributes nothing, so it is not in them at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HierarchyBake {
+    /// The level whose vertices become the mesh: the displayed one.
+    pub level: u32,
+    /// Levels finer than the baked one, whose detail the mesh does not carry.
+    pub finer_levels_dropped: u32,
+    /// Passes whose contribution is baked into the vertices.
+    pub passes_carried: usize,
+    /// Passes that contribute nothing as things stand, and so are lost.
+    pub passes_dropped: usize,
+}
+
+impl HierarchyBake {
+    /// Whether the bake loses sculpted detail rather than only the ability to
+    /// go on adjusting it.
+    pub fn loses_detail(&self) -> bool {
+        self.finer_levels_dropped > 0 || self.passes_dropped > 0
+    }
+}
+
 // -- the stack ---------------------------------------------------------------
 
 /// Names one pass on a hierarchy's stack, for as long as the pass exists.
@@ -812,6 +880,11 @@ pub struct MultiresState {
     /// under the passes, and is what an empty stack reads as.
     pub active_sculpt_layer: MultiresSculptLayerId,
     pub write_domain: WriteDomain,
+    /// What each level holds, cage first. Empty where the engine would not
+    /// count them, which is a stated absence rather than a level of nothing.
+    pub level_sizes: Vec<LevelSize>,
+    /// What the last cache release on this hierarchy gave back, if one ran.
+    pub last_release: Option<CacheRelease>,
 }
 
 impl MultiresState {
@@ -822,6 +895,23 @@ impl MultiresState {
             sculpt_layers: Vec::new(),
             active_sculpt_layer: MultiresSculptLayerId::BASE,
             write_domain: WriteDomain::default(),
+            level_sizes: Vec::new(),
+            last_release: None,
+        }
+    }
+
+    /// What a bake into a mesh would carry and drop, as things stand now.
+    pub fn bake(&self) -> HierarchyBake {
+        let carried = self
+            .sculpt_layers
+            .iter()
+            .filter(|pass| pass.contributes())
+            .count();
+        HierarchyBake {
+            level: self.levels.display,
+            finer_levels_dropped: self.levels.highest().saturating_sub(self.levels.display),
+            passes_carried: carried,
+            passes_dropped: self.sculpt_layers.len() - carried,
         }
     }
 
@@ -964,16 +1054,22 @@ pub enum MultiresLevelOp {
     SetDisplayLevel(u32),
     /// One more level, with both numbers moved to it.
     AddLevel,
-    /// The highest level and its detail, gone.
+    /// The highest level and its detail, gone — as one entry in the history,
+    /// so that one undo brings both back.
     RemoveHighestLevel,
+    /// Gives back what the hierarchy holds that rebuilds bit-identically: the
+    /// caches of levels nothing is using, and the storage passes that undid
+    /// themselves left behind. Reports what it freed.
+    ReleaseCaches,
 }
 
 impl MultiresLevelOp {
-    pub const ALL: [MultiresLevelOp; 4] = [
+    pub const ALL: [MultiresLevelOp; 5] = [
         Self::SetSculptLevel(0),
         Self::SetDisplayLevel(0),
         Self::AddLevel,
         Self::RemoveHighestLevel,
+        Self::ReleaseCaches,
     ];
 
     /// What the history calls it.
@@ -983,6 +1079,7 @@ impl MultiresLevelOp {
             Self::SetDisplayLevel(_) => "display level",
             Self::AddLevel => "subdivide",
             Self::RemoveHighestLevel => "remove the highest level",
+            Self::ReleaseCaches => "release caches",
         }
     }
 
@@ -993,14 +1090,19 @@ impl MultiresLevelOp {
     /// like it should show something — and it is the one that makes the two
     /// numbers worth keeping apart: a sculptor can drop to the cage to move a
     /// jaw while still watching the pores, and nothing re-meshes when they do.
+    ///
+    /// Nor does releasing caches: what goes is exactly what rebuilds
+    /// bit-identically, so the picture after is the picture before.
     pub fn changes_what_is_drawn(self) -> bool {
-        !matches!(self, Self::SetSculptLevel(_))
+        !matches!(self, Self::SetSculptLevel(_) | Self::ReleaseCaches)
     }
 
-    /// Whether the interface should confirm before sending it.
+    /// Whether it destroys sculpted detail.
     ///
-    /// One of the four. Removing the highest level takes the detail on it, and
-    /// nothing left afterwards reconstructs what came off.
+    /// One of the five. Removing the highest level takes the detail on it, and
+    /// nothing the engine keeps reconstructs what came off — which is why this
+    /// one, alone among them, is banked into the edit history: the hierarchy's
+    /// bytes are recorded before it runs, and one undo puts them back.
     pub fn is_destructive(self) -> bool {
         matches!(self, Self::RemoveHighestLevel)
     }
@@ -1041,6 +1143,8 @@ mod tests {
             sculpt_layers: vec![pass(7, 0), pass(11, 1), pass(3, 2)],
             active_sculpt_layer: MultiresSculptLayerId::new(11),
             write_domain: WriteDomain::Automatic,
+            level_sizes: Vec::new(),
+            last_release: None,
         }
     }
 
@@ -1672,6 +1776,7 @@ mod tests {
     #[test]
     fn moving_the_brush_to_another_level_redraws_nothing() {
         assert!(!MultiresLevelOp::SetSculptLevel(2).changes_what_is_drawn());
+        assert!(!MultiresLevelOp::ReleaseCaches.changes_what_is_drawn());
         for op in [
             MultiresLevelOp::SetDisplayLevel(2),
             MultiresLevelOp::AddLevel,
@@ -1703,5 +1808,53 @@ mod tests {
         let names: std::collections::BTreeSet<&str> =
             MultiresLevelOp::ALL.iter().map(|op| op.label()).collect();
         assert_eq!(names.len(), MultiresLevelOp::ALL.len());
+    }
+
+    // -- the bake and the release -------------------------------------------
+
+    /// A bake takes the displayed level, and says what goes with it.
+    #[test]
+    fn baking_reports_what_it_drops() {
+        // Four levels drawn at 3, which is the top: nothing finer to lose, but
+        // a hidden pass and one at zero strength are not in what is drawn.
+        let mut state = stack();
+        state.sculpt_layers[1].visible = false;
+        state.sculpt_layers[2].strength = 0.0;
+        let bake = state.bake();
+        assert_eq!(bake.level, 3);
+        assert_eq!(bake.finer_levels_dropped, 0);
+        assert_eq!(bake.passes_carried, 1);
+        assert_eq!(bake.passes_dropped, 2);
+        assert!(bake.loses_detail());
+
+        // Every pass contributing: only the ability to adjust is lost.
+        let bake = stack().bake();
+        assert_eq!(bake.passes_carried, 3);
+        assert_eq!(bake.passes_dropped, 0);
+        assert!(!bake.loses_detail());
+
+        // Drawn at the cage of a four-level hierarchy, three levels go.
+        let mut coarse = stack();
+        coarse.levels = coarse.levels.with_display(0);
+        let bake = coarse.bake();
+        assert_eq!(bake.level, 0);
+        assert_eq!(bake.finer_levels_dropped, 3);
+        assert!(bake.loses_detail());
+    }
+
+    #[test]
+    fn a_release_never_reports_a_negative_gain() {
+        let gave_back = CacheRelease {
+            before_bytes: 10 << 20,
+            after_bytes: 4 << 20,
+            detail_kept: true,
+        };
+        assert_eq!(gave_back.freed_bytes(), 6 << 20);
+        let grew = CacheRelease {
+            before_bytes: 4 << 20,
+            after_bytes: 5 << 20,
+            detail_kept: true,
+        };
+        assert_eq!(grew.freed_bytes(), 0);
     }
 }

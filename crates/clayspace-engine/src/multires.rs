@@ -55,8 +55,9 @@
 
 use claycore::{Multires, MultiresDesc};
 use clayspace_model::{
-    CageFault, ModelError, MultiresLevels, MultiresSculptLayer, MultiresSculptLayerId,
-    MultiresSculptLayerOp, MultiresState, Refusal, SubdivisionCost, WriteDomain,
+    CacheRelease, CageFault, LevelSize, ModelError, MultiresLevels, MultiresSculptLayer,
+    MultiresSculptLayerId, MultiresSculptLayerOp, MultiresState, Refusal, SubdivisionCost,
+    WriteDomain,
 };
 
 /// How deep the level meshes and detail may reach before a hierarchy declines
@@ -128,6 +129,9 @@ pub struct Hierarchy {
     generation: u64,
     /// The gesture in progress, if a segment has reached the surface.
     open: Option<OpenGesture>,
+    /// What the last cache release gave back, for the inspector and `state`
+    /// to report after the operation that measured it has returned.
+    last_release: Option<CacheRelease>,
 }
 
 /// A gesture that is open, and what it has done so far.
@@ -154,6 +158,7 @@ impl Hierarchy {
             drawn: None,
             generation: 0,
             open: None,
+            last_release: None,
         }
     }
 
@@ -211,8 +216,70 @@ impl Hierarchy {
             sculpt_layers: self.sculpt_layers(),
             active_sculpt_layer: self.active_pass(),
             write_domain: WriteDomain::Automatic,
+            level_sizes: self.level_sizes(),
+            last_release: self.last_release,
         }
         .sanitized()
+    }
+
+    /// What each level holds, cage first.
+    ///
+    /// Stored counts rather than a walk, so it is cheap enough to ride on the
+    /// layer summary. A level the engine will not count ends the list rather
+    /// than being reported as a level of nothing.
+    fn level_sizes(&self) -> Vec<LevelSize> {
+        (0..self.levels().count)
+            .map_while(|level| {
+                let (vertices, faces) = self.surface.level_counts(level).ok()?;
+                Some(LevelSize { vertices, faces })
+            })
+            .collect()
+    }
+
+    /// A hash of every level's authoritative detail. See
+    /// [`clayspace_model::SceneModel::hierarchy_checksum`] for why it is asked
+    /// for rather than carried.
+    pub fn detail_checksum(&self) -> Option<u64> {
+        self.surface.detail_checksum().ok()
+    }
+
+    /// Gives back what rebuilds bit-identically, and measures what that was.
+    ///
+    /// Two of the engine's levers, in the order its own notes rank them by
+    /// cost: the caches of levels nothing is using, then the storage passes
+    /// that undid themselves left behind. Trimming at a pressure is left to
+    /// the memory governor, which is where a pressure comes from; a sculptor
+    /// asking for room back is asking for these two.
+    ///
+    /// Refused while a gesture is open. Compaction walks every stored block of
+    /// every pass, which is proportional to the stack rather than to the dab,
+    /// and the engine's note is that it never belongs inside a pointer event.
+    ///
+    /// The detail checksum is read either side and the answer is carried in
+    /// the report rather than asserted here: a release that moved it released
+    /// work, and a sculptor is owed that sentence rather than a panic.
+    pub fn release_caches(&mut self) -> Result<CacheRelease, ModelError> {
+        if self.gesture_is_open() {
+            return Err(ModelError::engine(
+                "as caches da hierarquia não são liberadas no meio de um traço",
+            ));
+        }
+        let held = |surface: &Multires| surface.memory().map(|memory| memory.total);
+        let before_bytes = held(&self.surface).map_err(ModelError::engine)?;
+        let checksum = self.surface.detail_checksum().map_err(ModelError::engine)?;
+        self.surface
+            .drop_inactive_caches()
+            .map_err(ModelError::engine)?;
+        self.surface
+            .compact_sculpt_layers()
+            .map_err(ModelError::engine)?;
+        let release = CacheRelease {
+            before_bytes,
+            after_bytes: held(&self.surface).map_err(ModelError::engine)?,
+            detail_kept: self.surface.detail_checksum().map_err(ModelError::engine)? == checksum,
+        };
+        self.last_release = Some(release);
+        Ok(release)
     }
 
     /// What the viewport watches: the engine's evaluated counter and this

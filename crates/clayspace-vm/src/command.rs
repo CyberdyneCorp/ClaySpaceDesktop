@@ -323,8 +323,8 @@ pub enum Command {
     SculptLayer(clayspace_model::SculptLayerOp),
     /// Moves the active hierarchy's levels, or changes how many it has.
     ///
-    /// One command carrying the operation rather than four, as
-    /// [`Command::SculptLayer`] is one: the four differ in what they cost and
+    /// One command carrying the operation rather than one per operation, as
+    /// [`Command::SculptLayer`] is one: they differ in what they cost and
     /// in whether they redraw, and `MultiresLevelOp` is where that is stated.
     /// Deliberately not `SculptLayer`'s enum — that one addresses a grid's
     /// passes by position, and a hierarchy's are a different stack with
@@ -605,11 +605,12 @@ impl Command {
                 // rather than an entry in a history — so it takes the
                 // composition root's own path like the other layer work.
                 | Self::SculptLayer(_)
-                // A level is not undo either, and for a nearer reason: three
-                // of the four move a number and the fourth allocates, and
-                // none of them is an entry the engine records. It takes the
-                // composition root's own path, where its refusal has
-                // somewhere to land.
+                // A level takes the composition root's own path, where its
+                // refusal has somewhere to land. Most level operations move a
+                // number, allocate or release a cache and record nothing; the
+                // one that destroys detail — removing the highest level — is
+                // banked there as one entry, measured from the history depth
+                // either side rather than assumed here.
                 | Self::MultiresLevel(_)
                 // Nor is a pass. Dialling one is a property of the stack that
                 // stays adjustable long after the strokes that filled it, and

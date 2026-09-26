@@ -38,14 +38,14 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             .color(Tokens::text_dim()),
     );
 
-    let Some(levels) = state
+    let Some(hierarchy) = state
         .scene
         .active_layer()
         .and_then(|layer| layer.multires.as_ref())
-        .map(|hierarchy| hierarchy.levels)
     else {
         return;
     };
+    let levels = hierarchy.levels;
     readout(ui, s.label_multires_levels, levels.count.to_string());
 
     // Both rows are drawn even where there is only the cage, and the sliders
@@ -115,6 +115,79 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             );
         }
     });
+
+    release_caches(ui, s, hierarchy, queue);
+    bake_report(ui, s, hierarchy);
+}
+
+/// The one lever a sculptor has over what a hierarchy holds without losing
+/// anything, and what it gave back the last time it was pulled.
+///
+/// The figure is the hierarchy's own total either side of the release rather
+/// than an estimate beforehand: what is rebuildable depends on which levels
+/// were evaluated since, and a prediction that was wrong would be worse than
+/// the measurement after.
+fn release_caches(
+    ui: &mut egui::Ui,
+    s: &crate::strings::Strings,
+    hierarchy: &clayspace_model::MultiresState,
+    queue: &mut CommandQueue,
+) {
+    use clayspace_model::MultiresLevelOp;
+
+    ui.horizontal(|ui| {
+        if ui.button(s.multires_release_caches).clicked() {
+            queue.push(Command::MultiresLevel(MultiresLevelOp::ReleaseCaches));
+        }
+        if let Some(release) = hierarchy.last_release {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} {}",
+                    megabytes(release.freed_bytes()),
+                    s.multires_freed
+                ))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+            );
+        }
+    });
+    if hierarchy
+        .last_release
+        .is_some_and(|release| !release.detail_kept)
+    {
+        ui.label(
+            egui::RichText::new(s.multires_release_touched_detail)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
+}
+
+/// What a bake into a mesh would take and what it would drop, said before the
+/// crossing is chosen rather than discovered after it.
+fn bake_report(
+    ui: &mut egui::Ui,
+    s: &crate::strings::Strings,
+    hierarchy: &clayspace_model::MultiresState,
+) {
+    let bake = hierarchy.bake();
+    ui.label(
+        egui::RichText::new(format!(
+            "{} {} · {} {} · {} {}",
+            s.multires_bake_takes,
+            bake.level,
+            bake.finer_levels_dropped,
+            s.multires_bake_finer_lost,
+            bake.passes_dropped,
+            s.multires_bake_passes_lost
+        ))
+        .size(type_scale::LABEL)
+        .color(if bake.loses_detail() {
+            Tokens::accent()
+        } else {
+            Tokens::text_dim()
+        }),
+    );
 }
 
 /// A byte count as whole megabytes, which is the size a subdivision is

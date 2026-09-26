@@ -634,6 +634,19 @@ pub trait SceneModel {
         None
     }
 
+    /// A hash of every level's authoritative detail on a hierarchy layer.
+    ///
+    /// Asked for rather than carried on the layer summary, because it walks
+    /// every coefficient the hierarchy holds and the summary is rebuilt far
+    /// more often than anybody checks. It is what makes "a coarse edit keeps
+    /// the fine detail" and "a cache release freed only caches" things a
+    /// caller can verify rather than take on trust. `None` where the layer is
+    /// not a hierarchy, or where the engine will not say.
+    fn hierarchy_checksum(&self, key: LayerKey) -> Option<u64> {
+        let _ = key;
+        None
+    }
+
     /// Moves a layer to a position in the stack, which is its evaluation order.
     fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), crate::ModelError>;
 

@@ -1707,6 +1707,36 @@ side of the step — 710 KB and 1.39 ms to take at level 4 over a 16×16 cage, a
 because two histories ordering themselves against the engine's depth cannot
 order themselves against each other.
 
+**Removing the highest level is one undo.** It is the one level operation that
+destroys detail, so the hierarchy's bytes are recorded before it runs and one
+undo puts the level and every coefficient on it back. The others move a number,
+allocate a level or release a cache, and record nothing.
+
+**Releasing caches says what it freed.** Liberar caches, in the same section,
+drops the caches of levels nothing is using and compacts the storage passes
+that undid themselves left behind — both rebuild bit-identically. The figure
+beside the button is the hierarchy's own total before and after, measured
+rather than predicted, and the detail checksum is read either side: a release
+that moved it would have released work, and the section says so if it ever
+does.
+
+**A bake says what it takes and what it drops, before it runs.** Crossing a
+hierarchy into a mesh takes the **displayed** level, exactly. A coarser level
+does not see the detail stored above it, so the inspector states the level a
+bake would take, how many finer levels would be lost with their detail, and how
+many passes contribute nothing (hidden, or at zero strength) and so are not in
+the mesh at all. It turns to the accent colour when the bake would lose
+sculpted detail rather than only the ability to go on adjusting it.
+
+**`state` reports enough to verify detail.** An agent reading a hierarchy's
+layer gets each level's vertex and face count, the same bake report, what the
+last cache release freed, and the **detail checksum** — a hash of every level's
+authoritative detail, sent as sixteen hex digits so a client parsing JSON into
+doubles cannot round it into another hash. Unchanged across a coarse-level edit
+is the property the representation exists for, and it is what an agent checks
+it against rather than trusts. The checksum is computed when `state` is read,
+not on every frame, since it walks every coefficient.
+
 **The sculpt is saved beside the document.** This is the part worth knowing
 before trusting a file. A `.clayspace` carries a hierarchy's **cage and nothing
 standing on it** — the engine's own ownership boundary, stated in its header —

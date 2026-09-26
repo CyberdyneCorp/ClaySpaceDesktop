@@ -21,12 +21,13 @@ use clayspace_vm::AgentGate;
 
 use crate::catalogue::tags;
 use crate::session::{
-    BackendState, BrushState, CageState, CameraState, CombineSetting, CombineState,
-    CrossingOutcomeState, DeformState, DocumentState, DragState, DynamicsState, ExchangeState,
-    ExportState, FallbackState, GateKind, GridState, HierarchyPassState, HierarchyState,
-    HistoryState, ImportState, LayerState, MaskState, MemoryPart, MemoryState, ObjectState,
-    OutcomeState, PassState, PhaseCostState, PresentationState, ReferenceState, RemeshOutcomeState,
-    RetopoOutcomeState, SceneState, StallState, StrokeCostState, TimingState, ToolState,
+    BackendState, BrushState, CacheReleaseState, CageState, CameraState, CombineSetting,
+    CombineState, CrossingOutcomeState, DeformState, DocumentState, DragState, DynamicsState,
+    ExchangeState, ExportState, FallbackState, GateKind, GridState, HierarchyBakeState,
+    HierarchyPassState, HierarchyState, HistoryState, ImportState, LayerState, LevelSizeState,
+    MaskState, MemoryPart, MemoryState, ObjectState, OutcomeState, PassState, PhaseCostState,
+    PresentationState, ReferenceState, RemeshOutcomeState, RetopoOutcomeState, SceneState,
+    StallState, StrokeCostState, TimingState, ToolState,
 };
 
 /// How many agent jobs the interface thread does between two frames.
@@ -76,18 +77,28 @@ pub fn document_state(
 /// The placement is not on the layer summary — it is read back from the engine
 /// through the object ViewModel — so it arrives here as a closure rather than
 /// as a field, and a layer the engine will not answer for reports the identity
-/// rather than a guess.
+/// rather than a guess. A hierarchy's detail checksum arrives the same way,
+/// for a different reason: it walks every coefficient, so it is asked for when
+/// an agent reads the scene rather than carried on every layer summary.
 pub fn scene_state(
     scene: &Scene,
     selected: Option<(u64, u32)>,
     mut placement: impl FnMut(LayerKey) -> Option<Transform>,
     mut objects_in: impl FnMut(LayerKey) -> usize,
+    mut checksum_of: impl FnMut(LayerKey) -> Option<u64>,
 ) -> SceneState {
     SceneState {
         layers: scene
             .layers
             .iter()
-            .map(|layer| layer_state(layer, placement(layer.key), objects_in(layer.key)))
+            .map(|layer| {
+                let mut state = layer_state(layer, placement(layer.key), objects_in(layer.key));
+                if let Some(hierarchy) = state.hierarchy.as_mut() {
+                    hierarchy.detail_checksum =
+                        checksum_of(layer.key).map(|checksum| format!("{checksum:016x}"));
+                }
+                state
+            })
             .collect(),
         active_layer: scene.active.map(|key| key.0),
         selected_object: selected.map(object_id),
@@ -174,6 +185,31 @@ fn hierarchy_state(state: &clayspace_model::MultiresState) -> HierarchyState {
                 locked: pass.locked,
             })
             .collect(),
+        level_sizes: state
+            .level_sizes
+            .iter()
+            .map(|size| LevelSizeState {
+                vertices: size.vertices,
+                faces: size.faces,
+            })
+            .collect(),
+        // Filled by `scene_state`, which is the only party that can ask.
+        detail_checksum: None,
+        bake: {
+            let bake = state.bake();
+            HierarchyBakeState {
+                level: bake.level,
+                finer_levels_dropped: bake.finer_levels_dropped,
+                passes_carried: bake.passes_carried,
+                passes_dropped: bake.passes_dropped,
+            }
+        },
+        last_release: state.last_release.map(|release| CacheReleaseState {
+            freed_bytes: release.freed_bytes(),
+            before_bytes: release.before_bytes,
+            after_bytes: release.after_bytes,
+            detail_kept: release.detail_kept,
+        }),
     }
 }
 
@@ -833,7 +869,7 @@ mod tests {
 
     #[test]
     fn the_scene_tree_carries_what_the_panel_shows() {
-        let state = scene_state(&a_scene(), None, |_| None, |_| 0);
+        let state = scene_state(&a_scene(), None, |_| None, |_| 0, |_| None);
         assert_eq!(state.layers.len(), 1);
         assert_eq!(state.layers[0].key, 3);
         assert_eq!(state.layers[0].name, "cabeça");
@@ -847,7 +883,7 @@ mod tests {
     /// defect this project has already shipped once.
     #[test]
     fn a_layer_with_no_placement_reads_as_the_identity() {
-        let state = scene_state(&a_scene(), None, |_| None, |_| 0);
+        let state = scene_state(&a_scene(), None, |_| None, |_| 0, |_| None);
         assert_eq!(state.layers[0].translation, [0.0; 3]);
         assert_eq!(state.layers[0].scale, [1.0; 3]);
     }
@@ -866,6 +902,7 @@ mod tests {
                 })
             },
             |_| 0,
+            |_| None,
         );
         assert_eq!(state.layers[0].translation, [1.0, 2.0, 3.0]);
         assert_eq!(state.layers[0].scale, [2.0, 1.0, 1.0]);
@@ -1170,7 +1207,7 @@ mod tests {
             bytes: 2_048,
         }];
 
-        let state = scene_state(&scene, None, |_| None, |_| 2);
+        let state = scene_state(&scene, None, |_| None, |_| 2, |_| None);
         assert_eq!(
             state.layers[0].objects, 2,
             "two forms placed in the layer, whatever its passes"
@@ -1188,9 +1225,12 @@ mod tests {
     fn a_soloed_scene_says_which_layer_is_shown_alone() {
         let mut scene = a_scene();
         scene.soloed = Some(LayerKey(3));
-        assert_eq!(scene_state(&scene, None, |_| None, |_| 0).soloed, Some(3));
         assert_eq!(
-            scene_state(&a_scene(), None, |_| None, |_| 0).soloed,
+            scene_state(&scene, None, |_| None, |_| 0, |_| None).soloed,
+            Some(3)
+        );
+        assert_eq!(
+            scene_state(&a_scene(), None, |_| None, |_| 0, |_| None).soloed,
             None,
             "a scene nobody soloed says nothing rather than naming a layer"
         );
@@ -1220,9 +1260,24 @@ mod tests {
             }],
             active_sculpt_layer: clayspace_model::MultiresSculptLayerId::new(7),
             write_domain: clayspace_model::WriteDomain::Detail,
+            level_sizes: vec![
+                clayspace_model::LevelSize {
+                    vertices: 25,
+                    faces: 16,
+                },
+                clayspace_model::LevelSize {
+                    vertices: 81,
+                    faces: 64,
+                },
+            ],
+            last_release: Some(clayspace_model::CacheRelease {
+                before_bytes: 3 << 20,
+                after_bytes: 1 << 20,
+                detail_kept: true,
+            }),
         });
 
-        let state = scene_state(&scene, None, |_| None, |_| 0);
+        let state = scene_state(&scene, None, |_| None, |_| 0, |_| None);
         let hierarchy = state.layers[0]
             .hierarchy
             .as_ref()
@@ -1233,6 +1288,68 @@ mod tests {
         assert_eq!(hierarchy.write_domain, "detail");
         assert_eq!(hierarchy.active_pass, Some(7));
         assert_eq!(hierarchy.passes[0].id, 7);
+    }
+
+    /// What #214 asked `state` to carry: each level's size, the detail
+    /// checksum, what a bake would drop and what the last release freed.
+    #[test]
+    fn a_hierarchy_reports_its_sizes_checksum_bake_and_release() {
+        let mut scene = a_scene();
+        scene.layers[0].multires = Some(clayspace_model::MultiresState {
+            levels: clayspace_model::MultiresLevels {
+                count: 3,
+                sculpt: 0,
+                display: 1,
+            },
+            sculpt_layers: Vec::new(),
+            active_sculpt_layer: clayspace_model::MultiresSculptLayerId::BASE,
+            write_domain: clayspace_model::WriteDomain::Automatic,
+            level_sizes: vec![
+                clayspace_model::LevelSize {
+                    vertices: 25,
+                    faces: 16,
+                },
+                clayspace_model::LevelSize {
+                    vertices: 81,
+                    faces: 64,
+                },
+                clayspace_model::LevelSize {
+                    vertices: 289,
+                    faces: 256,
+                },
+            ],
+            last_release: Some(clayspace_model::CacheRelease {
+                before_bytes: 3 << 20,
+                after_bytes: 1 << 20,
+                detail_kept: true,
+            }),
+        });
+        let key = scene.layers[0].key;
+
+        let state = scene_state(
+            &scene,
+            None,
+            |_| None,
+            |_| 0,
+            |asked| (asked == key).then_some(0xDEAD_BEEF_0000_0001),
+        );
+        let hierarchy = state.layers[0].hierarchy.as_ref().expect("a hierarchy");
+        assert_eq!(hierarchy.level_sizes.len(), 3);
+        assert_eq!(hierarchy.level_sizes[2].faces, 256);
+        assert_eq!(
+            hierarchy.detail_checksum.as_deref(),
+            Some("deadbeef00000001"),
+            "sixteen hex digits, so no client rounds it through a double"
+        );
+        assert_eq!(hierarchy.bake.level, 1);
+        assert_eq!(hierarchy.bake.finer_levels_dropped, 1);
+        let release = hierarchy.last_release.as_ref().expect("a release");
+        assert_eq!(release.freed_bytes, 2 << 20);
+        assert!(release.detail_kept);
+
+        let json = serde_json::to_value(hierarchy).expect("serialises");
+        assert_eq!(json["detail_checksum"], "deadbeef00000001");
+        assert_eq!(json["bake"]["finer_levels_dropped"], 1);
     }
 
     /// The base is the form under the passes rather than a pass, so it is
@@ -1250,8 +1367,10 @@ mod tests {
             sculpt_layers: Vec::new(),
             active_sculpt_layer: clayspace_model::MultiresSculptLayerId::BASE,
             write_domain: clayspace_model::WriteDomain::Geometry,
+            level_sizes: Vec::new(),
+            last_release: None,
         });
-        let state = scene_state(&scene, None, |_| None, |_| 0);
+        let state = scene_state(&scene, None, |_| None, |_| 0, |_| None);
         let hierarchy = state.layers[0].hierarchy.as_ref().expect("a hierarchy");
         assert_eq!(hierarchy.active_pass, None);
     }
@@ -1445,7 +1564,7 @@ mod tests {
         assert!(state[0].selected);
         assert_eq!(
             state[0].id,
-            scene_state(&a_scene(), Some((3, 7)), |_| None, |_| 0)
+            scene_state(&a_scene(), Some((3, 7)), |_| None, |_| 0, |_| None)
                 .selected_object
                 .expect("a selection"),
             "the packed id and the scene's selected object are the same number"

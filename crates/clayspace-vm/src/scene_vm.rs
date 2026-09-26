@@ -201,8 +201,19 @@ impl SceneViewModel {
         &mut self,
         op: clayspace_model::MultiresLevelOp,
     ) -> Result<(), ModelError> {
+        // Measured either side rather than assumed to be nothing: removing the
+        // highest level is banked into the history as one entry, so it can be
+        // taken back, and the other four leave the depth where it was.
+        let before = self.model.history_depth();
         let outcome = self.model.apply_multires_level_op(op);
+        self.unbanked.record(before, self.model.history_depth());
         self.finish(outcome)
+    }
+
+    /// A hash of a hierarchy's detail, for a caller verifying that an edit
+    /// kept what it should have. See [`SceneModel::hierarchy_checksum`].
+    pub fn hierarchy_checksum(&self, key: LayerKey) -> Option<u64> {
+        self.model.hierarchy_checksum(key)
     }
 
     /// Acts on the active hierarchy's stack of passes.
