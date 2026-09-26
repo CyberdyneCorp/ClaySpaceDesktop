@@ -9,7 +9,9 @@
 //! at all, and of those:
 //!
 //! - **Five rewrite the field** rather than adding an item — the surface drag,
-//!   both relaxes and both planes. The mirror cannot reach those even when it
+//!   both relaxes and both planes. (Three since #203: the field's second relax
+//!   and second plane were the first ones under other names, and are off its
+//!   shelf.) The mirror cannot reach those even when it
 //!   is on: measured, a relax with X mirrored took the surface under the
 //!   stroke from 1.1467 to 1.1409 and left its reflection at 1.1467 exactly.
 //!   Their strokes are reflected instead, the way a mesh's and a grid's are.
@@ -71,12 +73,13 @@ fn reach(document: &ClayDocument, direction: [f32; 3]) -> f32 {
 const AT: [f32; 3] = [0.6, 0.0, 0.8];
 const MIRRORED: [f32; 3] = [-0.6, 0.0, 0.8];
 
-/// The four verbs that sample a region rather than stamp into it.
+/// The verbs that sample a region rather than stamp into it.
 ///
 /// The engine adapter's own grouping — "Suavizar, Relaxar, Planar and Polir do
 /// not stamp: they sample a region" — and they are grouped here for the reason
 /// they are grouped there: each averages toward something the neighbourhood
-/// already is.
+/// already is. Two of the four reach a field: Relaxar and Polir were Suavizar
+/// and Planar under other names there (#203).
 ///
 /// They need something to smooth. A pristine sphere is already the smoothest
 /// thing there is, so asking one of these to move it is asking it to do the
@@ -92,12 +95,7 @@ const MIRRORED: [f32; 3] = [-0.6, 0.0, 0.8];
 /// across the pin, on the fixture below: a dab 0.037 proud, and the smoothing
 /// took back **0.0084 on v0.78.0 and 0.0109 on v0.84.0** — stronger, not
 /// weaker.
-const SMOOTHING_BRUSHES: [ToolKind; 4] = [
-    ToolKind::Suavizar,
-    ToolKind::Relaxar,
-    ToolKind::Planar,
-    ToolKind::Polir,
-];
+const SMOOTHING_BRUSHES: [ToolKind; 2] = [ToolKind::Suavizar, ToolKind::Planar];
 
 /// A sphere with something on it worth smoothing, at `where_`.
 fn bumped_at(where_: [f32; 3]) -> ClayDocument {
@@ -162,7 +160,7 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 
 /// The brushes that move the surface. Máscara paints the freeze and Trim is a
 /// shape drawn on the view frame, so neither is a stroke that displaces clay.
-const SURFACE_BRUSHES: [ToolKind; 13] = [
+const SURFACE_BRUSHES: [ToolKind; 11] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
     ToolKind::Pincar,
@@ -172,8 +170,6 @@ const SURFACE_BRUSHES: [ToolKind; 13] = [
     ToolKind::Planar,
     ToolKind::Camada,
     ToolKind::Puxar,
-    ToolKind::Polir,
-    ToolKind::Relaxar,
     ToolKind::Argila,
     ToolKind::Vinco,
 ];
@@ -299,13 +295,12 @@ fn a_brush_does_not_mirror_when_it_is_not_asked_to() {
 /// names. `sdf_magnify.rs` measures both halves. It is not in the depositing
 /// list below: a gather is neither a deposit nor a cut, and what its inverse
 /// gives is a spread.
-const SIGNED: [ToolKind; 8] = [
+const SIGNED: [ToolKind; 7] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
     ToolKind::Pincar,
     ToolKind::Camada,
     ToolKind::Planar,
-    ToolKind::Polir,
     ToolKind::Argila,
     ToolKind::Vinco,
 ];
@@ -341,11 +336,13 @@ fn the_depositing_brushes_take_material_away_when_inverted() {
 }
 
 #[test]
-fn planing_inverted_fills_instead_of_cutting() {
-    // The other half of a planing tool, and the one thing "negative planing"
-    // can mean: cut-only shaves the high ground and must not fill the dents it
-    // is meant to reveal; fill-only does exactly the opposite. The engine has
-    // had a mode for each all along and only one was ever asked for.
+fn planing_inverted_cuts_deeper_and_never_fills() {
+    // Inverted, Planar used to fill: the other half of the flatten, which on
+    // anything convex raised a slab with a wall at the edge of the sampled
+    // box (#179). What a sculptor inverting a planing tool asks for is a
+    // deeper cut, so the plane is sunk into the form and cut to — and in
+    // neither direction does a planing tool fill the dents it is meant to
+    // reveal.
     let policy = BackendPolicy::discover(None).expect("discover backends");
     let bump = [0.6f32, 0.0, 0.8];
     let dent = [0.6f32, 0.35, 0.7];
@@ -381,7 +378,8 @@ fn planing_inverted_fills_instead_of_cutting() {
     let base = dented();
     let (was_bump, was_dent) = (reach(&base, bump), reach(&base, dent));
 
-    for tool in [ToolKind::Planar, ToolKind::Polir] {
+    let mut upright_bump = f32::NAN;
+    for tool in [ToolKind::Planar] {
         for invert in [false, true] {
             let mut document = dented();
             let samples: Vec<GestureSample> = (0..=6)
@@ -408,28 +406,30 @@ fn planing_inverted_fills_instead_of_cutting() {
                 )
                 .expect("the stroke was refused");
             let (bump_now, dent_now) = (reach(&document, bump), reach(&document, dent));
+            // A tenth of the cache's cell rather than nothing: the bake
+            // re-samples its whole box at that cell, and a dent sharper than
+            // one rounds by a fraction of it wherever the box reaches — which
+            // is re-approximation, not a fill. A fill is the slab the inverted
+            // verb used to raise, hundredths rather than thousandths.
+            assert!(
+                dent_now <= was_dent + 0.002,
+                "{tool:?}{} filled the hollow to {dent_now} from {was_dent}, \
+                 which a planing tool must not do — it is meant to reveal the \
+                 dents, not close them",
+                if invert { " inverted" } else { "" }
+            );
             if invert {
                 assert!(
-                    dent_now > was_dent + 1e-3,
-                    "{tool:?} inverted left the hollow at {dent_now} from \
-                     {was_dent}; filling it is the whole of what it is for"
-                );
-                assert!(
-                    bump_now >= was_bump - 1e-4,
-                    "{tool:?} inverted cut the high ground to {bump_now} from \
-                     {was_bump}, which is the upright verb's job"
+                    bump_now < upright_bump - 1e-3,
+                    "{tool:?} inverted cut the high ground to {bump_now}, and \
+                     upright to {upright_bump}: the sunk plane cuts deeper"
                 );
             } else {
+                upright_bump = bump_now;
                 assert!(
                     bump_now < was_bump - 1e-4,
                     "{tool:?} left the high ground at {bump_now} from \
                      {was_bump}"
-                );
-                assert!(
-                    dent_now <= was_dent + 1e-4,
-                    "{tool:?} filled the hollow to {dent_now} from {was_dent}, \
-                     which a planing tool must not do — it is meant to reveal \
-                     the dents, not close them"
                 );
             }
         }

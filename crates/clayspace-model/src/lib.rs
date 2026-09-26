@@ -49,7 +49,7 @@ pub use colour::{Colour, ColourState};
 pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
     CageFault, ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal,
-    RepairReport,
+    RepairKind, RepairOutcome, RepairReport,
 };
 pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEWEST_POINTS};
 pub use cut::{lasso_keeps_inside, side_of, CutGesture, CutModel, DrawnCut, TrimSide};
@@ -61,8 +61,8 @@ pub use diagnostics::{
 };
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
-    ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
-    WrittenMesh,
+    ExchangeModel, ExportMesher, ExportSettings, ExportWarning, ExportWarningKind, Format,
+    ImportAs, ImportSettings, WrittenMesh,
 };
 pub use field::{Clamped, FieldBudget, FieldRefusal};
 pub use gizmo::{

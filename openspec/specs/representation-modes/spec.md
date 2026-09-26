@@ -315,7 +315,8 @@ flattened or left pointing where the world is.
 - **WHEN** the user sculpts detail at a fine level and then edits the form at a
   coarse one
 - **THEN** the detail is still there, the same size, on the same part of the
-  surface, oriented to the form as it now sits
+  surface, oriented to the form as it now sits, with the per-vertex fine-detail
+  magnitudes unchanged across the coarse edit
 
 #### Scenario: The pointer lands on the surface being drawn
 - **WHEN** the user points at a hierarchy that has been sculpted
@@ -539,4 +540,3 @@ silently stopped recording would leave a pass on the surface and un-dialable.
 - **WHEN** the stack passes the size at which it is worth releasing
 - **THEN** the figure is drawn in the interface's warning colour and the offer
   to release stands, and every pass goes on taking strokes
-

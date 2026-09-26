@@ -331,7 +331,7 @@ pub(super) fn selected_object_controls(
         // the two cannot come to disagree about what is reachable.
         if let Some(radius) = slider(
             ui,
-            settings.radius_label(),
+            state.strings.combine_radius_label(settings),
             settings.radius,
             settings.radius_range(),
             3,

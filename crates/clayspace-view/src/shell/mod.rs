@@ -141,6 +141,11 @@ pub struct ShellState<'a> {
     pub show_repair: bool,
     /// What is wrong with the active grid. `None` where it is not one.
     pub repair: Option<clayspace_model::RepairReport>,
+    /// What the last repair found, closed and left. Kept until the next one,
+    /// because the report above cannot say it: a perforated shell has no
+    /// enclosed void, so the report reads the same before and after its holes
+    /// are closed.
+    pub repair_outcome: Option<clayspace_model::RepairOutcome>,
     pub show_convert: bool,
     /// What the conversion panel is set to, and what that would cost.
     ///

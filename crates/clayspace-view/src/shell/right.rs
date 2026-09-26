@@ -274,9 +274,13 @@ pub(super) fn material_section(
                     .color(Tokens::text()),
             );
             ui.label(
-                egui::RichText::new(format!("{} materiais", state.materials.len()))
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
+                egui::RichText::new(format!(
+                    "{} {}",
+                    state.materials.len(),
+                    s.material_count_label
+                ))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
             );
         });
     });

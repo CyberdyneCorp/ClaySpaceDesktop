@@ -116,6 +116,36 @@ fn every_pair_calls_an_entry_point_its_row_names() {
     );
 }
 
+/// A brush never crosses representation boundaries as a hidden side effect.
+/// The table decides what is offered on each kind of layer; this checks the
+/// document after the actual dispatch for every offered stroke binding.
+#[test]
+fn no_brush_converts_a_representation() {
+    for representation in Representation::ALL {
+        for tool in ToolKind::for_representation(representation) {
+            if !strokes(tool) {
+                continue;
+            }
+            let mut document = worked(representation);
+            if (tool, representation) == (ToolKind::Apagar, Representation::Multires) {
+                document
+                    .apply_multires_sculpt_layer_op(MultiresSculptLayerOp::Add {
+                        name: "Poros".to_string(),
+                    })
+                    .expect("a hierarchy takes a pass");
+            }
+            drag(&mut document, tool, representation);
+            assert_eq!(
+                document.active_representation(),
+                representation,
+                "{} silently converted a {} layer",
+                tool.label(),
+                representation.label()
+            );
+        }
+    }
+}
+
 /// Every engine call one stroke of `tool` makes on a fresh fixture.
 ///
 /// The fixture is built *before* the recording starts: building one is
@@ -178,9 +208,32 @@ fn every_tool_note_is_proved_here() {
             ToolNote::VoxelCreaseIsErodeRecipe => "voxel_crease_cuts_a_groove",
             ToolNote::VoxelSmearHasNoColourVerb => "a_recipe_is_expressible_and_is_marked_as_one",
             ToolNote::VoxelClayHasNoBuildup => "a_recipe_is_expressible_and_is_marked_as_one",
+            // Both in `sdf_tool_identities.rs`, beside the measurements that
+            // decided them.
+            ToolNote::SdfPolishIsPlanar | ToolNote::SdfRelaxIsSmooth => {
+                "a_field_offers_one_flatten_and_one_smooth_and_says_so"
+            }
         };
         assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
     }
+}
+
+#[test]
+fn a_recipe_stays_a_recipe() {
+    let binding = ToolKind::Vinco
+        .binding_on(Representation::Voxel)
+        .expect("voxel Crease is offered");
+    assert!(binding.is_a_recipe(), "Crease lost its recipe fidelity");
+    assert_eq!(binding.entry_point, "clay_voxel_sculpt_inflate");
+    assert_eq!(
+        ToolKind::Vinco.note_on(Representation::Voxel),
+        Some(ToolNote::VoxelCreaseIsErodeRecipe)
+    );
+    let called = what_one_stroke_called(ToolKind::Vinco, Representation::Voxel);
+    assert!(
+        called.contains("clay_voxel_sculpt_inflate"),
+        "the recipe no longer executes its named erosion verb: {called:?}"
+    );
 }
 
 /// A grid's flatten fills hollows below the plane as well as cutting above it.
