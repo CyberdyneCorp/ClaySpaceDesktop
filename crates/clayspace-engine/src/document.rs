@@ -8035,6 +8035,15 @@ impl ClayDocument {
         self.mask_revision
     }
 
+    /// Whether the active layer has anything masked.
+    ///
+    /// What [`Self::mask_at`] checks before sampling, for a caller that would
+    /// otherwise gather every point on the surface only to hear `None`.
+    pub fn has_mask(&self) -> bool {
+        self.active_mask()
+            .is_some_and(|mask| !mask.is_empty().unwrap_or(true))
+    }
+
     /// How frozen each of these points is, or `None` when nothing is masked.
     ///
     /// `None` rather than a run of zeroes so the caller can skip the work

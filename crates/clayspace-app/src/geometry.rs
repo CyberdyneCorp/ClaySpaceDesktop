@@ -275,14 +275,30 @@ pub struct SettleCost {
     /// Copying the engine's mesh into the renderer's vertex layout, and
     /// sampling the mask over it.
     pub read_time: std::time::Duration,
-    /// Separately timed GPU writes, when available. Rebuild and compaction
-    /// currently include layout/upload work in `total_time` instead.
+    /// Splitting the engine's mesh into per-key geometry. Zero on the
+    /// compaction route, which meshes nothing.
+    pub split_time: std::time::Duration,
+    /// Dropping duplicate triangles and reclaiming the storage they held.
+    pub prune_time: std::time::Duration,
+    /// Writing the result to the GPU: the keys that changed, or the whole
+    /// surface when the layout had to be rebuilt.
     pub upload_time: std::time::Duration,
-    /// Everything `settle` spent, so `total - (engine + read + upload)` is
-    /// what the bookkeeping around them cost.
+    /// Everything `settle` spent, so `total - parts()` is what the
+    /// bookkeeping around them cost.
     pub total_time: std::time::Duration,
     pub triangles: usize,
     pub vertices: usize,
+}
+
+impl SettleCost {
+    /// The measured stages together, which never exceed `total_time`.
+    pub fn parts(&self) -> std::time::Duration {
+        self.engine_mesh_time
+            + self.read_time
+            + self.split_time
+            + self.prune_time
+            + self.upload_time
+    }
 }
 
 /// The surface as the viewport holds it.
@@ -311,6 +327,10 @@ pub struct SurfaceGeometry {
     last_engine_mesh: std::time::Duration,
     last_read: std::time::Duration,
     last_split: std::time::Duration,
+    /// Stage timings from the last `upload`, for `SettleCost`: the duplicate
+    /// pass a relayout runs first, and the GPU writes themselves.
+    last_prune: std::time::Duration,
+    last_upload: std::time::Duration,
     /// Where the warped keys' vertices were before a cage preview moved them.
     ///
     /// Positions only, and only while a cage is up. A preview is shown by
@@ -418,6 +438,8 @@ impl SurfaceGeometry {
             last_engine_mesh: std::time::Duration::ZERO,
             last_read: std::time::Duration::ZERO,
             last_split: std::time::Duration::ZERO,
+            last_prune: std::time::Duration::ZERO,
+            last_upload: std::time::Duration::ZERO,
             detail: Detail::Full,
             requested: Detail::Full,
             over_budget: false,
@@ -464,10 +486,20 @@ impl SurfaceGeometry {
             return self.settle(gpu, document);
         }
         let started = std::time::Instant::now();
-        compact_release_geometry(&mut self.keys);
-        self.relayout = true;
-        self.dirty = true;
-        self.lay_out_prepared(gpu, LayoutUploadMode::Mapped);
+        // Only the keys compaction actually changed are written. Forcing a
+        // relayout here re-uploaded the whole layer on every release — 1.75 MB
+        // for a single dab — when a dab's duplicates live in the few keys its
+        // separate requests shared. The full layout stays the fallback for a
+        // layout that can no longer take a patch.
+        let changed = compact_release_geometry(&mut self.keys);
+        let prune_time = started.elapsed();
+        if !changed.is_empty() {
+            self.touched.extend(changed);
+            self.dirty = true;
+        }
+        let upload_started = std::time::Instant::now();
+        self.upload_with(gpu, LayoutUploadMode::Mapped);
+        let upload_time = upload_started.elapsed();
         // A refused layout must retain its debt and dirty geometry.
         if !self.dirty {
             self.needs_settle = false;
@@ -476,7 +508,9 @@ impl SurfaceGeometry {
             route: SettleRoute::Compact,
             engine_mesh_time: std::time::Duration::ZERO,
             read_time: std::time::Duration::ZERO,
-            upload_time: std::time::Duration::ZERO,
+            split_time: std::time::Duration::ZERO,
+            prune_time,
+            upload_time,
             total_time: started.elapsed(),
             triangles: self.triangle_count(),
             vertices: self.vertex_count(),
@@ -843,19 +877,33 @@ impl SurfaceGeometry {
     /// Falls back to a full rebuild when the layout can no longer take a
     /// patch: the first upload, a buffer that has run out of room, or too much
     /// of the drawn range gone to holes.
+    ///
+    /// Records its duplicate pass and its writes separately in `last_prune`
+    /// and `last_upload`, so a settle can report where its time went.
     fn upload(&mut self, gpu: &Gpu) {
+        let started = std::time::Instant::now();
+        self.last_prune = std::time::Duration::ZERO;
+        self.upload_with(gpu, LayoutUploadMode::PerBrick);
+        self.last_upload = started.elapsed().saturating_sub(self.last_prune);
+    }
+
+    /// [`SurfaceGeometry::upload`], with the full layout taken by `fallback`.
+    ///
+    /// `Mapped` is for geometry whose duplicate pass has already run, so the
+    /// fallback does not run it a second time.
+    fn upload_with(&mut self, gpu: &Gpu, fallback: LayoutUploadMode) {
         if !self.dirty {
             return;
         }
         if self.relayout || self.layout.waste() > MAX_WASTE {
-            self.lay_out(gpu);
+            self.lay_out_with(gpu, fallback);
             return;
         }
         if !self.patch_touched(gpu) {
             // Out of room. Everything written so far is still consistent,
             // and the rebuild below replaces all of it anyway.
             self.touched.clear();
-            self.lay_out(gpu);
+            self.lay_out_with(gpu, fallback);
             return;
         }
         self.mesh.set_index_count(self.layout.index_count());
@@ -927,6 +975,11 @@ impl SurfaceGeometry {
     /// so a later edit finds it but stops drawing.
     fn place_touched(&mut self, gpu: &Gpu, key: BrickKey) -> Option<Option<Slot>> {
         let Some(geometry) = self.keys.get(&key) else {
+            // Discarded by compaction: the span goes back as a hole, blanked
+            // in case the key was emptied by that same pass.
+            if let Some(span) = self.layout.remove(key) {
+                blank(&mut self.mesh, gpu, span);
+            }
             return Some(None);
         };
         if geometry.indices.is_empty() {
@@ -983,8 +1036,17 @@ impl SurfaceGeometry {
     /// after a rebuild stay incremental rather than immediately re-homing
     /// everything.
     fn lay_out(&mut self, gpu: &Gpu) {
+        let started = std::time::Instant::now();
         self.prune_duplicates();
+        self.last_prune = started.elapsed();
         self.lay_out_prepared(gpu, LayoutUploadMode::PerBrick);
+    }
+
+    fn lay_out_with(&mut self, gpu: &Gpu, mode: LayoutUploadMode) {
+        match mode {
+            LayoutUploadMode::PerBrick => self.lay_out(gpu),
+            LayoutUploadMode::Mapped => self.lay_out_prepared(gpu, LayoutUploadMode::Mapped),
+        }
     }
 
     /// Allocate and upload geometry after its duplicate pass has completed.
@@ -1191,16 +1253,26 @@ impl SurfaceGeometry {
     /// re-mesh and would leave the frozen region undrawn. The caller watches
     /// [`ClayDocument::mask_revision`] and calls this when it moves.
     ///
-    /// The whole surface rather than a subset. A mask operation — invert,
-    /// expand, the bounded complement — can change any cell of it, and the
-    /// mask keeps no dirty set of its own to narrow it down.
+    /// The whole surface is sampled rather than a subset. A mask operation —
+    /// invert, expand, the bounded complement — can change any cell of it, and
+    /// the mask keeps no dirty set of its own to narrow it down. Only the keys
+    /// whose weights actually moved are uploaded, though: clearing a mask that
+    /// was never there used to rewrite the whole layer, 1.78 MB, to write
+    /// zeroes over zeroes.
     pub fn refresh_mask(&mut self, gpu: &Gpu, document: &ClayDocument) {
+        let masked = document.has_mask();
         for (key, geometry) in self.keys.iter_mut() {
             if geometry.vertices.is_empty() {
                 continue;
             }
-            sample_mask(document, &mut geometry.vertices);
-            self.touched.insert(*key);
+            let moved = if masked {
+                sample_mask(document, &mut geometry.vertices)
+            } else {
+                clear_mask(&mut geometry.vertices)
+            };
+            if moved {
+                self.touched.insert(*key);
+            }
         }
         if self.touched.is_empty() {
             return;
@@ -1262,11 +1334,15 @@ impl SurfaceGeometry {
         };
         self.last_settle = Some(SettleCost {
             route,
-            // The per-key path times itself into `last_cost`'s fields, so the
+            // The per-key path times itself into these fields, so the
             // engine's share is already known and is not re-timed.
+            // `rebuild_at` zeroes them first, so a route that skips a stage
+            // reports zero for it rather than the previous settle's figure.
             engine_mesh_time: self.last_engine_mesh,
             read_time: self.last_read,
-            upload_time: std::time::Duration::ZERO,
+            split_time: self.last_split,
+            prune_time: self.last_prune,
+            upload_time: self.last_upload,
             total_time: settle_started.elapsed(),
             triangles: self.triangle_count(),
             vertices: self.vertex_count(),
@@ -1370,6 +1446,14 @@ impl SurfaceGeometry {
         document: &mut ClayDocument,
         detail: Detail,
     ) -> Result<(), ClayError> {
+        // Every stage this rebuild does not reach reports zero, never what the
+        // previous one spent: an empty field used to carry the last mesh's
+        // engine time and report more of it than its own total.
+        self.last_engine_mesh = std::time::Duration::ZERO;
+        self.last_read = std::time::Duration::ZERO;
+        self.last_split = std::time::Duration::ZERO;
+        self.last_prune = std::time::Duration::ZERO;
+        self.last_upload = std::time::Duration::ZERO;
         let (keys, lod, shading) = self.level_for(document, detail)?;
         self.keys.clear();
         self.touched.clear();
@@ -1384,7 +1468,9 @@ impl SurfaceGeometry {
             Detail::Full
         };
         if keys.is_empty() {
+            let started = std::time::Instant::now();
             self.mesh.upload(gpu, &[], &[]);
+            self.last_upload = started.elapsed();
             self.layout = SlotMap::default();
             self.needs_settle = false;
             document.take_dirty_keys();
@@ -1478,24 +1564,33 @@ impl SurfaceGeometry {
 /// Writes each vertex's mask weight, when there is a mask to read.
 ///
 /// Free-standing so both the incremental path and the whole-surface refresh
-/// spell it the same way, and so the "no mask" case costs one `Option` check
-/// rather than a pass over the vertices.
-fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
+/// spell it the same way. Returns whether any weight changed, so a refresh
+/// uploads only the keys the mask change reached.
+fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) -> bool {
     let positions: Vec<[f32; 3]> = vertices.iter().map(|v| v.position).collect();
     match document.mask_at(&positions) {
         Some(weights) => {
+            let mut moved = false;
             for (vertex, weight) in vertices.iter_mut().zip(weights) {
+                moved |= vertex.mask.to_bits() != weight.to_bits();
                 vertex.mask = weight;
             }
+            moved
         }
         // Nothing frozen. Cleared rather than left, because a mask that was
         // cleared has to stop being drawn.
-        None => {
-            for vertex in vertices.iter_mut() {
-                vertex.mask = 0.0;
-            }
-        }
+        None => clear_mask(vertices),
     }
+}
+
+/// Zeroes every vertex's mask weight. Returns whether any was not zero.
+fn clear_mask(vertices: &mut [Vertex]) -> bool {
+    let mut moved = false;
+    for vertex in vertices.iter_mut() {
+        moved |= vertex.mask.to_bits() != 0;
+        vertex.mask = 0.0;
+    }
+    moved
 }
 
 /// A replacement covering all stored triangles is one consistent request,
@@ -1512,25 +1607,48 @@ fn retains_unreplaced_triangles(
 
 /// Reclaim storage a complete remesh would have discarded, preserving each
 /// surviving vertex bit and triangle order. Scratch space is reused per key.
-fn compact_release_geometry(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
+///
+/// Returns the keys whose drawn geometry changed — lost a triangle, had
+/// vertices renumbered, or were discarded — which are the only ones the GPU
+/// copy needs rewritten. A key may be listed more than once.
+fn compact_release_geometry(geometries: &mut HashMap<BrickKey, KeyGeometry>) -> Vec<BrickKey> {
+    let before: HashMap<BrickKey, usize> = geometries
+        .iter()
+        .map(|(key, geometry)| (*key, geometry.indices.len()))
+        .collect();
     prune_exact_triangles(geometries);
-    geometries.retain(|_, geometry| !geometry.indices.is_empty());
+    let mut changed: Vec<BrickKey> = geometries
+        .iter()
+        .filter(|(key, geometry)| before[*key] != geometry.indices.len())
+        .map(|(key, _)| *key)
+        .collect();
+    geometries.retain(|key, geometry| {
+        let keep = !geometry.indices.is_empty();
+        if !keep {
+            changed.push(*key);
+        }
+        keep
+    });
     let mut remap = Vec::new();
-    for geometry in geometries.values_mut() {
-        compact_referenced_vertices(geometry, &mut remap);
+    for (key, geometry) in geometries.iter_mut() {
+        if compact_referenced_vertices(geometry, &mut remap) {
+            changed.push(*key);
+        }
         geometry.vertices.shrink_to_fit();
         geometry.indices.shrink_to_fit();
     }
+    changed
 }
 
-fn compact_referenced_vertices(geometry: &mut KeyGeometry, remap: &mut Vec<u32>) {
+/// Drops vertices no triangle references. `true` when any were dropped.
+fn compact_referenced_vertices(geometry: &mut KeyGeometry, remap: &mut Vec<u32>) -> bool {
     remap.clear();
     remap.resize(geometry.vertices.len(), u32::MAX);
     for &index in &geometry.indices {
         remap[index as usize] = 0;
     }
     if remap.iter().all(|&index| index != u32::MAX) {
-        return;
+        return false;
     }
     let mut old = 0;
     let mut next = 0usize;
@@ -1548,6 +1666,7 @@ fn compact_referenced_vertices(geometry: &mut KeyGeometry, remap: &mut Vec<u32>)
     for index in &mut geometry.indices {
         *index = remap[*index as usize];
     }
+    true
 }
 
 /// Match complete vertex bits once, then use compact exact triangle keys.

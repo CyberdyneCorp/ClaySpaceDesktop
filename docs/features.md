@@ -5085,6 +5085,13 @@ to another key's share when a later request names a different set". We now do,
 at relayout. It is nine thousandths of a per cent of the buffer — kept because a
 relayout already rewrites everything so the pass is free, not because it pays.
 
+A release that compacts those duplicates no longer forces that relayout. It
+used to, so every dab and every undo re-uploaded the whole layer — about
+1.75 MB — to drop a handful of triangles; now it writes back only the keys the
+compaction changed, and a key it empties returns its span as a hole. The
+`re-malha final` console line splits a settle into engine, read, split, prune
+and upload, each measured on every route (issue #175).
+
 **55, and not the 11,333 first reported here.** That figure came from a dedupe
 keyed on the three vertex positions, which counts every pair of triangles at the
 same three points. Most of those are not one triangle twice. They are two

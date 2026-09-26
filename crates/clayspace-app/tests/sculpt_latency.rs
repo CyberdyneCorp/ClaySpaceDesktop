@@ -249,7 +249,7 @@ fn compaction_rebuilds_the_surface_without_changing_it() {
 }
 
 #[test]
-fn full_rebuilds_keep_sparse_uploads_while_compaction_batches() {
+fn full_rebuilds_keep_sparse_uploads_while_compaction_patches() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -281,8 +281,12 @@ fn full_rebuilds_keep_sparse_uploads_while_compaction_batches() {
         .unwrap();
     let live_bytes = (geometry.vertex_count() * clayspace_view::Vertex::STRIDE) as u64
         + u64::from(geometry.mesh().index_count()) * 4;
+    // Compaction rewrites only the keys it changed (issue #175); the mapped
+    // whole-surface layout is its fallback, not its default.
+    let compacted = harness.gpu.take_uploaded_bytes();
     assert!(
-        harness.gpu.take_uploaded_bytes() > live_bytes,
-        "compaction must use the mapped prefix, including inter-brick vertex gaps"
+        compacted < live_bytes / 4,
+        "compaction uploaded {compacted} bytes of a {live_bytes}-byte surface; \
+         it must patch the keys it changed rather than relay the layer out"
     );
 }
