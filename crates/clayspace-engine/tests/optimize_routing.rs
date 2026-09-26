@@ -16,7 +16,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, FieldDegradation, GestureSample, SceneModel, SculptModel, ToolKind,
+    BrushSettings, FieldDegradation, GestureSample, ModelError, Representation, SceneModel,
+    SculptModel, ToolKind, Unavailable,
 };
 
 fn sphere() -> ClayDocument {
@@ -152,5 +153,39 @@ fn optimising_a_layer_that_wants_it_still_works() {
     assert!(
         health(&document).consolidated,
         "and it reports itself collapsed afterwards"
+    );
+}
+
+/// A grid has no edit list to collapse, and the refusal says the action is a
+/// field's rather than that the grid had "nothing to consolidate".
+#[test]
+fn optimising_a_grid_is_refused_as_field_only() {
+    let mut document = sphere();
+    let key = document
+        .add_layer("grade", Representation::Voxel)
+        .expect("a grid layer");
+    let history = SceneModel::history_depth(&document);
+
+    let refused = document
+        .consolidate_layer(key)
+        .expect_err("a grid has nothing a whole-layer bake applies to");
+    assert!(
+        matches!(
+            refused,
+            ModelError::Unavailable(Unavailable::NoVerbHere {
+                active: Representation::Voxel,
+                ..
+            })
+        ),
+        "the refusal names the field-only action and the grid: {refused}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "applies to SDF layers; this one is voxel"
+    );
+    assert_eq!(
+        SceneModel::history_depth(&document),
+        history,
+        "a refusal changes nothing"
     );
 }

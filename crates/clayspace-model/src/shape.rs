@@ -867,12 +867,21 @@ pub trait ObjectModel {
 
     /// The refusal every provided method gives, in one place.
     fn no_objects_here(&self) -> crate::ModelError {
-        crate::ModelError::Unavailable(crate::Unavailable::NoVerbHere {
-            active: crate::Representation::Sdf,
-            verbs: Box::new(OBJECT_VERBS),
-            note: None,
-        })
+        no_objects_on(crate::Representation::Sdf)
     }
+}
+
+/// Objects refused on a layer of `active`, naming what that layer is.
+///
+/// A caller that knows the active representation says it: "applies to SDF
+/// layers; this one is voxel" is the answer, and a refusal that named the
+/// wrong representation told a sculptor on a grid that the grid was a field.
+pub fn no_objects_on(active: crate::Representation) -> crate::ModelError {
+    crate::ModelError::Unavailable(crate::Unavailable::NoVerbHere {
+        active,
+        verbs: Box::new(OBJECT_VERBS),
+        note: None,
+    })
 }
 
 #[cfg(test)]

@@ -972,7 +972,7 @@ pub(super) fn crossing_cost_lines(
         lines.push(format!("· {}", s.convert_sharp_edges_lost));
     }
     if !cost.keeps_history {
-        lines.push(format!("· {}", s.convert_history_lost));
+        lines.push(format!("· {}", history_lost(s, direction)));
     }
     // Said before the crossing rather than discovered after it. What comes out
     // sculpts, and it sculpts by moving the vertices it was given — there is
@@ -981,6 +981,18 @@ pub(super) fn crossing_cost_lines(
         lines.push(format!("· {}", s.convert_fixed_topology));
     }
     lines
+}
+
+/// What a crossing gives up of the history behind the source.
+///
+/// What the history *is* depends on what is being left: a hierarchy's is its
+/// levels, and telling a sculptor leaving one that "the parametric history"
+/// goes was a field's sentence on the wrong panel.
+fn history_lost(s: &Strings, direction: clayspace_model::Direction) -> &'static str {
+    match direction.from() {
+        clayspace_model::Representation::Multires => s.convert_levels_lost,
+        _ => s.convert_history_lost,
+    }
 }
 
 pub fn import_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
@@ -1209,4 +1221,27 @@ fn gate_words(s: &crate::Strings, gate: clayspace_vm::AgentGate) -> &'static str
         clayspace_vm::AgentGate::Quit => 5,
     };
     s.agent_gates[index]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clayspace_model::{Direction, Locale};
+
+    /// Leaving a hierarchy loses its levels, and the panel says so rather than
+    /// a field's "parametric history".
+    #[test]
+    fn each_crossing_names_the_history_it_leaves() {
+        for locale in [Locale::PtBr, Locale::EnUs, Locale::Es419] {
+            let s = Strings::for_locale(locale);
+            assert_eq!(
+                history_lost(s, Direction::MultiresToMesh),
+                s.convert_levels_lost
+            );
+            assert_eq!(
+                history_lost(s, Direction::SdfToVoxel),
+                s.convert_history_lost
+            );
+        }
+    }
 }

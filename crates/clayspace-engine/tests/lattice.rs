@@ -571,6 +571,66 @@ fn the_manipulator_does_nothing_with_nothing_selected() {
     assert!(!document.lattice().touched);
 }
 
+/// A direct drag moves the one point in hand. With none or several selected
+/// it moved nothing and answered as though it had; it is refused now, and the
+/// cage is left as it stood.
+#[test]
+fn a_direct_drag_without_exactly_one_point_is_refused() {
+    let mut document = meshed();
+    assert!(
+        document.drag_lattice_point([0.0, 1.0, 0.0]).is_err(),
+        "a drag with no cage up was accepted"
+    );
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let before = document.lattice().points.clone();
+
+    for selection in [&[][..], &[0, 1][..]] {
+        document.select_lattice_points(selection);
+        let refused = document
+            .drag_lattice_point([0.0, 5.0, 0.0])
+            .expect_err("a drag on no single point was accepted");
+        assert!(!refused.to_string().is_empty());
+        assert_eq!(document.lattice().points, before);
+        assert!(!document.lattice().touched);
+    }
+}
+
+/// One point is its own middle, so turning or scaling it about that middle
+/// goes nowhere. Refused rather than answered as a bend.
+#[test]
+fn turning_or_scaling_one_point_is_refused() {
+    let mut document = meshed();
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    document.select_lattice_points(&[0]);
+    let pivot = document.lattice().pivot().expect("a middle");
+    let before = document.lattice().points.clone();
+
+    for mode in [GizmoMode::Rotate, GizmoMode::Scale] {
+        document.set_gizmo_mode(mode);
+        document.begin_gizmo_drag(
+            GizmoHandle::Axis(1),
+            [pivot[0] + 1.0, pivot[1], pivot[2]],
+            LOOKING_DOWN_Z,
+        );
+        assert!(
+            document
+                .drag_gizmo([pivot[0], pivot[1], pivot[2] + 1.0], false)
+                .is_err(),
+            "{mode:?} on one point was accepted"
+        );
+        document.end_gizmo_drag();
+        assert_eq!(document.lattice().points, before);
+    }
+
+    // Moving it is still what the manipulator does with one point.
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
+    document
+        .drag_gizmo([pivot[0], pivot[1] + 0.3, pivot[2]], false)
+        .expect("a move of one point");
+    assert_ne!(document.lattice().points, before);
+}
+
 // -- seeing it while it happens ----------------------------------------------
 //
 // A cage that showed nothing until it was applied made the sculptor aim blind:

@@ -2158,6 +2158,12 @@ the screen while the box was still being drawn.
 It sits on the **middle of the selection**, not on the last point picked, so
 adding a point moves the widget to where the selection is.
 
+**What would move nothing is refused, and says so.** A direct drag moves the
+one point in hand, so with no point or several selected it is refused (the
+manipulator is what moves several). One point is its own middle, so turning or
+scaling it is refused too — moving it still works. And the manipulator is not
+held on an object or a layer the document does not have.
+
 **One widget carries every operation** — ZBrush's Gizmo 3D. Along each axis an
 arrow that slides, a ring that turns and, on a cage, a box that scales; the
 outer ring that turns in the screen plane; the centre block; and four corner
@@ -2523,7 +2529,12 @@ while the press falls through to the brush. A **ghosted** layer is transparent
 to this, because the engine excludes ghosts from the attributed raycast: the
 layer *behind* the ghost is the one that becomes active. A **locked** layer is
 still pickable, so it activates and then refuses the dab with its reason —
-locked is not hidden and not ghosted, and the three say different things.
+locked is not hidden and not ghosted, and the three say different things. A
+hidden layer is refused as hidden: visibility used to be folded into the
+"editable" answer, which was asked first, so a hidden layer was refused as
+locked. Optimize, the whole-layer bake, is a field's action; on a grid or a
+mesh it is refused naming the layer's representation rather than answering
+"nothing to consolidate".
 
 **Neither state can be set yet, and neither can the stack's order.** The engine
 carries all three states, `SceneModel` writes them, and `SceneViewModel` has

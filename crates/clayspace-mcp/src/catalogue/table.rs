@@ -1062,7 +1062,7 @@ pub const TABLE: &[ActionSpec] = &[
         group: "lattice",
         name: "drag",
         summary: "Moves the one selected control point to a point. With none or several \
-                  selected it moves nothing; transform moves several.",
+                  selected it is refused; transform moves several.",
         arguments: &[r("to", Kind::Vec3, "where, in the world")],
         example: r#"{"to":[0.1,0.2,0.0]}"#,
     },

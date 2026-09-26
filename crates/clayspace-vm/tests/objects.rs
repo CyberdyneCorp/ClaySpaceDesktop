@@ -647,10 +647,14 @@ fn placing_on_a_grid_says_why_it_cannot() {
         Representation::Voxel,
     );
     vm.dispatch(&Command::InsertShape, Representation::Voxel);
-    assert!(
-        vm.notice().get().is_some(),
-        "a refusal must be stated rather than silent"
-    );
+    let notice = vm
+        .notice()
+        .get()
+        .clone()
+        .expect("a refusal must be stated rather than silent");
+    // It names the layer the sculptor is on. It used to say "this one is
+    // SDF" on a grid, which is the one representation objects DO apply to.
+    assert!(notice.ends_with("this one is voxel"), "{notice}");
     assert!(calls.borrow().placed.is_empty());
 }
 
@@ -1009,6 +1013,32 @@ fn a_curve_target_without_selected_points_is_refused() {
         vm.notice().get().as_deref(),
         Some("select a curve control point")
     );
+}
+
+/// A manipulator pointed at an object that is not in the document is refused
+/// and said, rather than held on nothing — it used to be accepted in silence,
+/// and the drag that followed moved nothing and said nothing.
+#[test]
+fn a_target_that_is_not_in_the_document_is_refused() {
+    let (mut vm, calls) = viewmodel();
+    let missing = ObjectId {
+        layer: LayerKey(1),
+        node: 9_999,
+    };
+    send(
+        &mut vm,
+        Command::SetGizmoTarget(Some(GizmoTarget::Object(missing))),
+    );
+    assert_eq!(*vm.target().get(), None);
+    assert_eq!(
+        vm.notice().get().as_deref(),
+        Some("that object is not in the document")
+    );
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    assert_eq!(calls.borrow().drags_begun, 0, "a drag on nothing began");
 }
 
 /// A drag the model refuses has to reach the status area. Leaving the object

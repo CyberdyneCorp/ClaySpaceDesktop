@@ -476,11 +476,6 @@ impl Layer {
         }
     }
 
-    /// Whether an edit may touch it: shown, not ghosted, not locked.
-    fn editable(&self) -> bool {
-        self.visible && self.protection.is_editable()
-    }
-
     /// Whether this layer is one of the terms the brick cache evaluates.
     ///
     /// The field the cache holds is the fold of the **visible SDF** layers and
@@ -9756,8 +9751,18 @@ impl SculptModel for ClayDocument {
         self.active_layer().carries_geometry
     }
 
+    /// Protection alone — not ghosted, not locked.
+    ///
+    /// Visibility is its own question, asked by `active_layer_visible`. Folded
+    /// in here, a hidden layer answered "not editable" first and was refused
+    /// as locked: the wrong reason, and a false "locked" notice on selecting
+    /// it.
     fn active_layer_editable(&self) -> bool {
-        self.active_layer().editable()
+        self.active_layer().protection.is_editable()
+    }
+
+    fn active_layer_visible(&self) -> bool {
+        self.active_layer().visible
     }
 
     /// Whether a cage stands around the layer edits would go to.
@@ -11683,7 +11688,20 @@ impl SceneModel for ClayDocument {
     }
 
     fn consolidate_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
-        let id = self.layer_id(key)?;
+        let index = self.index_of(key)?;
+        let (id, representation) = (self.layers[index].id, self.layers[index].representation);
+        // A field's action. A grid has no edit list to collapse, and asked
+        // anyway the engine answered "nothing to consolidate" — true of the
+        // call and wrong about the layer, which reads as "already done".
+        if representation != Representation::Sdf {
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::NoVerbHere {
+                    active: representation,
+                    verbs: Box::new(CONSOLIDATE_VERBS),
+                    note: None,
+                },
+            ));
+        }
         // WHICH BAKE, ASKED BEFORE IT IS PERFORMED.
         //
         // This collapses the whole subtool, and that is the cure for a stack
@@ -13822,6 +13840,15 @@ impl LatticeModel for ClayDocument {
             return Ok(());
         };
         let (drag, held) = (*drag, held.clone());
+        // Turned or scaled about its own middle, one point is its own pivot
+        // and goes nowhere. Accepted, the drag answered as though it had bent
+        // the cage.
+        if drag.mode != GizmoMode::Move && cage.selection.len() < 2 {
+            return Err(ModelError::engine(
+                "turning or scaling one control point about itself moves nothing; \
+                 select two or more, or move it",
+            ));
+        }
         for (at, was) in cage.selection.clone().iter().zip(held) {
             let now = drag.apply(was, to, snap);
             let rest = cage.rest(*at);
@@ -13840,13 +13867,19 @@ impl LatticeModel for ClayDocument {
 
     fn drag_lattice_point(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
         let Some(cage) = self.lattice.as_mut() else {
-            return Ok(());
+            return Err(ModelError::engine("no deformation cage is up"));
         };
         // The one point in hand. A direct drag moves exactly what was grabbed
         // — a selection of several is what the manipulator is for, and moving
         // them all with one pointer would be a gizmo without the handles.
+        //
+        // Refused rather than ignored otherwise: with none or several selected
+        // the drag moved nothing and answered as though it had.
         let &[index] = cage.selection.as_slice() else {
-            return Ok(());
+            return Err(ModelError::engine(match cage.selection.len() {
+                0 => "select the control point to drag",
+                _ => "a direct drag moves one control point; the manipulator moves several",
+            }));
         };
         // The offset from rest rather than an accumulation, so a drag ends
         // where the pointer ends however many frames it took and a stutter
@@ -16272,6 +16305,20 @@ impl ClayDocument {
         Ok((layer.key, layer.id))
     }
 }
+
+/// Where a whole-layer bake applies: a field's edit list, and nothing else.
+const CONSOLIDATE_VERBS: clayspace_model::Verbs = clayspace_model::Verbs {
+    sdf: Some(clayspace_model::Binding::new(
+        "clay_layer_consolidate",
+        clayspace_model::SemanticIntent::Structure,
+        clayspace_model::ExecutionFamily::BakedFieldOperation,
+        clayspace_model::Fidelity::Native,
+    )),
+    voxel: None,
+    mesh: None,
+    multires: None,
+    dynamic: None,
+};
 
 /// A box in world space, as every one of these calls hands one over.
 type Bounds = ([f32; 3], [f32; 3]);

@@ -221,8 +221,13 @@ fn soloing_elsewhere_leaves_the_active_subtool_hidden_and_says_so() {
             [false; 3],
         )
         .expect_err("a hidden subtool takes no dab");
+    // Hidden, and said as hidden: it used to be refused as "locked", because
+    // the editable answer folded visibility in and was asked first.
     assert!(
-        matches!(refused, ModelError::Unavailable(_)),
+        matches!(
+            refused,
+            ModelError::Unavailable(clayspace_model::Unavailable::LayerHidden)
+        ),
         "the refusal has to be the stated one: {refused}"
     );
 }

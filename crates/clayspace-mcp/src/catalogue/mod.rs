@@ -1459,9 +1459,9 @@ mod tests {
         assert!(actions::build("transform", "drag", &args).is_err());
 
         // The document moves exactly the one grabbed point; none or several
-        // is a silent no-op, which the summary has to say.
+        // is refused, which the summary has to say.
         assert!(summary_of("lattice", "drag").contains("one selected control point"));
-        assert!(summary_of("lattice", "drag").contains("moves nothing"));
+        assert!(summary_of("lattice", "drag").contains("is refused"));
 
         // `Command::SetCombine` is how the *next* SDF edit combines.
         assert!(summary_of("layer", "set_combine").contains("next SDF edit"));
