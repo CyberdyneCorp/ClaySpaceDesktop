@@ -918,6 +918,41 @@ length.
 The curve is held only while a gesture is open, so the next pull is its own
 tendril rather than a continuation of the last.
 
+Four more properties hold a pull to what the sculptor drew:
+
+- **The mask gates the whole tendril.** It used to be sampled at the path's
+  own samples only, but a tendril is a tube around its path, so the span
+  joining the samples either side of a masked band ran straight through it —
+  measured, the band rose 0.270 with the mask and 0.269 without. The curve
+  item now carries the mask as a gate, the way the stamp verbs do, so a
+  masked band holds and the open surface either side rises as it would.
+- **The root stays put.** The chain's links were smooth-unioned into one
+  another by half a brush, and a spline is tessellated into many short spans,
+  so every span swelled its neighbours and the root kept thickening as the
+  pull went on. A Catmull-Rom curve is already smooth; its spans are hard-
+  unioned now, and the curve is tessellated at the document tolerance from the
+  first segment so a grown pull never re-tessellates what is already down.
+- **The tip ends at the pointer.** A swept sphere caps its curve with a half
+  ball, so a curve ending at the pointer stood a whole tip radius past it (a
+  pull ending at 1.4 stood out to 1.70). The curve is trimmed back by the tip's
+  radius, and only the end moves, so the cap closes where the pointer stopped.
+  A pull still shorter than its root is wide is a bead whose radius grows with
+  the pull and whose cap reaches the pointer, so a short tug still shows.
+- **It joins the surface through a fillet** of half the brush rather than a
+  hard union, which met the form at a crease the grid sampled into a sawtooth.
+
+### A topological drag
+
+**Mover Topológico** bakes: the engine re-samples a volume through the inverse
+of the move. That inverse folds once the displacement outruns the falloff, and
+a long drag tore a crater into the middle of the lump it pulled. The drag is
+applied in steps of a quarter of its reach, each anchored where the last one
+carried the material, with a crossfade band that covers the whole move. On a
+field it is held for the whole gesture and lands when the pointer comes up —
+delivered segment by segment, each one was anchored at the pointer rather than
+at the moved material and the drag ended as a shelf with a cliff. It is gated
+by the mask, like every other verb.
+
 ## Masking
 
 **M** starts painting a mask and **M** again puts the tool you were using back
