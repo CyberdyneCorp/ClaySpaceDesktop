@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adaptive;
 pub mod alpha;
 pub mod backend;
 pub mod compaction;

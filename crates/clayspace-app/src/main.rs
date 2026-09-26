@@ -3481,6 +3481,10 @@ impl App {
             self.document
                 .with(|document| document.multires_diagnostics()),
         );
+        report.adaptive = Some(
+            self.document
+                .with(|document| document.dynamic_diagnostics()),
+        );
         // The meter's reading rather than a fresh one: this report is built
         // every frame, and the ledger is a walk of the brick cache and of
         // every surface. It is also what keeps this window, the status area
@@ -7447,7 +7451,7 @@ mod tests {
         // the refusal, which is what makes it an answerable one.
         let refusal = refusal_for(&ModelError::Unavailable(Unavailable::NoVerbHere {
             active: Representation::Sdf,
-            verbs: clayspace_model::ToolKind::Raspar.verbs(),
+            verbs: Box::new(clayspace_model::ToolKind::Raspar.verbs()),
             note: None,
         }));
         assert_eq!(refusal.code, RefusalCode::Unavailable);

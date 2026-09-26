@@ -22,15 +22,17 @@ use clayspace_model::{
     BrushSettings, GestureSample, MaskModel, Representation, SculptModel, ToolKind,
 };
 
+mod adaptive_fixture;
+
 /// The representations this adapter can build a document of.
 ///
-/// Three of the four. The domain carries a subdivision hierarchy and this
+/// All but one. The domain carries a subdivision hierarchy and this
 /// adapter does not hold one yet — no crossing builds one, no `Layer` carries a
 /// `clay_multires`, and `apply_stroke` refuses it in as many words. Walking it
 /// here would test the refusal rather than the table.
 ///
 /// Derived from `Representation::ALL` by subtraction rather than written out,
-/// so that a fifth representation is walked by default and has to be excluded
+/// so that a new representation is walked by default and has to be excluded
 /// deliberately — which is the direction that fails loudly.
 fn buildable() -> Vec<Representation> {
     Representation::ALL
@@ -42,8 +44,9 @@ fn buildable() -> Vec<Representation> {
 /// Where each fixture is worked, and where every stroke here is made.
 fn over(representation: Representation) -> [f32; 3] {
     match representation {
-        // The top of the starting sphere, and of the mesh carried off it.
-        Representation::Sdf | Representation::Mesh => [0.0, 0.0, 1.0],
+        // The top of the starting sphere, and of the mesh or adaptive surface
+        // carried off it.
+        Representation::Sdf | Representation::Mesh | Representation::Dynamic => [0.0, 0.0, 1.0],
         // The middle of the slab.
         Representation::Voxel => [0.0, 0.0, 0.0],
         Representation::Multires => unreachable!("see `buildable`"),
@@ -61,6 +64,9 @@ fn over(representation: Representation) -> [f32; 3] {
 fn worked(representation: Representation) -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     match representation {
+        // Read from a clean sphere: a marched mesh carries slivers the
+        // adaptive surface refuses rather than repairs.
+        Representation::Dynamic => adaptive_fixture::adaptive_sphere(),
         Representation::Voxel => {
             let mut document = ClayDocument::new(policy).expect("a document");
             document

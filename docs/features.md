@@ -28,6 +28,11 @@ on it — the sixteen mesh brushes less Pintar and Borrar, plus Apagar, which on
 hierarchy takes the selected pass's detail back toward zero, plus Máscara. See
 [Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
+A fifth — an adaptive surface, **Dynamic** — is left out for the same reason:
+its column is the mesh's through `clay_dynamic_sculptor_apply_stroke`, less
+Camada, which the engine declines and the shelf explains — fifteen brushes plus
+Máscara. See [Sculpting an adaptive surface](#sculpting-an-adaptive-surface).
+
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal. On a field the tooltip says what the relief op costs it: each point moves along its *own* normal, so a feature narrower than the brush thickens instead of taking the mark |
@@ -1760,6 +1765,61 @@ and it is a different one, at a scale an eraser does not suggest. The brush
 stays on the shelf while it is refused, because a tool that vanished when a
 sculptor clicked a row would leave nobody to say why.
 
+## Sculpting an adaptive surface
+
+A fifth way to hold a surface: triangles whose **connectivity follows the
+brush**. A mesh layer keeps its topology — the contract after a retopology — so
+a large Move stretches the triangles it has; an adaptive surface splits and
+collapses edges where a stroke needs them, so the same Move makes the triangles
+it needs. It is the contract while a form is still being found.
+
+| property | Mesh | Dynamic |
+|---|---|---|
+| topology | preserved | changes locally |
+| quads | preserved | no — the surface is triangles |
+| large Move | stretches existing triangles | creates the triangles it needs |
+| best use | a settled, retopologized asset | free-form construction |
+| undo | vertex deltas | the surface as it stood, connectivity and all |
+
+**It comes from a mesh.** There is no call that makes an empty one, so it is
+not among the representations a new layer can be; it arrives through
+`mesh → dynamic`, which refuses rather than repairs — a face with collinear
+corners or a third face on an edge comes back named. Marched output carries
+slivers and is refused on that ground, as a cage is. `dynamic → mesh` bakes it
+back to a fixed mesh. See
+[Crossing between representations](#crossing-between-representations).
+
+**It is never reported as a mesh.** The workspace bar has a card of its own,
+the layer row reads `DYN`, the inspector says the topology adapts, and an agent
+reading `state` sees `dynamic`. The stored key is `dynamic`.
+
+**Fifteen brushes and the mask.** Every mesh brush but Camada, through one
+entry point that takes the same descriptor. **Camada is absent and says why**:
+its ceiling is measured from where each vertex stood when the stroke began, and
+an adaptive stroke creates vertices that did not exist then. The engine refuses
+it rather than letting it become Padrão for the new vertices and Camada for the
+old ones. Pintar and Borrar need a surface read from a coloured mesh, as they
+do on a mesh; over one without colour they are refused rather than remeshing
+and colouring nothing.
+
+**When the remesh runs is per brush**, and the engine owns the schedule: Mover
+refines *after* its drag, so the stretch gets geometry; the deposits (Padrão,
+Argila, Vinco, Inflar) refine *before*, so a deposit onto coarse triangles is
+not a smooth bump where the brush promised an edge; Puxar does both, because it
+re-anchors between stamps. `ToolKind::remesh_timing` states the same table.
+
+**One gesture is one undo, and it restores connectivity.** The record is the
+surface's own bytes before the gesture — a bounded snapshot, exact, in the one
+ordered history every other edit is in. **The surface is saved beside the
+document** in a `.dynamic` file, as a hierarchy's is; a document opened without
+it comes back as the mesh the surface was read from, and a record that could not
+be honoured is named in the diagnostics report.
+
+Not yet: the drawing copies the whole surface when it has moved rather than
+only the chunks a stroke dirtied; the history holds a snapshot rather than the
+engine's topology delta; and export, like a hierarchy's, writes the mesh the
+row was read from — `dynamic → mesh` first exports what the brush has made.
+
 ## Voxel layers
 
 Nine of the engine's ten sculpting verbs reach a voxel layer through the ordinary
@@ -3178,8 +3238,13 @@ those three reaches both of the others, so **six** crossings are offered from
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
 | mesh | multires | Takes the mesh **as the cage** of a subdivision hierarchy, vertex for vertex |
 | multires | mesh | Bakes the display level out as an ordinary mesh |
+| mesh | dynamic | Reads the mesh into an adaptive surface whose edges the brush may split and collapse. Quads do not survive |
+| dynamic | mesh | Bakes the adaptive surface out as an ordinary mesh, priced by the engine's preflight first |
 
-The last two are the only crossings that sample nothing — a cage is the mesh's
+The adaptive pair samples nothing either and refuses the same two faults; see
+[Sculpting an adaptive surface](#sculpting-an-adaptive-surface).
+
+The hierarchy pair are the crossings that sample nothing — a cage is the mesh's
 own vertices and a level is the hierarchy's own — so what they cost is stated
 as a refusal rather than as a tolerance. `clay_multires_from_mesh` **refuses
 rather than repairs**: a non-manifold edge or a face with repeated or collinear
@@ -4101,7 +4166,7 @@ and `describe tool` leaves it out of the choices for the same reason and from
 the same call the shelf is built from — `erase`, `scrape`, `fill` and `nudge`
 have no field verb and are not offered on a field. The answer names the layer
 it was narrowed against and the tools it left out, in the wire's own words:
-`field`, `grid`, `mesh`, `hierarchy`. The schema sent when a client connects
+`field`, `grid`, `mesh`, `hierarchy`, `dynamic`. The schema sent when a client connects
 still carries all twenty-one, because it is sent once and cannot follow a
 selection made afterwards.
 

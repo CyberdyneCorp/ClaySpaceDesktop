@@ -83,6 +83,7 @@ pub const REPRESENTATIONS: &[(&str, Representation)] = &[
     ("grid", Representation::Voxel),
     ("mesh", Representation::Mesh),
     ("hierarchy", Representation::Multires),
+    ("dynamic", Representation::Dynamic),
 ];
 
 pub const FALLOFFS: &[(&str, Falloff)] = &[
@@ -172,6 +173,8 @@ pub const DIRECTIONS: &[(&str, Direction)] = &[
     ("grid-to-mesh", Direction::VoxelToMesh),
     ("mesh-to-hierarchy", Direction::MeshToMultires),
     ("hierarchy-to-mesh", Direction::MultiresToMesh),
+    ("mesh-to-dynamic", Direction::MeshToDynamic),
+    ("dynamic-to-mesh", Direction::DynamicToMesh),
 ];
 
 pub const IMPORT_AS: &[(&str, ImportAs)] =

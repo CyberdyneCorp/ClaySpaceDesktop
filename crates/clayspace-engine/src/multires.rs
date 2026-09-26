@@ -705,6 +705,19 @@ impl std::fmt::Debug for Saved {
 /// something a licence audit carries forever. The line grows only at its tail,
 /// so a build that predates a field reads the fields it knows and stops.
 pub fn write_hierarchies(path: &std::path::Path, hierarchies: &[Saved]) -> std::io::Result<()> {
+    write_records(path, HEADER, hierarchies)
+}
+
+/// The side-car writer, for any blob a document keeps beside itself.
+///
+/// Shared with [`crate::adaptive`], whose surfaces are the same kind of thing
+/// — an opaque, owning handle `clay_document_save` has never heard of — and
+/// are kept the same way under a header of their own.
+pub(crate) fn write_records(
+    path: &std::path::Path,
+    header: &[u8],
+    hierarchies: &[Saved],
+) -> std::io::Result<()> {
     // Removed rather than left standing when there is nothing to write. A
     // stale side-car beside a document that no longer holds a hierarchy would
     // promote a mesh layer back into one on the next open, using a blob for a
@@ -715,7 +728,7 @@ pub fn write_hierarchies(path: &std::path::Path, hierarchies: &[Saved]) -> std::
             other => other,
         };
     }
-    let mut out = Vec::from(HEADER);
+    let mut out = Vec::from(header);
     for saved in hierarchies {
         out.extend_from_slice(format!("{} {}\n", saved.position, saved.bytes.len()).as_bytes());
         out.extend_from_slice(&saved.bytes);
@@ -777,6 +790,11 @@ pub enum SideCarFault {
 /// refuse too — but the difference between a loss named and a loss silent is
 /// the whole reason the report exists.
 pub fn read_hierarchies(path: &std::path::Path) -> SideCar {
+    read_records(path, HEADER)
+}
+
+/// The side-car reader under a given header; see [`write_records`].
+pub(crate) fn read_records(path: &std::path::Path, header: &[u8]) -> SideCar {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         // Absent is not damaged, and is the ordinary case: most documents
@@ -789,7 +807,7 @@ pub fn read_hierarchies(path: &std::path::Path) -> SideCar {
             }
         }
     };
-    let Some(mut rest) = bytes.strip_prefix(HEADER) else {
+    let Some(mut rest) = bytes.strip_prefix(header) else {
         return SideCar {
             records: Vec::new(),
             faults: vec![SideCarFault::UnknownFormat],

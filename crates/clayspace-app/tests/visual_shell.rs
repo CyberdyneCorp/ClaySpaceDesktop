@@ -176,6 +176,7 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             held: 2,
             lost: vec!["Cabeça · hierarquia".into()],
         }),
+        adaptive: None,
         // A document whose surfaces carry rather more than its edit list does,
         // which is the case the breakdown exists for: the plain roll-up would
         // report the 40 MB and leave the 96 MB of sculpting session out.
@@ -1392,10 +1393,10 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
     // whose panel offers nothing is a panel with a heading and no rows.
     //
     // Not a single number for all of them. A field and a grid reach each other
-    // and a mesh; a mesh reaches all three of the others, since it is also the
-    // only way into a subdivision hierarchy; and a hierarchy reaches only a
-    // mesh, because a cage is built from one call and read back by one call and
-    // there is no third. Asserted per representation against the domain's own
+    // and a mesh; a mesh reaches all four of the others, since it is also the
+    // only way into a subdivision hierarchy and an adaptive surface; and each
+    // of those two reaches only a mesh, because each is built from one call and
+    // read back by one call and there is no third. Asserted per representation against the domain's own
     // table, so that a crossing added or withdrawn is a figure to update here
     // rather than a silent change in what this panel draws.
     for representation in clayspace_model::Representation::ALL {
@@ -1407,8 +1408,9 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
         );
         let expected = match representation {
             clayspace_model::Representation::Sdf | clayspace_model::Representation::Voxel => 2,
-            clayspace_model::Representation::Mesh => 3,
-            clayspace_model::Representation::Multires => 1,
+            clayspace_model::Representation::Mesh => 4,
+            clayspace_model::Representation::Multires
+            | clayspace_model::Representation::Dynamic => 1,
         };
         assert_eq!(
             crossings, expected,

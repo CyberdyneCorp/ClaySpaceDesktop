@@ -93,7 +93,8 @@ impl ExtrudeSettings {
 pub fn can_extrude(representation: Representation) -> bool {
     match representation {
         Representation::Sdf | Representation::Voxel => true,
-        Representation::Mesh | Representation::Multires => false,
+        // An adaptive surface has no field either: it is triangles.
+        Representation::Mesh | Representation::Multires | Representation::Dynamic => false,
     }
 }
 

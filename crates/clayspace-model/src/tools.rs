@@ -50,10 +50,29 @@ pub enum Representation {
     /// its vertices went and not what colour they are, which is why the two
     /// colour brushes reach a mesh and not this.
     Multires,
+    /// Triangles whose connectivity adapts under the brush.
+    ///
+    /// The engine's DynamicSurface, and deliberately not a mode of
+    /// [`Self::Mesh`]: a fixed mesh keeps its topology — the contract after a
+    /// retopology — and this one splits and collapses edges where a stroke
+    /// needs them, which is the contract while a form is still being found. A
+    /// large Move on a mesh stretches the triangles it has; here it makes the
+    /// ones it needs. Quads do not survive, and an undo has to restore
+    /// connectivity rather than positions alone.
+    ///
+    /// Reported, persisted and offered as itself everywhere. Treating it as a
+    /// mesh would hide what a crossing to it costs and what its history holds.
+    Dynamic,
 }
 
 impl Representation {
-    pub const ALL: [Representation; 4] = [Self::Sdf, Self::Voxel, Self::Mesh, Self::Multires];
+    pub const ALL: [Representation; 5] = [
+        Self::Sdf,
+        Self::Voxel,
+        Self::Mesh,
+        Self::Multires,
+        Self::Dynamic,
+    ];
 
     /// The representations an *empty* layer can be created in.
     ///
@@ -69,6 +88,10 @@ impl Representation {
     /// *from a cage*, `clay_multires_from_mesh` refuses rather than repairs
     /// one, and there is no call that makes an empty one at all. It arrives
     /// through [`crate::Direction::MeshToMultires`] or not at all.
+    ///
+    /// An adaptive surface is out for the first reason: it is read from a mesh
+    /// by `clay_dynamic_surface_from_mesh`, and an empty one has nothing to
+    /// read. It arrives through [`crate::Direction::MeshToDynamic`].
     pub const CREATABLE: [Representation; 2] = [Self::Sdf, Self::Voxel];
 
     pub fn label(self) -> &'static str {
@@ -77,7 +100,45 @@ impl Representation {
             Self::Voxel => "voxel",
             Self::Mesh => "mesh",
             Self::Multires => "multires",
+            Self::Dynamic => "dynamic",
         }
+    }
+
+    /// A stable name for storage.
+    ///
+    /// Not [`Representation::label`], which is text a reader sees and may be
+    /// reworded. This is what a saved document holds, so it never changes once
+    /// written — the rule [`ToolKind::key`] follows. An adaptive surface is
+    /// `"dynamic"` and never `"mesh"`: a row saved as a mesh would reopen as
+    /// one, with its connectivity contract silently swapped.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Sdf => "sdf",
+            Self::Voxel => "voxel",
+            Self::Mesh => "mesh",
+            Self::Multires => "multires",
+            Self::Dynamic => "dynamic",
+        }
+    }
+
+    /// The representation a stored key names, or `None` for one this build
+    /// does not know.
+    ///
+    /// Refused rather than guessed: an unknown key is a document from a later
+    /// build, and reading it as the nearest representation would open it as
+    /// something it is not.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|representation| representation.key() == key)
+    }
+
+    /// Whether the layer holds its own vertices rather than a field or cells.
+    ///
+    /// The three that do are drawn from their own triangles, have no bricks in
+    /// the field cache and are sculpted by the shared mesh brush descriptor.
+    pub fn carries_vertices(self) -> bool {
+        matches!(self, Self::Mesh | Self::Multires | Self::Dynamic)
     }
 }
 
@@ -160,9 +221,9 @@ impl SemanticIntent {
 /// A reader asking why the field's smooth costs what the mesh's does not is
 /// asking this question, and until now the answer was in a comment.
 ///
-/// The engine's dynamic-topology family has no variant here, and that is the
-/// rule this enum is held to: a family nothing binds is a claim nothing
-/// checks. It arrives with the first binding that needs it.
+/// The rule this enum is held to: a family nothing binds is a claim nothing
+/// checks, so a family arrives with the first binding that needs it. The
+/// dynamic-topology family arrived with [`Representation::Dynamic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecutionFamily {
     /// An operation applied to the accumulated field: `clay_layer_apply_stroke`
@@ -186,6 +247,9 @@ pub enum ExecutionFamily {
     MeshVerb,
     /// A verb on the subdivision hierarchy.
     MultiresVerb,
+    /// A verb on the adaptive surface, which may split and collapse edges
+    /// around the deformation.
+    DynamicVerb,
     /// The world-addressed mask, which belongs to no representation.
     ///
     /// Its own family rather than the field's, because belonging to no
@@ -221,6 +285,7 @@ impl ExecutionFamily {
             Self::VoxelVerb => Some("clay_voxel_"),
             Self::MeshVerb => Some("clay_mesh_"),
             Self::MultiresVerb => Some("clay_multires_"),
+            Self::DynamicVerb => Some("clay_dynamic_"),
             Self::MaskField => Some("clay_mask_"),
             Self::BakedFieldOperation => Some("clay_item_volume_"),
             Self::FieldCombineOp | Self::FieldDeformer | Self::FieldItemEdit | Self::Recipe => None,
@@ -236,6 +301,7 @@ impl ExecutionFamily {
             Self::VoxelVerb => "voxel verb",
             Self::MeshVerb => "mesh verb",
             Self::MultiresVerb => "multires verb",
+            Self::DynamicVerb => "dynamic verb",
             Self::MaskField => "mask field",
             Self::Recipe => "recipe",
         }
@@ -449,6 +515,26 @@ pub(crate) const fn multires_verb(
     ))
 }
 
+/// The adaptive surface's column.
+///
+/// Every brush it offers is the fixed sculptor's brush through one entry
+/// point — `clay_dynamic_sculptor_apply_stroke` takes the same
+/// `clay_mesh_brush_desc` — so the intent is the mesh row's and the fidelity
+/// is the mesh row's too: the engine calls the shared kernels rather than a
+/// copy of them.
+pub(crate) const fn dynamic_verb(
+    entry_point: &'static str,
+    intent: SemanticIntent,
+    fidelity: Fidelity,
+) -> Option<Binding> {
+    Some(Binding::new(
+        entry_point,
+        intent,
+        ExecutionFamily::DynamicVerb,
+        fidelity,
+    ))
+}
+
 /// The mask's own column, which needs no arguments but the call.
 ///
 /// One intent, one family and one fidelity wherever it is painted: a mask is
@@ -502,6 +588,14 @@ pub struct Verbs {
     /// not what colour it is, and the smooth names a different entry point,
     /// because a smooth here picks which frequency it acts on.
     pub multires: Option<Binding>,
+    /// The adaptive surface's column.
+    ///
+    /// The mesh column through `clay_dynamic_sculptor_apply_stroke`, less the
+    /// one brush the engine declines: Layer deposits up to a ceiling measured
+    /// against where each vertex stood when the stroke began, and an adaptive
+    /// stroke creates vertices that did not exist then. That absence is a
+    /// [`ToolNote`] rather than a gap — see [`ToolNote::DynamicHasNoLayer`].
+    pub dynamic: Option<Binding>,
 }
 
 impl Verbs {
@@ -513,6 +607,7 @@ impl Verbs {
             Representation::Voxel => self.voxel,
             Representation::Mesh => self.mesh,
             Representation::Multires => self.multires,
+            Representation::Dynamic => self.dynamic,
         }
     }
 
@@ -524,9 +619,9 @@ impl Verbs {
 
     /// How many representations this tool reaches.
     pub fn count(self) -> usize {
-        [self.sdf, self.voxel, self.mesh, self.multires]
+        Representation::ALL
             .into_iter()
-            .filter(Option::is_some)
+            .filter(|representation| self.on(*representation).is_some())
             .count()
     }
 }
@@ -742,6 +837,7 @@ impl LayerOperation {
                     Fidelity::Native,
                 ),
                 multires: None,
+                dynamic: None,
             },
             Self::LatticeDrag { .. } => Verbs {
                 sdf: None,
@@ -752,6 +848,7 @@ impl LayerOperation {
                     Fidelity::Native,
                 ),
                 multires: None,
+                dynamic: None,
             },
             // Both repairs put material where there was none — the hole's
             // wall, the void's interior — which is why they are `VolumeAdd`
@@ -766,6 +863,7 @@ impl LayerOperation {
                 ),
                 mesh: None,
                 multires: None,
+                dynamic: None,
             },
             Self::FillVoids => Verbs {
                 sdf: None,
@@ -776,6 +874,7 @@ impl LayerOperation {
                 ),
                 mesh: None,
                 multires: None,
+                dynamic: None,
             },
             // `TopologyRebuild` for the reason the doc sentence above gives
             // for it not being the hierarchy's: it changes how finely the form
@@ -789,6 +888,7 @@ impl LayerOperation {
                 ),
                 mesh: None,
                 multires: None,
+                dynamic: None,
             },
         }
     }
@@ -1003,11 +1103,58 @@ impl ToolKind {
         self.is_region_based() || (self == Self::Mover && representation == Representation::Voxel)
     }
 
+    /// When an adaptive surface remeshes around this tool's deformation.
+    ///
+    /// Per verb rather than one setting, because brushes fail differently on
+    /// topology too coarse for them: a Grab that remeshed first would refine
+    /// triangles it is about to stretch, so it refines what the stretch made;
+    /// a deposit onto coarse triangles is a smooth bump where the brush
+    /// promised an edge, so Clay refines first; Snake Hook re-anchors between
+    /// stamps and needs geometry on both sides of the pull.
+    ///
+    /// The engine owns the schedule (`default_timing` in ClayCore's local
+    /// remesher) and applies it per stamp; this is the same table stated where
+    /// the interface and the agent can read it, and the engine suite measures
+    /// the two against each other. `None` for a tool with no Dynamic binding.
+    pub fn remesh_timing(self) -> Option<RemeshTiming> {
+        if !self.exists_on(Representation::Dynamic) || self.is_mask_tool() {
+            return None;
+        }
+        Some(match self {
+            Self::Mover | Self::Relaxar => RemeshTiming::AfterBrush,
+            Self::Puxar => RemeshTiming::BeforeAndAfter,
+            _ => RemeshTiming::BeforeBrush,
+        })
+    }
+
     pub fn is_path_driven(self) -> bool {
         matches!(
             self,
             Self::Mover | Self::MoverTopologico | Self::Puxar | Self::Nudge
         )
+    }
+}
+
+/// When an adaptive surface remeshes relative to a stamp's deformation.
+///
+/// See [`ToolKind::remesh_timing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RemeshTiming {
+    /// Refine first, so the deformation has the geometry it needs.
+    BeforeBrush,
+    /// Deform first, then refine what the deformation stretched.
+    AfterBrush,
+    /// Both: the pull needs somewhere to stand and leaves a stretch behind.
+    BeforeAndAfter,
+}
+
+impl RemeshTiming {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::BeforeBrush => "before",
+            Self::AfterBrush => "after",
+            Self::BeforeAndAfter => "before and after",
+        }
     }
 }
 
@@ -1089,10 +1236,19 @@ pub enum ToolNote {
     VoxelSmearHasNoColourVerb,
     /// Binary occupancy cannot hold Clay's clamped buildup.
     VoxelClayHasNoBuildup,
+    /// An adaptive surface has no Layer brush, and that is structural.
+    ///
+    /// Layer deposits up to a ceiling measured from where each vertex stood
+    /// when the stroke began. On an adaptive surface a split creates vertices
+    /// mid-stroke that have no such reference, so the engine refuses the verb
+    /// rather than letting it become Draw for the new vertices and Layer for
+    /// the old ones. Stated, because a missing Layer on a shelf that carries
+    /// every other mesh brush reads as an oversight.
+    DynamicHasNoLayer,
 }
 
 impl ToolNote {
-    pub const ALL: [ToolNote; 8] = [
+    pub const ALL: [ToolNote; 9] = [
         Self::VoxelPlanarIsTwoSided,
         Self::MultiresSmoothChoosesAFrequency,
         Self::MultiresStoresNoColour,
@@ -1101,6 +1257,7 @@ impl ToolNote {
         Self::VoxelCreaseIsErodeRecipe,
         Self::VoxelSmearHasNoColourVerb,
         Self::VoxelClayHasNoBuildup,
+        Self::DynamicHasNoLayer,
     ];
 }
 
@@ -1153,7 +1310,9 @@ pub enum Unavailable {
     /// half, and what a bare "not here" loses.
     NoVerbHere {
         active: Representation,
-        verbs: Verbs,
+        /// Boxed: a row is one binding per representation, and carried inline
+        /// it made every `ModelError` as large as the whole table row.
+        verbs: Box<Verbs>,
         /// Why the tool is missing *here in particular*, where saying so is
         /// worth more than the list of where it is not missing.
         ///
@@ -1324,7 +1483,8 @@ impl ToolKind {
     pub fn engine_verbs(self) -> String {
         let verbs = self.verbs();
         let mut named: Vec<&'static str> = Vec::new();
-        for binding in [verbs.sdf, verbs.voxel, verbs.mesh, verbs.multires]
+        for binding in Representation::ALL
+            .map(|representation| verbs.on(representation))
             .into_iter()
             .flatten()
         {
@@ -1384,6 +1544,11 @@ impl ToolKind {
                     SemanticIntent::SurfaceDisplace,
                     Fidelity::Native,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (DRAW)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
             },
             // The field's column is relief, which it shares with Padrão, and
             // that sharing is the right way round rather than a gap: relief
@@ -1418,6 +1583,11 @@ impl ToolKind {
                 ),
                 multires: multires_verb(
                     "clay_multires_sculptor_apply_stroke (INFLATE)",
+                    SemanticIntent::VolumeInflate,
+                    Fidelity::Native,
+                ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (INFLATE)",
                     SemanticIntent::VolumeInflate,
                     Fidelity::Native,
                 ),
@@ -1469,6 +1639,11 @@ impl ToolKind {
                     SemanticIntent::SurfaceSmooth,
                     Fidelity::Specialized,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (SMOOTH)",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
             },
             // The one tool that is the same call on all four, because a
             // mask is not part of any of them: it is a world-addressed field
@@ -1481,6 +1656,7 @@ impl ToolKind {
                 voxel: mask_field("clay_mask_apply_stroke"),
                 mesh: mask_field("clay_mask_apply_stroke"),
                 multires: mask_field("clay_mask_apply_stroke"),
+                dynamic: mask_field("clay_mask_apply_stroke"),
             },
             // The grid's column is Padrão's, and the clamp has nowhere to
             // land: a clamped accumulation is a ceiling on how much a stroke
@@ -1518,6 +1694,8 @@ impl ToolKind {
                     SemanticIntent::SurfaceDisplace,
                     Fidelity::Native,
                 ),
+                // Absent, and explained: see `ToolNote::DynamicHasNoLayer`.
+                dynamic: None,
             },
             // Two verbs on a field, and the row names the one that runs.
             // A drag on an editable field layer is a transaction —
@@ -1555,6 +1733,11 @@ impl ToolKind {
                     SemanticIntent::SurfaceMove,
                     Fidelity::Native,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (GRAB)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
             },
             // SDF only, and that is the engine's answer rather than a
             // shortcut. The verb bakes a re-sampled *volume*, which a grid has
@@ -1579,6 +1762,7 @@ impl ToolKind {
                 // A hierarchy has no volume to bake either, and the geodesic
                 // Grab it does have is `Mover`'s verb rather than this one.
                 multires: None,
+                dynamic: None,
             },
             // The field's column is an approximation, and the row can finally
             // say so. A snakehook on a mesh drags vertices and adds material
@@ -1601,6 +1785,11 @@ impl ToolKind {
                 ),
                 multires: multires_verb(
                     "clay_multires_sculptor_apply_stroke (SNAKEHOOK)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (SNAKEHOOK)",
                     SemanticIntent::SurfaceMove,
                     Fidelity::Native,
                 ),
@@ -1632,6 +1821,11 @@ impl ToolKind {
                     SemanticIntent::SurfaceFlatten,
                     Fidelity::Native,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (FLATTEN)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
             },
             Self::Polir => Verbs {
                 sdf: baked_field(
@@ -1647,6 +1841,11 @@ impl ToolKind {
                 ),
                 multires: multires_verb(
                     "clay_multires_sculptor_apply_stroke (POLISH)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (POLISH)",
                     SemanticIntent::SurfaceFlatten,
                     Fidelity::Native,
                 ),
@@ -1668,6 +1867,11 @@ impl ToolKind {
                     SemanticIntent::SurfaceSmooth,
                     Fidelity::Native,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (RELAX)",
+                    SemanticIntent::SurfaceSmooth,
+                    Fidelity::Native,
+                ),
             },
             Self::Trim => Verbs {
                 sdf: field_item(
@@ -1678,6 +1882,7 @@ impl ToolKind {
                 voxel: None,
                 mesh: None,
                 multires: None,
+                dynamic: None,
             },
             Self::Raspar => Verbs {
                 sdf: None,
@@ -1696,6 +1901,11 @@ impl ToolKind {
                     SemanticIntent::SurfaceFlatten,
                     Fidelity::Native,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (SCRAPE)",
+                    SemanticIntent::SurfaceFlatten,
+                    Fidelity::Native,
+                ),
             },
             Self::Preencher => Verbs {
                 sdf: None,
@@ -1706,6 +1916,7 @@ impl ToolKind {
                 ),
                 mesh: None,
                 multires: None,
+                dynamic: None,
             },
             // The field's column is a signed radial scale of the assembled
             // surface, taken at a negative strength: the region gathers toward
@@ -1743,6 +1954,11 @@ impl ToolKind {
                     SemanticIntent::SurfacePinch,
                     Fidelity::Native,
                 ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (PINCH)",
+                    SemanticIntent::SurfacePinch,
+                    Fidelity::Native,
+                ),
             },
             // Relief with buildup, which is what ClayBuildup *is*: the
             // engine's equivalence table maps Clay to relief along the stroke
@@ -1762,6 +1978,11 @@ impl ToolKind {
                 ),
                 multires: multires_verb(
                     "clay_multires_sculptor_apply_stroke (CLAY)",
+                    SemanticIntent::SurfaceDisplace,
+                    Fidelity::Native,
+                ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (CLAY)",
                     SemanticIntent::SurfaceDisplace,
                     Fidelity::Native,
                 ),
@@ -1788,6 +2009,11 @@ impl ToolKind {
                 ),
                 multires: multires_verb(
                     "clay_multires_sculptor_apply_stroke (CREASE)",
+                    SemanticIntent::SurfaceCrease,
+                    Fidelity::Native,
+                ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (CREASE)",
                     SemanticIntent::SurfaceCrease,
                     Fidelity::Native,
                 ),
@@ -1823,6 +2049,11 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 multires: None,
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (PAINT)",
+                    SemanticIntent::Paint,
+                    Fidelity::Native,
+                ),
             },
             // The one row whose two bindings are not two spellings of one
             // intent, and the exception is the representation's rather than
@@ -1855,6 +2086,7 @@ impl ToolKind {
                     SemanticIntent::VolumeRemove,
                     Fidelity::Specialized,
                 ),
+                dynamic: None,
             },
             // And the other half of the colour absence Pintar's comment
             // explains, two rows up.
@@ -1867,6 +2099,11 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 multires: None,
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (SMEAR)",
+                    SemanticIntent::Paint,
+                    Fidelity::Native,
+                ),
             },
             Self::Nudge => Verbs {
                 sdf: None,
@@ -1882,6 +2119,11 @@ impl ToolKind {
                 ),
                 multires: multires_verb(
                     "clay_multires_sculptor_apply_stroke (NUDGE)",
+                    SemanticIntent::SurfaceMove,
+                    Fidelity::Native,
+                ),
+                dynamic: dynamic_verb(
+                    "clay_dynamic_sculptor_apply_stroke (NUDGE)",
                     SemanticIntent::SurfaceMove,
                     Fidelity::Native,
                 ),
@@ -2005,7 +2247,7 @@ impl ToolKind {
         if !self.exists_on(layer.representation) {
             return Err(Unavailable::NoVerbHere {
                 active: layer.representation,
-                verbs: self.verbs(),
+                verbs: Box::new(self.verbs()),
                 note: self.note_on(layer.representation),
             });
         }
@@ -2033,6 +2275,12 @@ impl ToolKind {
                 }
                 Representation::Multires => {
                     return Err(Unavailable::MissingAttribute { needs: "cage" })
+                }
+                // An adaptive row is made by reading a mesh, so it never
+                // stands empty; the arm is here so that a row that somehow
+                // did would say what it is missing rather than stroke nothing.
+                Representation::Dynamic => {
+                    return Err(Unavailable::MissingAttribute { needs: "surface" })
                 }
                 Representation::Sdf | Representation::Voxel => {}
             }
@@ -2092,6 +2340,7 @@ impl ToolKind {
             (Self::Vinco, Representation::Voxel) => Some(ToolNote::VoxelCreaseIsErodeRecipe),
             (Self::Borrar, Representation::Voxel) => Some(ToolNote::VoxelSmearHasNoColourVerb),
             (Self::Argila, Representation::Voxel) => Some(ToolNote::VoxelClayHasNoBuildup),
+            (Self::Camada, Representation::Dynamic) => Some(ToolNote::DynamicHasNoLayer),
             _ => None,
         }
     }
@@ -2116,8 +2365,15 @@ impl ToolKind {
     /// this layer carry colour" is the one standing between them and the tool.
     /// `a_hierarchy_is_never_asked_for_a_colour_attribute` is what keeps the
     /// two answers from drifting apart.
+    ///
+    /// An adaptive surface asks it too: it carries colour exactly where the
+    /// mesh it was read from did.
     pub fn needs_colour_attribute(self, representation: Representation) -> bool {
-        self.writes_colour() && representation == Representation::Mesh
+        self.writes_colour()
+            && matches!(
+                representation,
+                Representation::Mesh | Representation::Dynamic
+            )
     }
 
     /// Whether the tool paints a mask rather than moving the surface.
@@ -2537,10 +2793,13 @@ impl BrushSettings {
             // to the 63-cell ceiling past which a grid dab stops growing. A
             // size that left room above it for the sculptor to go bigger.
             Representation::Voxel => Self::default(),
-            // A mesh and a hierarchy stamp over the vertices in reach, with no
-            // floor of their own. They take the field's size so that a crossing
-            // from a field lands with a brush of the reach the sculptor had.
-            Representation::Mesh | Representation::Multires => Self::default(),
+            // A mesh, a hierarchy and an adaptive surface stamp over the
+            // vertices in reach, with no floor of their own. They take the
+            // field's size so that a crossing from a field lands with a brush
+            // of the reach the sculptor had.
+            Representation::Mesh | Representation::Multires | Representation::Dynamic => {
+                Self::default()
+            }
         }
     }
 
@@ -2707,16 +2966,16 @@ mod tests {
 
     /// The diagnostics line lists each call once, however many columns name it.
     ///
-    /// Máscara is the case: one call on all four representations, and a report
-    /// that said so four times would read as four bindings.
+    /// Máscara is the case: one call on all five representations, and a report
+    /// that said so five times would read as five bindings.
     #[test]
     fn the_diagnostics_line_names_each_call_once() {
         assert_eq!(ToolKind::Mascara.engine_verbs(), "clay_mask_apply_stroke");
         let padrao = ToolKind::Padrao.engine_verbs();
         assert_eq!(
             padrao.matches("clay_").count(),
-            4,
-            "Padrão reaches four representations by four different calls: {padrao}"
+            5,
+            "Padrão reaches five representations by five different calls: {padrao}"
         );
     }
 
@@ -3190,6 +3449,7 @@ mod tests {
             voxel: recipe("clay_voxel_set_brush", SemanticIntent::SurfaceCrease),
             mesh: None,
             multires: None,
+            dynamic: None,
         };
         assert_eq!(verbs.count(), 1);
         assert!(verbs
@@ -3483,6 +3743,134 @@ mod tests {
              erase brushes, which are a different family. Update this count \
              and `docs/features.md` together."
         );
+        // And the adaptive surface: the engine's fifteen of sixteen — every
+        // fixed-topology brush but Layer — and the mask.
+        let dynamic_brushes = ToolKind::for_representation(Representation::Dynamic)
+            .iter()
+            .filter(|t| !t.is_mask_tool())
+            .count();
+        assert_eq!(
+            dynamic_brushes,
+            ENGINE_MESH_BRUSHES - 1,
+            "the adaptive vocabulary has moved: {dynamic_brushes} brushes \
+             reach a dynamic layer, of the engine's {ENGINE_MESH_BRUSHES}, \
+             which offers all of them but Layer. Update this count and \
+             `docs/features.md` together."
+        );
+    }
+
+    /// Dynamic is a column like the other four in every lookup the table
+    /// answers: the shelf, the binding, the note, the substitute and the
+    /// availability rule.
+    #[test]
+    fn dynamic_participates_in_every_capability_lookup() {
+        assert!(Representation::ALL.contains(&Representation::Dynamic));
+        let shelf = ToolKind::for_representation(Representation::Dynamic);
+        assert!(!shelf.is_empty(), "an adaptive layer offers a shelf");
+        for tool in ToolKind::ALL {
+            let binding = tool.binding_on(Representation::Dynamic);
+            assert_eq!(binding.is_some(), shelf.contains(&tool));
+            assert_eq!(
+                tool.availability(LayerState::editable(Representation::Dynamic))
+                    .is_ok(),
+                binding.is_some(),
+                "{} on dynamic: the shelf and the rule disagree",
+                tool.label()
+            );
+            let Some(binding) = binding else {
+                continue;
+            };
+            // Every adaptive binding but the mask is the engine's own adaptive
+            // family, and means what the mesh row for the same tool means.
+            if !tool.is_mask_tool() {
+                assert_eq!(binding.family, ExecutionFamily::DynamicVerb);
+                let mesh = tool
+                    .binding_on(Representation::Mesh)
+                    .expect("every adaptive brush is a mesh brush too");
+                assert_eq!(binding.intent, mesh.intent, "{}", tool.label());
+                assert_eq!(binding.fidelity, mesh.fidelity, "{}", tool.label());
+            }
+            assert!(tool.remesh_timing().is_some() || tool.is_mask_tool());
+        }
+        // A tool absent here falls back to one that is present, the same way
+        // on every call.
+        for tool in ToolKind::ALL {
+            let stand_in = tool.substitute_on(Representation::Dynamic);
+            assert!(stand_in.exists_on(Representation::Dynamic));
+            assert_eq!(stand_in, tool.substitute_on(Representation::Dynamic));
+        }
+    }
+
+    /// Layer has no adaptive binding, and the absence is explained rather than
+    /// silent.
+    #[test]
+    fn layer_is_absent_on_dynamic() {
+        assert!(!ToolKind::Camada.exists_on(Representation::Dynamic));
+        assert!(ToolKind::Camada.exists_on(Representation::Mesh));
+        assert_eq!(
+            ToolKind::Camada.note_on(Representation::Dynamic),
+            Some(ToolNote::DynamicHasNoLayer)
+        );
+        let refused = ToolKind::Camada
+            .availability(LayerState::editable(Representation::Dynamic))
+            .expect_err("Layer is not offered on an adaptive layer");
+        assert!(matches!(
+            refused,
+            Unavailable::NoVerbHere {
+                active: Representation::Dynamic,
+                note: Some(ToolNote::DynamicHasNoLayer),
+                ..
+            }
+        ));
+        // It falls back to the deposit that means the same act.
+        let stand_in = ToolKind::Camada.substitute_on(Representation::Dynamic);
+        assert_eq!(
+            stand_in.intent(),
+            ToolKind::Camada.intent(),
+            "Layer stands in as {}",
+            stand_in.label()
+        );
+    }
+
+    /// The per-verb remesh schedule the issue sets out and the engine applies.
+    #[test]
+    fn an_adaptive_brush_remeshes_where_its_verb_needs_it() {
+        assert_eq!(
+            ToolKind::Mover.remesh_timing(),
+            Some(RemeshTiming::AfterBrush)
+        );
+        assert_eq!(
+            ToolKind::Argila.remesh_timing(),
+            Some(RemeshTiming::BeforeBrush)
+        );
+        assert_eq!(
+            ToolKind::Puxar.remesh_timing(),
+            Some(RemeshTiming::BeforeAndAfter)
+        );
+        assert_eq!(ToolKind::Camada.remesh_timing(), None);
+        assert_eq!(ToolKind::Mascara.remesh_timing(), None);
+        assert_eq!(ToolKind::Trim.remesh_timing(), None);
+    }
+
+    /// A representation's stored key names it and nothing else, and an
+    /// adaptive surface is never stored as a mesh.
+    #[test]
+    fn every_representation_round_trips_through_its_key() {
+        let mut seen = std::collections::BTreeSet::new();
+        for representation in Representation::ALL {
+            assert!(seen.insert(representation.key()), "two share a key");
+            assert_eq!(
+                Representation::from_key(representation.key()),
+                Some(representation)
+            );
+        }
+        assert_eq!(Representation::Dynamic.key(), "dynamic");
+        assert_ne!(Representation::Dynamic.key(), Representation::Mesh.key());
+        assert_ne!(
+            Representation::Dynamic.label(),
+            Representation::Mesh.label()
+        );
+        assert_eq!(Representation::from_key("adaptive-v2"), None);
     }
 
     #[test]
@@ -3760,7 +4148,8 @@ mod tests {
         }
     }
 
-    /// Only the deliberate colour and buildup absences carry a note.
+    /// Only the deliberate colour, buildup and adaptive-Layer absences carry a
+    /// note.
     #[test]
     fn an_ordinary_absence_is_refused_without_a_second_sentence() {
         for tool in ToolKind::ALL {
@@ -3776,6 +4165,7 @@ mod tests {
                         ToolKind::Pintar | ToolKind::Borrar,
                         Representation::Multires
                     ) | (ToolKind::Borrar | ToolKind::Argila, Representation::Voxel)
+                        | (ToolKind::Camada, Representation::Dynamic)
                 );
                 assert_eq!(
                     note.is_some(),

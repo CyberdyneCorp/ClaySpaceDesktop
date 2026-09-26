@@ -911,6 +911,49 @@ impl std::fmt::Debug for DynamicSurface {
     }
 }
 
+// -- a surface over a layer the document already holds ----------------------
+
+impl crate::Document {
+    /// Reads one of this document's own mesh layers into an adaptive surface.
+    ///
+    /// Fused for the reason [`Document::multires_from_mesh_layer`] is: the
+    /// mesh is the document's and is lent out, and a borrow of it and a
+    /// borrow of the document cannot stand at once in Rust although the C
+    /// boundary takes the mesh as `const` and does not retain it.
+    ///
+    /// The surface that comes back owns its own half-edge structure and has
+    /// no further connection to the layer.
+    ///
+    /// [`Document::multires_from_mesh_layer`]: crate::Document::multires_from_mesh_layer
+    pub fn dynamic_from_mesh_layer(
+        &mut self,
+        layer: crate::LayerId,
+        desc: DynamicDesc,
+    ) -> std::result::Result<DynamicSurface, DynamicRefusal> {
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and one out-parameter written only on
+        // success. The handle that comes back is the layer's own and is
+        // borrowed for the length of this call.
+        check(
+            unsafe { sys::clay_document_mesh_layer_by_id(self.as_ptr(), layer.0, &mut mesh) },
+            "clay_document_mesh_layer_by_id",
+        )
+        .map_err(|error| DynamicRefusal {
+            error,
+            reason: DynamicError::EmptyMesh,
+        })?;
+        // `ManuallyDrop` because the layer owns the mesh: the wrapper must not
+        // destroy what it only borrows.
+        let borrowed = Mesh::from_raw(mesh, "clay_document_mesh_layer_by_id")
+            .map(std::mem::ManuallyDrop::new)
+            .map_err(|error| DynamicRefusal {
+                error,
+                reason: DynamicError::EmptyMesh,
+            })?;
+        DynamicSurface::from_mesh(&borrowed, desc)
+    }
+}
+
 // -- the sculptor -----------------------------------------------------------
 
 /// A brush over an adaptive surface, and the chunked index it drains.
@@ -980,6 +1023,79 @@ impl<'s> DynamicSculptor<'s> {
             "clay_dynamic_sculptor_stamp",
         )?;
         Ok(DynamicStampReport::from_raw(report))
+    }
+
+    /// A whole gesture, resolved by the engine's own stroke engine.
+    ///
+    /// The adaptive surface's consumer of a resolved stroke, beside
+    /// [`MeshSculptor::apply_stroke`](crate::MeshSculptor::apply_stroke): the
+    /// same preset semantics — each stamp brings its own radius and strength,
+    /// the descriptor's radius is ignored and its strength multiplies — and
+    /// every stamp runs its verb's own remesh timing. Grab gathers its region
+    /// once at the first stamp and the remesh maintains it; Snakehook centres
+    /// each stamp on the vertex it drags. A host loop of [`stamp`](Self::stamp)
+    /// is not the same stroke for those two, which is why this exists.
+    ///
+    /// `samples` is position, pressure and time per sample, the packing the
+    /// fixed and hierarchy strokes take; it is widened here to the engine's
+    /// full sample with no tilt, azimuth or velocity. Returns the number of
+    /// stamps that changed the surface and the whole stroke's report.
+    ///
+    /// Layer is refused before any stamp runs, as [`stamp`](Self::stamp)
+    /// refuses it.
+    pub fn apply_stroke(
+        &mut self,
+        samples: &[[f32; 5]],
+        preset: &crate::StrokePreset,
+        stamp: MeshStamp<'_>,
+        topology: Option<&DynamicTopology>,
+        mask: Option<&MaskField>,
+    ) -> Result<(usize, DynamicStampReport)> {
+        if samples.is_empty() {
+            return Ok((0, DynamicStampReport::default()));
+        }
+        let full: Vec<sys::clay_stroke_sample_full> = samples
+            .iter()
+            .map(|sample| sys::clay_stroke_sample_full {
+                position: [sample[0], sample[1], sample[2]],
+                pressure: sample[3],
+                tilt: 0.0,
+                azimuth: 0.0,
+                velocity: 0.0,
+                timestamp: f64::from(sample[4]),
+            })
+            .collect();
+        let brush = stamp.as_raw();
+        let raw_preset = preset.to_raw();
+        let topology = topology.map(|t| t.to_raw());
+        let mut applied = 0usize;
+        let mut report = sys::clay_dynamic_stamp_report::sized();
+        // SAFETY: `full` is `full.len()` initialised samples, read and not
+        // retained. Both descriptors carry their own size and the brush
+        // borrows its alpha from `stamp`, which outlives the call. The
+        // topology descriptor and the mask are each either valid or null, as
+        // the entry point allows, and both out-parameters are valid for the
+        // whole call.
+        check(
+            unsafe {
+                sys::clay_dynamic_sculptor_apply_stroke(
+                    self.raw.as_ptr(),
+                    full.as_ptr(),
+                    full.len(),
+                    &raw_preset,
+                    &brush,
+                    topology
+                        .as_ref()
+                        .map_or(std::ptr::null(), |t| t as *const _),
+                    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
+                    0,
+                    &mut applied,
+                    &mut report,
+                )
+            },
+            "clay_dynamic_sculptor_apply_stroke",
+        )?;
+        Ok((applied, DynamicStampReport::from_raw(report)))
     }
 
     /// Rebuilds the chunked spatial index.

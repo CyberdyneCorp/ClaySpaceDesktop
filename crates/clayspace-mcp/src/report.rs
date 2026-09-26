@@ -49,6 +49,8 @@ pub fn representation_tag(representation: Representation) -> &'static str {
         Representation::Voxel => "grid",
         Representation::Mesh => "mesh",
         Representation::Multires => "hierarchy",
+        // Its own word, never "mesh": the connectivity contract differs.
+        Representation::Dynamic => "dynamic",
     }
 }
 
@@ -822,6 +824,11 @@ mod tests {
         assert_eq!(representation_tag(Representation::Sdf), "field");
         assert_eq!(representation_tag(Representation::Voxel), "grid");
         assert_eq!(representation_tag(Representation::Multires), "hierarchy");
+        assert_eq!(representation_tag(Representation::Dynamic), "dynamic");
+        assert_ne!(
+            representation_tag(Representation::Dynamic),
+            representation_tag(Representation::Mesh)
+        );
     }
 
     #[test]

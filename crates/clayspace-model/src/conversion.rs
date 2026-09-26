@@ -54,10 +54,24 @@ pub enum Direction {
     /// transported frame. Afterwards the vertices are where they were and there
     /// is nothing beneath them to move.
     MultiresToMesh,
+    /// Reads the mesh into an adaptive surface whose edges the brush may
+    /// split and collapse.
+    ///
+    /// Exact in positions, and it refuses rather than repairs — a third face
+    /// on an edge is a model problem `clay_dynamic_surface_from_mesh` names —
+    /// but it is not free: quads do not survive, because the surface is
+    /// triangles and nothing re-pairs them on the way back.
+    MeshToDynamic,
+    /// The adaptive surface as an ordinary mesh again, whose topology is
+    /// fixed from here on.
+    ///
+    /// Triangles, sized by corners rather than by vertices, and priced by the
+    /// engine's own preflight before anything is replaced.
+    DynamicToMesh,
 }
 
 impl Direction {
-    pub const ALL: [Direction; 8] = [
+    pub const ALL: [Direction; 10] = [
         Self::SdfToVoxel,
         Self::VoxelToSdf,
         Self::MeshToVoxel,
@@ -66,14 +80,19 @@ impl Direction {
         Self::VoxelToMesh,
         Self::MeshToMultires,
         Self::MultiresToMesh,
+        Self::MeshToDynamic,
+        Self::DynamicToMesh,
     ];
 
     pub fn from(self) -> Representation {
         match self {
             Self::SdfToVoxel | Self::SdfToMesh => Representation::Sdf,
             Self::VoxelToSdf | Self::VoxelToMesh => Representation::Voxel,
-            Self::MeshToVoxel | Self::MeshToSdf | Self::MeshToMultires => Representation::Mesh,
+            Self::MeshToVoxel | Self::MeshToSdf | Self::MeshToMultires | Self::MeshToDynamic => {
+                Representation::Mesh
+            }
             Self::MultiresToMesh => Representation::Multires,
+            Self::DynamicToMesh => Representation::Dynamic,
         }
     }
 
@@ -81,8 +100,11 @@ impl Direction {
         match self {
             Self::SdfToVoxel | Self::MeshToVoxel => Representation::Voxel,
             Self::VoxelToSdf | Self::MeshToSdf => Representation::Sdf,
-            Self::SdfToMesh | Self::VoxelToMesh | Self::MultiresToMesh => Representation::Mesh,
+            Self::SdfToMesh | Self::VoxelToMesh | Self::MultiresToMesh | Self::DynamicToMesh => {
+                Representation::Mesh
+            }
             Self::MeshToMultires => Representation::Multires,
+            Self::MeshToDynamic => Representation::Dynamic,
         }
     }
 
@@ -149,13 +171,27 @@ impl Direction {
     ///
     /// The other side of [`Direction::chooses_resolution`], and it is not its
     /// negation. Reading a grid back chooses no resolution because the grid
-    /// already has one — it was sampled, just not here. The two hierarchy
-    /// crossings are the only ones where nothing is sampled anywhere along the
-    /// way: a cage is the mesh's own vertices and a level is the hierarchy's
-    /// own, so what comes out is exact and what it costs is stated in
-    /// refusals rather than in tolerances.
+    /// already has one — it was sampled, just not here. The hierarchy and
+    /// adaptive crossings are the only ones where nothing is sampled anywhere
+    /// along the way: a cage is the mesh's own vertices, a level is the
+    /// hierarchy's own and an adaptive surface is the mesh's triangles welded,
+    /// so what comes out is exact and what it costs is stated in refusals
+    /// rather than in tolerances.
     pub fn is_exact(self) -> bool {
-        matches!(self, Self::MeshToMultires | Self::MultiresToMesh)
+        matches!(
+            self,
+            Self::MeshToMultires | Self::MultiresToMesh | Self::MeshToDynamic | Self::DynamicToMesh
+        )
+    }
+
+    /// Whether quads that went in come out as triangles.
+    ///
+    /// An adaptive surface is triangles: splitting an edge leaves no quad
+    /// pairing to re-derive, so the crossing into one is where a quad layout
+    /// is lost. Stated before the crossing, so a retopology is not spent by
+    /// surprise.
+    pub fn loses_quads(self) -> bool {
+        self == Self::MeshToDynamic
     }
 }
 
@@ -275,6 +311,14 @@ pub enum Refusal {
     /// convert" goes looking for a setting; one told which edge is shared by
     /// three faces goes back to the mesh.
     NotACage { fault: CageFault },
+    /// The mesh cannot be read into an adaptive surface as it is.
+    ///
+    /// The same two model problems a cage refuses, for the same reason: a
+    /// half-edge structure cannot express a third face on an edge, and a
+    /// conversion that quietly dropped one would change the model without
+    /// saying so. Its own variant because the sentence names what the mesh
+    /// was going to become.
+    NotAdaptive { fault: CageFault },
     /// Subdividing again would cost more than the budget allows.
     ///
     /// The figure is the **peak** rather than what remains, because on a
@@ -321,6 +365,16 @@ impl std::fmt::Display for Refusal {
                 CageFault::DegenerateFace => f.write_str(
                     "this mesh has a face with repeated or collinear corners, so \
                      it cannot be a subdivision cage",
+                ),
+            },
+            Self::NotAdaptive { fault } => match fault {
+                CageFault::NonManifold => f.write_str(
+                    "this mesh has an edge shared by more than two faces, so it \
+                     cannot become an adaptive surface",
+                ),
+                CageFault::DegenerateFace => f.write_str(
+                    "this mesh has a face with repeated or collinear corners, so \
+                     it cannot become an adaptive surface",
                 ),
             },
             Self::LevelOverBudget {
@@ -478,8 +532,8 @@ mod tests {
         assert_eq!(into, vec![Direction::MeshToMultires]);
     }
 
-    /// The two hierarchy crossings move no surface and lose no feature, and
-    /// they are the only two that can say so.
+    /// The hierarchy and adaptive crossings move no surface and lose no
+    /// feature, and they are the only four that can say so.
     ///
     /// The point is not that they are free — one of them throws away every
     /// level under the one it bakes — but that what they cost is *not* a
@@ -488,7 +542,12 @@ mod tests {
     /// the defect `chooses_resolution`'s own comment records.
     #[test]
     fn a_crossing_through_a_cage_samples_nothing() {
-        for direction in [Direction::MeshToMultires, Direction::MultiresToMesh] {
+        for direction in [
+            Direction::MeshToMultires,
+            Direction::MultiresToMesh,
+            Direction::MeshToDynamic,
+            Direction::DynamicToMesh,
+        ] {
             assert!(direction.is_exact());
             assert!(!direction.chooses_resolution());
             assert!(!direction.needs_region());
@@ -503,11 +562,38 @@ mod tests {
                 direction.is_exact(),
                 matches!(
                     direction,
-                    Direction::MeshToMultires | Direction::MultiresToMesh
+                    Direction::MeshToMultires
+                        | Direction::MultiresToMesh
+                        | Direction::MeshToDynamic
+                        | Direction::DynamicToMesh
                 ),
                 "{direction:?} claims to be exact"
             );
         }
+    }
+
+    /// An adaptive surface is reached from a mesh and reaches a mesh, and the
+    /// crossing in is where quads are lost.
+    #[test]
+    fn an_adaptive_surface_is_reached_through_a_mesh_and_costs_its_quads() {
+        assert_eq!(
+            Direction::from_representation(Representation::Dynamic),
+            vec![Direction::DynamicToMesh]
+        );
+        let into: Vec<Direction> = Direction::ALL
+            .into_iter()
+            .filter(|d| d.to() == Representation::Dynamic)
+            .collect();
+        assert_eq!(into, vec![Direction::MeshToDynamic]);
+        for direction in Direction::ALL {
+            assert_eq!(
+                direction.loses_quads(),
+                direction == Direction::MeshToDynamic,
+                "{direction:?}"
+            );
+        }
+        assert!(!Direction::MeshToDynamic.ends_in_fixed_topology());
+        assert!(Direction::DynamicToMesh.ends_in_fixed_topology());
     }
 
     /// Building a cage keeps the retopology it was handed; baking a level ends

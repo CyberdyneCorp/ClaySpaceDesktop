@@ -326,6 +326,63 @@ fn a_stamp_changes_connectivity_and_says_so() {
     );
 }
 
+/// A resolved stroke stamps along the path, remeshes as it goes, and reports
+/// the whole stroke — and refuses Layer before anything runs.
+#[test]
+fn a_resolved_stroke_refines_along_its_path_and_refuses_layer() {
+    let mut surface = adaptive(8);
+    let faces_before = surface.stats().expect("stats").faces;
+    let topology = splitting_topology();
+    let path: Vec<[f32; 5]> = (0..=8)
+        .map(|step| {
+            let t = step as f32 / 8.0;
+            [(t - 0.5) * 2.0, 0.0, 0.0, 1.0, t]
+        })
+        .collect();
+    let preset = claycore::StrokePreset {
+        radius: 0.5,
+        strength: 0.5,
+        ..claycore::StrokePreset::default()
+    };
+    let mut sculptor = surface.sculptor().expect("sculptor");
+
+    let (applied, report) = sculptor
+        .apply_stroke(&path, &preset, draw(), Some(&topology), None)
+        .expect("a stroke onto an adaptive surface");
+    assert!(
+        applied > 1,
+        "a path is several stamps, and {applied} changed"
+    );
+    assert!(report.split_edges > 0, "and the stroke refined as it went");
+    let faces_after = sculptor.surface().stats().expect("stats").faces;
+    assert!(faces_after > faces_before);
+
+    let revision = sculptor.surface().revision().expect("revision");
+    let refused = sculptor.apply_stroke(
+        &path,
+        &preset,
+        MeshStamp {
+            verb: MeshBrush::Layer,
+            ..draw()
+        },
+        Some(&topology),
+        None,
+    );
+    assert!(refused.is_err(), "Layer is refused on an adaptive surface");
+    assert_eq!(
+        sculptor.surface().revision().expect("revision"),
+        revision,
+        "refused before any stamp ran"
+    );
+    assert_eq!(
+        sculptor
+            .apply_stroke(&[], &preset, draw(), None, None)
+            .expect("nothing to stroke")
+            .0,
+        0
+    );
+}
+
 #[test]
 fn topology_turned_off_is_a_pure_deformation() {
     let mut surface = adaptive(8);

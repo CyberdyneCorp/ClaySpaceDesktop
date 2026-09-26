@@ -111,6 +111,13 @@ pub struct Diagnostics {
     /// carries `None`.
     pub hierarchies: Option<MultiresDiagnostics>,
 
+    /// The adaptive surfaces held, and which of them were lost.
+    ///
+    /// The hierarchy's shape for the hierarchy's reason: an adaptive surface
+    /// also travels in a side-car beside the `.clayspace`, and a row whose
+    /// record could not be honoured reopens as the mesh it was read from.
+    pub adaptive: Option<MultiresDiagnostics>,
+
     /// Where the document's memory is, and what it would cost to release it.
     ///
     /// Optional for the reason [`Self::mesh`] is: it is the document's answer
@@ -604,18 +611,24 @@ impl Diagnostics {
                 ),
             );
         }
-        if let Some(hierarchies) = &self.hierarchies {
-            if hierarchies.held > 0 || !hierarchies.lost.is_empty() {
+        for (name, held) in [
+            ("hierarchies", &self.hierarchies),
+            ("adaptive surfaces", &self.adaptive),
+        ] {
+            let Some(held) = held else {
+                continue;
+            };
+            if held.held > 0 || !held.lost.is_empty() {
                 line(
-                    "hierarchies",
+                    name,
                     &format!(
                         "{} held, {} lost{}",
-                        hierarchies.held,
-                        hierarchies.lost.len(),
-                        if hierarchies.lost.is_empty() {
+                        held.held,
+                        held.lost.len(),
+                        if held.lost.is_empty() {
                             String::new()
                         } else {
-                            format!(" ({})", hierarchies.lost.join(", "))
+                            format!(" ({})", held.lost.join(", "))
                         }
                     ),
                 );
@@ -788,6 +801,7 @@ mod tests {
             render: None,
             mesh: None,
             hierarchies: None,
+            adaptive: None,
             memory: None,
             agent: None,
             tool: None,

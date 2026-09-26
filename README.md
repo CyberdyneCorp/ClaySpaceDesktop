@@ -103,7 +103,7 @@ report says which part of a document a byte belongs to.
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
 | Engine | ClayCore 0.120.1, pinned to the release tag as a submodule |
-| Sculpting tools | 21 across four representations · 15 SDF, 13 voxel, 17 mesh, 16 on a subdivision hierarchy |
+| Sculpting tools | 21 across five representations · 15 SDF, 13 voxel, 17 mesh, 16 on a subdivision hierarchy, 16 on an adaptive surface |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
 The timing figures are `benchmarks/baseline-linux-x86_64.json`: Linux x86_64 on
@@ -339,8 +339,8 @@ counterpart is not offered.
 
 ### The shelf follows the active layer
 
-**SDF layers, sparse voxel grids, fixed-topology meshes and subdivision
-hierarchies are equals here.** The four stand above the viewport as four cards
+**SDF layers, sparse voxel grids, fixed-topology meshes, subdivision
+hierarchies and adaptive surfaces are equals here.** They stand above the viewport as cards
 with the crossings beside them, and the tool shelf offers what the *active
 layer* has rather than one list with most of it greyed out. Twenty-one tools
 are bound across the four: fifteen have an SDF verb, thirteen a voxel one,
@@ -349,6 +349,14 @@ fixed-topology brushes — and sixteen a hierarchy one: the mesh list less the
 two colour brushes, because a hierarchy stores where a vertex went and not what
 colour it is, plus Erase, which on a hierarchy takes the selected pass's detail
 back toward zero.
+
+A fifth card, **Dynamic**, is an adaptive surface: triangles whose connectivity
+follows the brush, so a large Move makes the triangles it needs instead of
+stretching the ones there are. Its shelf is the mesh's less Layer — whose
+ceiling is measured against vertices that existed when the stroke began, which
+an adaptive stroke creates as it goes — and the shelf says so rather than
+leaving a gap. It is reported, saved and offered as itself, never as a mesh.
+See [features.md](docs/features.md#sculpting-an-adaptive-surface).
 
 The same shelf on a field, on a grid and on a mesh. The filter column on the
 left switches between what the active layer can run, each representation's own
@@ -654,6 +662,9 @@ nothing, so its two are the only ones that sample nothing at all. `mesh →
 multires` takes the triangles vertex for vertex and refuses rather than
 repairing a mesh that cannot be a cage; `multires → mesh` bakes the display
 level back out. See [subdivision hierarchies](#subdivision-hierarchies).
+A fifth, the adaptive surface, arrives the same way — `mesh → dynamic` refuses
+a mesh with degenerate or non-manifold faces rather than repairing it, and
+`dynamic → mesh` bakes it back to fixed topology — for ten crossings in all.
 
 ```mermaid
 graph LR
@@ -661,6 +672,7 @@ graph LR
     VOX["voxel grid"]
     MESH["fixed-topology mesh"]
     MRES["subdivision hierarchy"]
+    DYN["adaptive surface"]
 
     SDF -->|"rasterize into cells"| VOX
     SDF -->|"march into triangles"| MESH
@@ -670,11 +682,14 @@ graph LR
     MESH -->|"straight from the triangles"| VOX
     MESH -->|"take the mesh as a cage"| MRES
     MRES -->|"bake the display level"| MESH
+    MESH -->|"read into an adaptive surface"| DYN
+    DYN -->|"bake to fixed topology"| MESH
 
     style SDF fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style VOX fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style MESH fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style MRES fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
+    style DYN fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
 ```
 
 | From | To | What it does |
@@ -687,6 +702,8 @@ graph LR
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
 | mesh | multires | Takes the mesh **as the cage** of a subdivision hierarchy, vertex for vertex — refusing rather than repairing a mesh that cannot be one |
 | multires | mesh | Bakes the display level out as an ordinary mesh |
+| mesh | dynamic | Reads the mesh into an adaptive surface whose edges the brush may split and collapse; quads do not survive |
+| dynamic | mesh | Bakes the adaptive surface out as an ordinary mesh |
 
 **The panel states what the crossing costs before it runs**, computed from the
 cell size rather than written down, so the figures move as the slider moves:

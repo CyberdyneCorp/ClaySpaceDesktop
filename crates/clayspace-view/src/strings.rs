@@ -279,6 +279,10 @@ pub struct Strings {
     pub state_no: &'static str,
     /// What is true of every mesh layer, and is the reason its brushes differ.
     pub mesh_topology_fixed: &'static str,
+    pub section_dynamic: &'static str,
+    /// What is true of every adaptive surface, and is the reason it is not a
+    /// mesh: the brush makes the triangles it needs.
+    pub dynamic_topology_adapts: &'static str,
     pub section_multires: &'static str,
     /// What is true of every hierarchy: the level a brush writes on and the
     /// level being drawn are two numbers, and detail cut at a fine one rides
@@ -801,6 +805,7 @@ const PT_BR: Strings = Strings {
         "Numa grelha, Vinco corta uma ranhura estreita com erosão; não afia as bordas existentes",
         "Numa grelha, Borrar não está disponível: não há verbo para espalhar cor. Use Pintar para cor ou Nudge para mover a forma",
         "Numa grelha, Argila não está disponível: células cheias não guardam acúmulo gradual. Use Padrão ou Inflar para depositar material",
+        "Numa superfície dinâmica, Camada não está disponível: o teto dela é medido a partir de onde cada vértice estava no início do traço, e o traço adaptativo cria vértices que não existiam. Use Padrão ou Argila",
     ],
     shape_names: [
         "Caixa",
@@ -839,12 +844,19 @@ const PT_BR: Strings = Strings {
         "Tamanho",
     ],
     insert_as_names: ["Novo subtool", "No subtool ativo"],
-    representation_names: ["Campo (SDF)", "Voxels", "Malha", "Multirresolução"],
+    representation_names: [
+        "Campo (SDF)",
+        "Voxels",
+        "Malha",
+        "Multirresolução",
+        "Dinâmica",
+    ],
     representation_sentences: [
         "Campo de distância com sinal",
         "Grade de voxels",
         "Malha de polígonos",
         "Hierarquia de subdivisão",
+        "Superfície cuja topologia se adapta ao pincel",
     ],
     section_representation: "REPRESENTAÇÃO",
     hint_representation_active: "o que a camada ativa contém",
@@ -968,6 +980,8 @@ libera em vez de congelar.",
     state_yes: "sim",
     state_no: "não",
     mesh_topology_fixed: "Topologia fixa: os pincéis movem os vértices que existem e não criam nem removem nenhum.",
+    section_dynamic: "SUPERFÍCIE DINÂMICA",
+    dynamic_topology_adapts: "Topologia adaptativa: o pincel divide e colapsa arestas onde o traço precisa. Quadriláteros não são mantidos.",
     section_multires: "MULTIRRESOLUÇÃO",
     multires_two_levels: "O nível em que o pincel escreve e o nível desenhado são dois números. O detalhe cortado num nível fino anda junto com a forma movida num nível grosso.",
     label_multires_levels: "Níveis",
@@ -1380,6 +1394,7 @@ const EN_US: Strings = Strings {
         "On a grid, Crease cuts a narrow groove by erosion; it does not sharpen existing edges",
         "On a grid, Smear is unavailable: there is no colour-smear verb. Use Paint for colour or Nudge to move the shape",
         "On a grid, Clay is unavailable: filled cells cannot hold gradual buildup. Use Standard or Inflate to deposit material",
+        "On a dynamic surface, Layer is unavailable: its ceiling is measured from where each vertex stood when the stroke began, and an adaptive stroke creates vertices that did not exist then. Use Standard or Clay",
     ],
     shape_names: [
         "Box",
@@ -1418,12 +1433,13 @@ const EN_US: Strings = Strings {
         "Size",
     ],
     insert_as_names: ["New subtool", "Into the active subtool"],
-    representation_names: ["Field (SDF)", "Voxels", "Mesh", "Multires"],
+    representation_names: ["Field (SDF)", "Voxels", "Mesh", "Multires", "Dynamic"],
     representation_sentences: [
         "Signed Distance Field",
         "Voxel Grid",
         "Polygon Mesh",
         "Subdivision Hierarchy",
+        "Surface whose topology adapts to the brush",
     ],
     section_representation: "REPRESENTATION",
     hint_representation_active: "what the active layer holds",
@@ -1546,6 +1562,8 @@ instead.",
     state_yes: "yes",
     state_no: "no",
     mesh_topology_fixed: "Fixed topology: the brushes move the vertices that are there and neither add nor remove any.",
+    section_dynamic: "DYNAMIC SURFACE",
+    dynamic_topology_adapts: "Adaptive topology: the brush splits and collapses edges where the stroke needs them. Quads are not kept.",
     section_multires: "MULTIRES",
     multires_two_levels: "The level the brush writes on and the level being drawn are two numbers. Detail cut at a fine level rides on the form moved at a coarse one.",
     label_multires_levels: "Levels",
@@ -1955,6 +1973,7 @@ const ES_419: Strings = Strings {
         "En una rejilla, Pliegue corta una ranura estrecha por erosión; no afila los bordes existentes",
         "En una rejilla, Difuminar no está disponible: no hay una operación para extender el color. Usa Pintar para el color o Nudge para mover la forma",
         "En una rejilla, Arcilla no está disponible: las celdas llenas no guardan acumulación gradual. Usa Estándar o Inflar para añadir material",
+        "En una superficie dinámica, Capa no está disponible: su techo se mide desde donde estaba cada vértice al empezar el trazo, y el trazo adaptativo crea vértices que no existían. Usa Estándar o Arcilla",
     ],
     shape_names: [
         "Caja",
@@ -1993,12 +2012,19 @@ const ES_419: Strings = Strings {
         "Tamaño",
     ],
     insert_as_names: ["Nuevo subtool", "En el subtool activo"],
-    representation_names: ["Campo (SDF)", "Vóxeles", "Malla", "Multirresolución"],
+    representation_names: [
+        "Campo (SDF)",
+        "Vóxeles",
+        "Malla",
+        "Multirresolución",
+        "Dinámica",
+    ],
     representation_sentences: [
         "Campo de distancia con signo",
         "Rejilla de vóxeles",
         "Malla de polígonos",
         "Jerarquía de subdivisión",
+        "Superficie cuya topología se adapta al pincel",
     ],
     section_representation: "REPRESENTACIÓN",
     hint_representation_active: "lo que contiene la capa activa",
@@ -2122,6 +2148,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     state_yes: "sí",
     state_no: "no",
     mesh_topology_fixed: "Topología fija: los pinceles mueven los vértices que existen y no crean ni eliminan ninguno.",
+    section_dynamic: "SUPERFICIE DINÁMICA",
+    dynamic_topology_adapts: "Topología adaptativa: el pincel divide y colapsa aristas donde el trazo lo necesita. Los cuadriláteros no se conservan.",
     section_multires: "MULTIRRESOLUCIÓN",
     multires_two_levels: "El nivel en el que escribe el pincel y el nivel que se dibuja son dos números. El detalle cortado en un nivel fino viaja con la forma movida en uno grueso.",
     label_multires_levels: "Niveles",
@@ -2777,7 +2805,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 264] {
+    pub fn all(&self) -> [&'static str; 266] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2804,6 +2832,8 @@ impl Strings {
             self.state_yes,
             self.state_no,
             self.mesh_topology_fixed,
+            self.section_dynamic,
+            self.dynamic_topology_adapts,
             self.section_multires,
             self.multires_two_levels,
             self.label_multires_levels,
