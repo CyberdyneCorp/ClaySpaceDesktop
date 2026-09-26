@@ -341,9 +341,10 @@ jobs:
   # the comparison assumes.
   #
   # `--tolerance-scale` multiplies every figure's tolerance, and each value is
-  # measured, not chosen (`benchmarks/ci-gate.md` has the data). macOS is 8:
+  # measured, not chosen (`benchmarks/ci-gate.md` has the data). macOS is 10:
   # twelve runs of the suite on macos-14 at engine 0.120.1 needed 6.6 before no
-  # pair of them disagreed, because a hosted Mac is a three-core VM at a load
+  # pair of them disagreed, and 7.5 against the committed baseline itself,
+  # because a hosted Mac is a three-core VM at a load
   # of 4-8 per core and single figures moved by up to 10x between runs. Linux
   # is 3: its runners are quieter, and the worst figure between runs on two
   # different processors needed 1.18. What the macOS row catches is an
@@ -356,7 +357,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, slug: macos-aarch64, tolerance_scale: 8 }
+          - { os: macos-14, slug: macos-aarch64, tolerance_scale: 10 }
           - { os: ubuntu-24.04, slug: linux-x86_64, tolerance_scale: 3 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60

@@ -6,26 +6,26 @@ cannot compare against its baseline.
 
 | platform | runner | baseline | threshold |
 |---|---|---|---|
-| macOS | `macos-14` | `baseline-macos-aarch64.json` | tolerance × 8 |
+| macOS | `macos-14` | `baseline-macos-aarch64.json` | tolerance × 10 |
 | Linux | `ubuntu-24.04` | `baseline-linux-x86_64.json` | tolerance × 3 |
 
 A figure's tolerance is 1.5 for a mean or a median, 2.0 for a p95 or a one-shot
-figure, 1.25 for a count or a size, and each ratio's own. At scale 8 the macOS
-gate fails a mean that is **12x** its baseline, a p95 or one-shot figure at
-**16x**, and a count at **10x**; at scale 3 the Linux gate fails a mean at
-**4.5x** and a p95 or one-shot figure at **6x**. On top of the ratio test, the gate fails on any figure
-the baseline measured that this run neither measured nor excused, and on a
+figure, 1.25 for a count or a size, and each ratio's own. At scale 10 the
+macOS gate fails a mean that is **15x** its baseline, a p95 or one-shot figure
+at **20x**, and a count at **12.5x**; at scale 3 the Linux gate fails a mean at
+**4.5x** and a p95 or one-shot figure at **6x**. On top of the ratio test, the
+gate fails on any figure the baseline measured that this run neither measured nor excused, and on a
 baseline it refuses to compare against (another scene suite, platform,
 architecture or backend). The refusal used to exit 0; it now exits 2.
 
-## Why eight on macOS and three on Linux
+## Why ten on macOS and three on Linux
 
 Both baselines were recorded by the `Record a baseline` job on the runner image
 the gate runs on, and each file's `conditions.machine` says what that was:
 
 | baseline | processor | cores | memory | OS | runner image | load per core |
 |---|---|---:|---:|---|---|---:|
-| macOS | MACOS_CPU | MACOS_CORES | MACOS_MEM GiB | MACOS_OS | MACOS_RUNNER | MACOS_LOAD |
+| macOS | Apple M1 (Virtual) | 3 | 7 GiB | macOS 14.8.9 | macos14 20260831.0302.1 | 7.99 |
 | Linux | Intel Xeon Platinum 8370C @ 2.80GHz | 4 | 15 GiB | Ubuntu 24.04.5 LTS | ubuntu24 20260920.314.1 | 0.96 |
 
 A hosted macOS runner is a three-core virtual machine at a one-minute load of
@@ -60,9 +60,14 @@ disagreed:
 | `multires.pass_stroke.p95` | 4.16 |
 
 The whole-suite geometric mean of one run over another ranged from 0.64x to
-1.57x: the runner, not the code, is most of the variance. Eight is the smallest
-whole number above 6.64 with a margin for a thirteenth run to be worse than the
-twelve.
+1.57x: the runner, not the code, is most of the variance.
+
+The committed baseline is a thirteenth run, and a single run lands wherever the
+runner put it: its `brush.sdf.pincar.mean` is 145 ms, where the twelve read
+between 172 and 1,628 ms. Held against it, the twelve need a scale of **7.46**
+(that figure, in the 1,628 ms run) before every one passes. Ten is that with a
+third to spare. It is coarse, and it is what a hosted Mac supports; a
+self-hosted macOS runner would be the way to tighten it.
 
 The Linux runners are a different kind of machine: four cores, 15 GiB, a load
 of about one per core, and no GPU, so the view renders through Mesa's software

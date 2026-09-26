@@ -16,7 +16,7 @@
 
 ## 4. Both platforms
 
-- [x] 4.1 The Performance job becomes a macOS and Linux matrix, each against its own baseline, with `--tolerance-scale` 8 on macOS and 3 on Linux
+- [x] 4.1 The Performance job becomes a macOS and Linux matrix, each against its own baseline, with `--tolerance-scale` 10 on macOS and 3 on Linux
 - [x] 4.2 Give `record-baseline` the Linux build dependencies the test job installs
 - [x] 4.3 Give both Linux benchmark jobs Mesa's software Vulkan driver, since without an adapter every group that renders or sculpts through the view skips
 - [x] 4.4 Record both baselines with the dispatched job and commit its artifacts; keep the 0.52.2 workstation recording under `benchmarks/archive/` for the figures the README cites

@@ -1653,7 +1653,7 @@ a gate that is red the day it is installed is one people learn to ignore.
 **Both baselines now come from the CI runners, at the current pin (#189).** The
 Performance job runs on `macos-14` and `ubuntu-24.04`, each against the file its
 own runner image recorded, and fails on a figure worse than its tolerance times
-eight on macOS or three on Linux, a figure that stopped being measured, or a
+ten on macOS or three on Linux, a figure that stopped being measured, or a
 baseline it cannot compare against. The scale is each runner's measured noise,
 not a preference:
 `benchmarks/ci-gate.md` has the twelve runs, the re-run of the intersect

@@ -26,10 +26,11 @@ application is developed on, and not reliably on the other one either:
   the runner image and version. A comparison against a baseline recorded on a
   different processor, core count or memory says so above the table.
 - **`--tolerance-scale K`** multiplies every figure's tolerance. Absent, it is
-  1 — the tolerances the reference machine was measured to allow. CI passes 8
+  1 — the tolerances the reference machine was measured to allow. CI passes 10
   on macOS, measured from twelve runs of the suite on `macos-14` at the current
   pin: a hosted Mac moves single figures by up to 10x between runs, and a scale
-  of 6.6 was the smallest that made no pair of those runs disagree. Linux
+  of 6.6 was the smallest that made no pair of those runs disagree (7.5
+  against the committed baseline itself). Linux
   passes 3: two runs on two different processors needed 1.18.
 - **The Performance job runs on macOS and Linux**, each against a baseline
   recorded by the `Record a baseline` job on the same runner image and

@@ -548,10 +548,10 @@ mod tests {
         let recorded = baseline(&[("dab.median", 2.0)]);
         let mut noisy = Run::new(None);
         noisy.insert("dab.median", Figure::ms(10.0, None));
-        assert!(!table(&recorded, &noisy, 8.0));
+        assert!(!table(&recorded, &noisy, 10.0));
         let mut broken = Run::new(None);
-        broken.insert("dab.median", Figure::ms(30.0, None));
-        assert!(table(&recorded, &broken, 8.0));
+        broken.insert("dab.median", Figure::ms(40.0, None));
+        assert!(table(&recorded, &broken, 10.0));
     }
 
     #[test]

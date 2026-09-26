@@ -521,10 +521,11 @@ per core moved a single measurement by 25%, several times the gate's tolerance.
 Performance job is a matrix of `macos-14` and `ubuntu-24.04`, each compared
 against a baseline the same runner image recorded (the dispatchable
 `Record a baseline` job), with `--tolerance-scale` multiplying every figure's
-tolerance — 8 on macOS, 3 on Linux. A hosted macOS runner is a three-core VM at
+tolerance — 10 on macOS, 3 on Linux. A hosted macOS runner is a three-core VM at
 a load of four to eight per core, and twelve runs of an unchanged suite moved
 single figures by up to 10x; 6.6 was the smallest scale at which no pair of
-those runs disagreed. The Linux runners are far quieter, and the worst figure
+those runs disagreed, and 7.5 the smallest that let all twelve pass against
+the committed baseline. The Linux runners are far quieter, and the worst figure
 between two of them on different processors needed 1.18
 (`benchmarks/ci-gate.md`). The baseline's `conditions.machine`
 records the processor, cores, memory, OS and runner image, and a comparison

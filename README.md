@@ -135,7 +135,7 @@ both recorded on those runner images at the current pin by the dispatchable
 `Record a baseline` job; each file's `conditions.machine` names the processor,
 cores, memory, OS and runner image that produced it. The job fails on a figure
 worse than its tolerance times a per-platform scale — **3 on Linux** (4.5x for
-a mean) and **8 on macOS** (12x for a mean, 16x for a p95 or a one-shot
+a mean) and **10 on macOS** (15x for a mean, 20x for a p95 or a one-shot
 figure) — on a figure the baseline measured that stopped being measured, and on
 a baseline it refuses to compare against. The scales are measured, not chosen:
 a hosted Mac moves single figures by up to 10x between two runs of an unchanged
@@ -1445,7 +1445,7 @@ long-form commands live in one place. `just` on its own lists them.
 | `just visual` | Render every visual test and open the captures |
 | `just bench` | The performance table: every brush, operation, conversion and bake |
 | `just bench-only brush` | One group of it, for when the whole table is too long to wait for |
-| `just bench-compare` | Against the recorded baseline for this platform, which the CI runner recorded. CI runs it on macOS (`--tolerance-scale 8`) and Linux (`--tolerance-scale 3`) — see the note on the facts table |
+| `just bench-compare` | Against the recorded baseline for this platform, which the CI runner recorded. CI runs it on macOS (`--tolerance-scale 10`) and Linux (`--tolerance-scale 3`) — see the note on the facts table |
 | `just bench-to run.json` | Record a whole run somewhere that is not the committed baseline |
 | `just bench-against run.json` | Compare against a run recorded elsewhere — the other half of an engine A/B |
 | `just segments` | Per-segment cost of every brush, which is what a sculptor feels as lag |

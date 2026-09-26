@@ -350,11 +350,11 @@ mod tests {
 
     /// The CI gate's wider tolerance moves the line and nothing else: a
     /// figure 3x its baseline fails at the workstation's 1.5 and passes at
-    /// 1.5 x 8, and one 13x its baseline fails at both.
+    /// 1.5 x 10, and one 16x its baseline fails at both.
     #[test]
     fn a_tolerance_scale_widens_the_line_without_removing_it() {
         assert!(Figure::ms(30.0, None).regressed_against(10.0, 1.0));
-        assert!(!Figure::ms(30.0, None).regressed_against(10.0, 8.0));
-        assert!(Figure::ms(130.0, None).regressed_against(10.0, 8.0));
+        assert!(!Figure::ms(30.0, None).regressed_against(10.0, 10.0));
+        assert!(Figure::ms(160.0, None).regressed_against(10.0, 10.0));
     }
 }

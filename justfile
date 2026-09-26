@@ -209,7 +209,7 @@ bench-only prefix:
 # is worse than no gate: the figures differ by more than any change would.
 #
 # Both files are recorded by CI's `Record a baseline` job on the runner the gate
-# runs on, and CI compares with `--tolerance-scale` 8 on macOS and 3 on Linux,
+# runs on, and CI compares with `--tolerance-scale` 10 on macOS and 3 on Linux,
 # because hosted runners are that noisy (benchmarks/ci-gate.md). Here the
 # tolerances are the workstation's, and the table says so when this machine is
 # not the one that recorded the file.
