@@ -288,7 +288,11 @@ geometry and changed mask attributes. Neither forces a full surface rebuild
 when there is no pending work.
 Both return `uploaded_bytes`, the tracked GPU upload delta for the operation.
 A deferred surface settle blocked by an open gesture remains in `outstanding`;
-`wait` returns without spinning on the interface thread. Stroke-end settlement
+`wait` returns without spinning on the interface thread. So does a retopology,
+UV layout, conform or bake running on its worker thread, until its result is
+placed — whether a group call or `measure` started it; a measured answer lists
+the work it left running. `measure` runs only what `describe` offers, and
+`describe` lists every command withheld from agents with the reason. Stroke-end settlement
 runs when stored triangles still combine separate partial meshing requests; an
 already complete replacement, including a mask-only edit on a consistent surface,
 does not force another rebuild.

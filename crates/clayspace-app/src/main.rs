@@ -1094,6 +1094,19 @@ impl App {
                 fraction: None,
             });
         }
+        // The jobs that run off this thread. Whoever started one — a panel,
+        // a group call or `measure` — the session is not quiet until its
+        // result has been placed.
+        outstanding.extend(
+            [
+                report::job_in_flight("retopology", self.retopo.jobs()),
+                report::job_in_flight("uv layout", self.uv.jobs()),
+                report::job_in_flight("conform", self.conform.jobs()),
+                report::job_in_flight("texture bake", self.bake.jobs()),
+            ]
+            .into_iter()
+            .flatten(),
+        );
         outstanding
     }
 
@@ -6846,6 +6859,7 @@ impl Session for App {
             backend: diagnostics.active_backend,
             platform: diagnostics.platform,
             live_session: true,
+            outstanding: self.outstanding_work(),
         })
     }
 

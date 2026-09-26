@@ -312,6 +312,9 @@ impl Catalogue {
         let action = Args::new("measure", "run", arguments).text("action")?;
         let inner = arguments.get("arguments").cloned().unwrap_or(json!({}));
         let args = Args::new("measure", "run", &inner);
+        // Bound by the table exactly as a group call is: `build` refuses a
+        // group or an action `describe` does not offer, so measuring is never
+        // a side door into what the catalogue withholds.
         let command = actions::build(&group, &action, &args)?;
 
         if let Some(gate) = gate::gate_of(&command) {
@@ -336,11 +339,21 @@ impl Catalogue {
         })?;
 
         let mut value = answer.value;
-        value["note"] = json!(
+        let mut note = String::from(
             "a live-session figure: taken with a window open and a person's session in \
              memory. Evidence, not a baseline — the baselines in benchmarks/ are \
-             recorded by the harness under stated conditions and nothing here writes one."
+             recorded by the harness under stated conditions and nothing here writes one.",
         );
+        if value["outstanding"]
+            .as_array()
+            .is_some_and(|outstanding| !outstanding.is_empty())
+        {
+            note.push_str(
+                " Work in outstanding was still running when the clock stopped, so the \
+                 figure is the time to start it; wait reports it until it is done.",
+            );
+        }
+        value["note"] = json!(note);
         Ok(CallResult::data(value))
     }
 
@@ -726,9 +739,10 @@ impl ToolSurface for Catalogue {
         tools.push(ToolDescriptor {
             name: "measure".into(),
             title: "Medir".into(),
-            description: "Runs one action with the clock around it and reports the wall \
-                          time, whether a frame stalled, and the conditions. A live \
-                          figure is evidence, never a benchmark baseline."
+            description: "Runs one action a group offers with the clock around it and \
+                          reports the wall time, whether a frame stalled, the conditions, \
+                          and any work it left running. A live figure is evidence, never \
+                          a benchmark baseline."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -924,28 +938,40 @@ fn narrows_by_layer(group: &str) -> bool {
 
 /// The commands that are real and deliberately not offered, with the reason.
 fn not_offered() -> Vec<Value> {
-    // One of each, named rather than enumerated by iterating the enum — which
-    // cannot be iterated. `home_of` is what guarantees the list is complete:
-    // a variant nobody placed does not compile.
+    not_offered_commands()
+        .iter()
+        .filter_map(|command| match actions::home_of(command) {
+            actions::Home::NotOffered(why) => Some(json!({
+                "command": command.label(),
+                "why": why,
+            })),
+            actions::Home::In(..) => None,
+        })
+        .collect()
+}
+
+/// One of each command `home_of` places as not offered.
+///
+/// Named rather than enumerated, because the enum cannot be iterated.
+/// `home_of` guarantees every variant is placed somewhere; the test
+/// `not_offered_is_complete` holds this list to every variant it places as
+/// not offered, so a command withheld from agents cannot also be missing from
+/// what `describe` says is withheld — which left a caller unable to tell "not
+/// available" from "does not exist".
+fn not_offered_commands() -> [Command; 11] {
     [
         Command::OpenDocument,
         Command::SaveAs,
         Command::InsertMesh,
         Command::LoadAlpha,
         Command::LoadReference(clayspace_model::RefPlane::Front),
+        Command::ChooseBakeDestination,
+        Command::RunBake,
+        Command::ExportProfile,
         Command::ToggleAgentDoor,
         Command::ShowAgentAccess(false),
         Command::AnswerAgentAsk(clayspace_vm::AgentAnswer::Yes),
     ]
-    .iter()
-    .filter_map(|command| match actions::home_of(command) {
-        actions::Home::NotOffered(why) => Some(json!({
-            "command": command.label(),
-            "why": why,
-        })),
-        actions::Home::In(..) => None,
-    })
-    .collect()
 }
 
 /// The schema for one group's tool: the action, every argument any of its
@@ -1188,9 +1214,229 @@ mod tests {
     #[test]
     fn the_commands_not_offered_say_why() {
         let listed = not_offered();
-        assert_eq!(listed.len(), 8, "{listed:?}");
+        assert_eq!(listed.len(), not_offered_commands().len(), "{listed:?}");
         for entry in listed {
             assert!(entry["why"].as_str().unwrap().len() > 20, "{entry}");
+        }
+    }
+
+    /// The variant names `home_of` places as not offered, read from its arms.
+    ///
+    /// Read from the source because the enum cannot be iterated, the same way
+    /// the contract test reads the routing arms.
+    fn variants_placed_as_not_offered() -> std::collections::BTreeSet<String> {
+        let source = include_str!("actions.rs");
+        let start = source.find("pub fn home_of").expect("home_of");
+        let end = start + source[start..].find("\nfn unknown(").expect("its end");
+        let mut placed = std::collections::BTreeSet::new();
+        let mut arm: Option<(String, String)> = None;
+        let mut close = |arm: Option<(String, String)>| {
+            if let Some((pattern, body)) = arm {
+                if body.contains("Home::NotOffered") {
+                    for variant in pattern.split('|') {
+                        let name: String = variant
+                            .trim()
+                            .chars()
+                            .take_while(char::is_ascii_alphanumeric)
+                            .collect();
+                        placed.insert(name);
+                    }
+                }
+            }
+        };
+        for line in source[start..end].lines().map(str::trim) {
+            if line.starts_with("//") {
+                continue;
+            }
+            match line.split_once(" => ") {
+                Some((pattern, body)) if !pattern.starts_with("match") => {
+                    close(arm.take());
+                    arm = Some((pattern.to_string(), body.to_string()));
+                }
+                _ => {
+                    if let Some((_, body)) = arm.as_mut() {
+                        body.push_str(line);
+                    }
+                }
+            }
+        }
+        close(arm);
+        placed
+    }
+
+    /// Every command withheld from agents is listed as withheld.
+    ///
+    /// The list once named eight of the eleven: a bake's run and destination
+    /// and the profile export were withheld without a word, so a caller could
+    /// not tell "not offered here" from "does not exist".
+    #[test]
+    fn not_offered_is_complete() {
+        let placed = variants_placed_as_not_offered();
+        assert!(placed.contains("RunBake"), "the parse found {placed:?}");
+        let listed: std::collections::BTreeSet<String> = not_offered_commands()
+            .iter()
+            .map(|command| {
+                format!("{command:?}")
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect()
+            })
+            .collect();
+        assert_eq!(listed, placed);
+
+        let described = structured(&Bench::new().call("describe", json!({})).unwrap());
+        let labels: Vec<&str> = described["not_offered"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["command"].as_str().unwrap())
+            .collect();
+        for command in not_offered_commands() {
+            assert!(labels.contains(&command.label()), "{labels:?}");
+        }
+    }
+
+    #[test]
+    fn measure_refuses_an_undeclared_group() {
+        let bench = Bench::new();
+        let refusal = bench
+            .call(
+                "measure",
+                json!({ "group": "trim", "action": "run", "arguments": {} }),
+            )
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::UnknownAction);
+        assert!(
+            refusal.message.contains("no group named trim"),
+            "{}",
+            refusal.message
+        );
+        assert!(bench.applied().is_empty());
+    }
+
+    /// The builder behind every group call and `measure` holds to the table:
+    /// a route with no row is refused rather than dispatched.
+    #[test]
+    fn a_route_without_a_row_is_refused_whoever_builds_it() {
+        let arguments = json!({});
+        let args = Args::new("bake", "run", &arguments);
+        let refusal = actions::build("bake", "run", &args).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::UnknownAction);
+        let args = Args::new("nowhere", "run", &arguments);
+        let refusal = actions::build("nowhere", "run", &args).unwrap_err();
+        assert!(refusal.message.contains("no group named nowhere"));
+    }
+
+    #[test]
+    fn dynamics_actions_are_offered() {
+        let bench = Bench::new();
+        let brush = structured(&bench.call("describe", json!({ "group": "brush" })).unwrap());
+        let curve = structured(&bench.call("describe", json!({ "group": "curve" })).unwrap());
+        let offered = |described: &Value, name: &str| -> Value {
+            described["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|action| action["action"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} is not offered"))
+        };
+        for name in [
+            "set_pressure_size",
+            "set_pressure_strength",
+            "set_pressure_curve",
+            "set_taper_start",
+            "set_taper_end",
+            "set_rake",
+        ] {
+            let action = offered(&brush, name);
+            assert!(
+                !action["arguments"].as_array().unwrap().is_empty(),
+                "{action}"
+            );
+            assert!(action["example"].is_object(), "{action}");
+        }
+        let insert = offered(&curve, "insert_point");
+        assert!(
+            !insert["arguments"].as_array().unwrap().is_empty(),
+            "{insert}"
+        );
+    }
+
+    #[test]
+    fn work_started_by_measure_is_outstanding() {
+        let bench = Bench::new();
+        let measured = structured(
+            &bench
+                .call("measure", json!({ "group": "retopo", "action": "run" }))
+                .unwrap(),
+        );
+        assert_eq!(bench.applied(), vec![Command::RunRetopology]);
+        assert_eq!(measured["outstanding"][0]["what"], "retopology");
+        assert!(
+            measured["note"].as_str().unwrap().contains("still running"),
+            "{measured}"
+        );
+
+        let waited = structured(&bench.call("wait", json!({ "bound_ms": 10 })).unwrap());
+        assert_eq!(waited["quiet"], false);
+        assert_eq!(waited["outstanding"][0]["what"], "retopology");
+    }
+
+    fn summary_of(group: &str, name: &str) -> &'static str {
+        TABLE
+            .iter()
+            .find(|spec| spec.group == group && spec.name == name)
+            .map(|spec| spec.summary)
+            .unwrap_or_else(|| panic!("{group}.{name} has no row"))
+    }
+
+    /// Each summary that once described something else, held to what the
+    /// action actually does.
+    #[test]
+    fn each_corrected_summary_matches_the_action() {
+        // The flag the manipulator carries is a rotation snap. It was offered
+        // as `invert`, which no part of the drag reads.
+        let arguments = json!({ "at": [0.1, 0.0, 0.0], "snap": true });
+        let args = Args::new("transform", "drag", &arguments);
+        assert_eq!(
+            actions::build("transform", "drag", &args).unwrap(),
+            Command::DragGizmo([0.1, 0.0, 0.0], true)
+        );
+        let arguments = json!({ "at": [0.1, 0.0, 0.0], "invert": true });
+        let args = Args::new("transform", "drag", &arguments);
+        assert!(actions::build("transform", "drag", &args).is_err());
+
+        // The document moves exactly the one grabbed point; none or several
+        // is a silent no-op, which the summary has to say.
+        assert!(summary_of("lattice", "drag").contains("one selected control point"));
+        assert!(summary_of("lattice", "drag").contains("moves nothing"));
+
+        // `Command::SetCombine` is how the *next* SDF edit combines.
+        assert!(summary_of("layer", "set_combine").contains("next SDF edit"));
+
+        // Flow is dab spacing and smoothing is the lazy-pointer path steady —
+        // `StrokePreset::spacing` and `StrokePreset::steady`.
+        assert!(summary_of("brush", "set_flow").contains("spaced"));
+        assert!(summary_of("brush", "set_flow").contains("does not change how hard"));
+        assert!(summary_of("brush", "set_smoothing").contains("path"));
+        assert!(summary_of("brush", "set_smoothing").contains("does not relax"));
+
+        // Both repairs are bound on a grid and nowhere else.
+        for (name, operation) in [
+            (
+                "close_holes",
+                clayspace_model::LayerOperation::CloseHoles { passes: 1 },
+            ),
+            ("fill_voids", clayspace_model::LayerOperation::FillVoids),
+        ] {
+            let verbs = operation.verbs();
+            assert!(verbs.voxel.is_some());
+            assert!(verbs.sdf.is_none() && verbs.mesh.is_none() && verbs.multires.is_none());
+            assert!(
+                summary_of("repair", name).contains("Grid layers only"),
+                "{name}"
+            );
         }
     }
 

@@ -441,6 +441,11 @@ pub const GROUPS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The declared groups' names, in the order `tools/list` shows them.
+pub fn group_names() -> Vec<&'static str> {
+    GROUPS.iter().map(|(name, _, _)| *name).collect()
+}
+
 /// Every action, in every group.
 pub const TABLE: &[ActionSpec] = &[
     // -- tool ---------------------------------------------------------------
@@ -474,8 +479,9 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "brush",
         name: "set_flow",
-        summary: "How much of the intensity each dab along the stroke carries.",
-        arguments: &[r("flow", Kind::Number, "0 to 1")],
+        summary: "How closely the dabs are spaced along a stroke: more flow puts them \
+                  closer together. It does not change how hard each dab bites.",
+        arguments: &[r("flow", Kind::Number, "0.01 to 1")],
         example: r#"{"flow":0.8}"#,
     },
     ActionSpec {
@@ -583,8 +589,13 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "brush",
         name: "set_smoothing",
-        summary: "How much the surface is relaxed as the stroke passes.",
-        arguments: &[r("smoothing", Kind::Number, "0 to 1")],
+        summary: "Steadies the stroke's path: the dabs trail the pointer, smoothing a \
+                  shaky line. It does not relax the surface.",
+        arguments: &[r(
+            "smoothing",
+            Kind::Number,
+            "0 follows exactly, up to 0.95",
+        )],
         example: r#"{"smoothing":0.1}"#,
     },
     ActionSpec {
@@ -1003,7 +1014,11 @@ pub const TABLE: &[ActionSpec] = &[
         summary: "Moves the held handle to a point.",
         arguments: &[
             r("at", Kind::Vec3, "where, in the world"),
-            o("invert", Kind::Boolean, "hold the inverting modifier"),
+            o(
+                "snap",
+                Kind::Boolean,
+                "snap a rotation to whole increments; false where none is given",
+            ),
         ],
         example: r#"{"at":[0.1,0,0]}"#,
     },
@@ -1053,7 +1068,8 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "lattice",
         name: "drag",
-        summary: "Moves the selected control points to a point.",
+        summary: "Moves the one selected control point to a point. With none or several \
+                  selected it moves nothing; transform moves several.",
         arguments: &[r("to", Kind::Vec3, "where, in the world")],
         example: r#"{"to":[0.1,0.2,0.0]}"#,
     },
@@ -1200,7 +1216,8 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "layer",
         name: "set_combine",
-        summary: "How the active layer meets what is under it.",
+        summary: "How the next SDF edit on the active layer combines with what is under \
+                  it. What is already placed keeps its own; object.set_combine changes that.",
         arguments: &[
             o("op", Kind::Choice(combines), "which operation"),
             o("blend", Kind::Choice(blends), "the blend profile"),
@@ -1360,14 +1377,14 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "repair",
         name: "close_holes",
-        summary: "Closes the holes in the active mesh layer.",
+        summary: "Seals perforations in the active grid layer. Grid layers only.",
         arguments: &[],
         example: "{}",
     },
     ActionSpec {
         group: "repair",
         name: "fill_voids",
-        summary: "Fills the enclosed voids in the active layer.",
+        summary: "Fills the enclosed voids in the active grid layer. Grid layers only.",
         arguments: &[],
         example: "{}",
     },
