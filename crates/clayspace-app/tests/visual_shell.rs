@@ -4243,6 +4243,8 @@ fn a_crossing_aims_the_panel_rather_than_converting() {
 
 /// The bar sheds its phrases before it sheds anything else.
 ///
+/// Five cards and a mesh's four crossings keep their phrases at 1920 wide.
+///
 /// A ladder, not a switch: the crossings are what a sculptor cannot do
 /// without, the phrases explain a vocabulary once and then repeat themselves,
 /// and the heading is the least load-bearing word in the row. So a narrower
@@ -4250,7 +4252,7 @@ fn a_crossing_aims_the_panel_rather_than_converting() {
 ///
 /// What this does **not** claim is that everything fits at any width. It does
 /// not: at 1024 with both inspectors open the central region is under five
-/// hundred pixels, and three cards carrying `icon + name` plus two crossings
+/// hundred pixels, and five cards carrying `icon + name` plus the crossings
 /// need more than that. The bar scrolls there. Going further would mean cards
 /// of icon alone, and the design requires a representation to be told by icon
 /// *and* text — a shape on its own is exactly what the tests elsewhere here
@@ -4301,11 +4303,11 @@ fn a_narrow_bar_gives_up_its_phrases_first() {
         card.width()
     };
 
-    let roomy = card_width(1600.0);
+    let roomy = card_width(1920.0);
     let cramped = card_width(1024.0);
     assert!(
         cramped < roomy,
-        "the card is {cramped} wide at 1024 and {roomy} at 1600, so the bar          kept its phrases while the crossings ran off the end"
+        "the card is {cramped} wide at 1024 and {roomy} at 1920, so the bar          kept its phrases while the crossings ran off the end"
     );
 }
 

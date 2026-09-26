@@ -88,7 +88,7 @@ fn every_member_measures_the_representation_it_claims() {
     }
     assert_eq!(
         unmeasured,
-        vec![Representation::Multires],
+        vec![Representation::Multires, Representation::Dynamic],
         "the set of representations with no reference member has changed; if \
          one gained a member, its baselines have to be recorded, and if one \
          lost its member that is the silence this file exists to catch"
