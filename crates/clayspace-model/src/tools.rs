@@ -2841,6 +2841,12 @@ impl BrushSettings {
         }
     }
 
+    /// Stamp spacing as a fraction of the footprint's diameter — Fluxo, read
+    /// the way the engine's stroke preset reads it: more flow, closer stamps.
+    pub fn spacing(&self) -> f32 {
+        (1.0 - self.flow.clamp(0.01, 1.0)).clamp(0.05, 0.9)
+    }
+
     /// Clamps to the ranges the engine accepts.
     ///
     /// A zero or negative radius is rejected by the engine, so it is clamped

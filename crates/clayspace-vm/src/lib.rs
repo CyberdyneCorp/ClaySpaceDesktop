@@ -27,6 +27,7 @@ mod reference_vm;
 mod retopo_vm;
 pub mod scene_vm;
 pub mod sculpt_vm;
+mod stroke_path;
 mod uv_vm;
 
 pub use agent_vm::{AgentAnswer, AgentAsk, AgentGate, AgentViewModel, Door};
