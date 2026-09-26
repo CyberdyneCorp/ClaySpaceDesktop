@@ -1319,6 +1319,30 @@ impl Document {
         )
     }
 
+    /// Moves a placed node to `index` among `parent`'s children, undoably.
+    ///
+    /// `parent` is [`NodeId::ROOT`] for a layer's top level. Order is
+    /// evaluation order, so this is what puts a node that was removed and
+    /// placed again back where it stood: a node appended at the end is
+    /// combined after everything the layer already holds, and a union placed
+    /// after a carve fills the carve in.
+    pub fn move_node(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        parent: NodeId,
+        index: usize,
+    ) -> Result<()> {
+        let index = i32::try_from(index).map_err(|_| {
+            crate::raw_failure("clay_layer_move", crate::ErrorKind::InvalidArgument)
+        })?;
+        // SAFETY: valid handle; the engine range-checks the ids and the index.
+        check(
+            unsafe { sys::clay_layer_move(self.as_ptr(), layer.0, node.0, parent.0, index) },
+            "clay_layer_move",
+        )
+    }
+
     /// Re-places an existing node.
     pub fn set_node_transform(
         &mut self,

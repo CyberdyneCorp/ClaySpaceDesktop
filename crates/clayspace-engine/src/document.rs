@@ -14915,10 +14915,10 @@ impl ArmatureModel for ClayDocument {
         //
         // A rig does its own mirroring: `add_zsphere` places the reflected
         // node itself, because the host holds the topology and the tree has to
-        // carry both halves for either to be posable. A layer mirror would
-        // reflect the placed item *as well*, so a stroke on the rig's own
-        // subtool at the fresh-subtool default would hang a second left arm
-        // off the first one.
+        // carry both halves for either to be posable. The rig's item stays
+        // out of the layer mirror (`place_armature`), so a stroke made with
+        // symmetry on here mirrors the stroke and not the rig; off is still
+        // the right start for a subtool whose content mirrors itself.
         self.set_symmetry([false; 3])?;
 
         // And everything else steps out of the way.
@@ -14948,7 +14948,7 @@ impl ArmatureModel for ClayDocument {
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;
-        let placed = self.place_armature(layer, &tree);
+        let placed = self.place_armature(layer, &tree, None);
         self.document.end_undo_group().map_err(ModelError::engine)?;
         let index = self.index_of(key)?;
         self.layers[index].armature = Some((placed?, tree));
@@ -15101,13 +15101,16 @@ impl ArmatureModel for ClayDocument {
 }
 
 impl ClayDocument {
-    /// Builds the item and places it, returning the node that carries it.
-    /// Places a rig and returns every node it made — the armature, and one
-    /// subtractive sphere per negative.
+    /// Places a rig and returns the node that carries it.
+    ///
+    /// `standing` is where among the layer's top-level nodes the rig goes;
+    /// `None` appends it, which is right only for a rig made afresh. See
+    /// `rewrite_armature` for why a rewritten rig must not be appended.
     fn place_armature(
         &mut self,
         layer: LayerId,
         tree: &Armature,
+        standing: Option<usize>,
     ) -> Result<Vec<NodeId>, ModelError> {
         // One item for the whole rig, signs included. Until ClayCore 0.30.0 the
         // armature primitive carried one op for the whole item, so a negative
@@ -15157,11 +15160,23 @@ impl ClayDocument {
         // ("stroke points need CLAY_PRIM_STROKE"). The skin is the cones
         // between the spheres, so thickness lives in the radii above.
         item.set_op(Op::Add).map_err(ModelError::engine)?;
+        // **A rig stays out of the layer's mirror.** It mirrors itself:
+        // `add_zsphere` puts the reflected node into the tree, because the
+        // host holds the topology. Taking part as well made every node a
+        // candidate for a second reflection, so a stroke made with symmetry on
+        // on the rig's own subtool gave a sphere placed one-sided a twin
+        // (#170, A5).
+        item.set_mirror(false).map_err(ModelError::engine)?;
 
         let node = self
             .document
             .add_item(layer, &item)
             .map_err(ModelError::engine)?;
+        if let Some(index) = standing {
+            self.document
+                .move_node(layer, node, NodeId::ROOT, index)
+                .map_err(ModelError::engine)?;
+        }
         let placed = vec![node];
 
         // Bounds over the whole tree, negatives included: they are what the
@@ -15640,11 +15655,18 @@ impl ClayDocument {
         let layer = self.layers[index].id;
         // Where it was, before it is replaced by where it now is.
         let vacated = self.layers[index].armature_bounds;
+        // And where it stood in the layer's order. A layer is evaluated in
+        // that order, so a rig removed and appended again was combined after
+        // every stroke made on its subtool since: a union placed after a
+        // carve fills the carve in, and each rig edit erased the strokes that
+        // cut into the rig (#170, A5).
+        let standing = nodes
+            .first()
+            .and_then(|node| self.top_level_index(layer, *node));
 
         // One undoable action, however many engine commands it takes. A rig
-        // edit is a remove and a place — and a place is several items once
-        // there are negatives — so without the group a single drag would need
-        // four undos to come back.
+        // edit is a remove, a place and a move back into its place, so
+        // without the group a single drag would need three undos to come back.
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;
@@ -15654,7 +15676,7 @@ impl ClayDocument {
                     .remove_node(layer, *node)
                     .map_err(ModelError::engine)?;
             }
-            self.place_armature(layer, &tree)
+            self.place_armature(layer, &tree, standing)
         })();
         self.document.end_undo_group().map_err(ModelError::engine)?;
 
@@ -15668,6 +15690,12 @@ impl ClayDocument {
             self.refill_region(min, max)?;
         }
         Ok(())
+    }
+
+    /// Where `node` stands among the layer's top-level nodes, if it is one.
+    fn top_level_index(&self, layer: LayerId, node: NodeId) -> Option<usize> {
+        let count = self.document.layer_node_count(layer).ok()?;
+        (0..count).find(|at| self.document.layer_node_at(layer, *at).ok() == Some(node))
     }
 
     /// The node reflecting `index` through x = 0, if the tree holds one.

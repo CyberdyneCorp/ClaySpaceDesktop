@@ -21,10 +21,19 @@
       `a_hidden_layer_draws_nothing_after_a_mirror_change` and
       `undoing_a_mirror_change_draws_the_old_images_again`
 
-## 3. Remaining (#170)
+## 3. Rigs (#170, A5)
 
-- [ ] 3.1 Turning symmetry off or changing its axis leaves items made under the
-      old mirror unchanged
-- [ ] 3.2 A Move drag on the mirror plane moves as far as an unmirrored drag
-- [ ] 3.3 Rig edits neither mirror one-sided spheres nor erase the rig layer's
-      strokes
+- [x] 3.1 The armature item stays out of the layer mirror; verify
+      `a_stroke_under_symmetry_does_not_mirror_a_one_sided_zsphere`
+- [x] 3.2 A rewritten armature goes back to where it stood in the layer's
+      order, in the edit's undo group; verify
+      `a_rig_edit_keeps_the_strokes_on_the_rig_layer`
+
+## 4. Waiting on the engine (#170)
+
+- [ ] 4.1 Turning symmetry off or changing its axis leaves items made under the
+      old mirror unchanged — needs per-item axes or an engine mirror bake
+      (ClayCore #664)
+- [ ] 4.2 A Move drag on the mirror plane moves as far as an unmirrored drag —
+      the coincident drag image is the engine's (ClayCore #663); un-ignore
+      `a_move_on_the_plane_is_applied_once` when it lands
