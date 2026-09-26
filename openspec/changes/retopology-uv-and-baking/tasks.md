@@ -175,8 +175,22 @@ field evaluator with no field. We are the first of either.
       cancellable job progress, result preview and explicit accept/discard.
       Acceptance creates a new mesh subtool and one history entry; discard
       creates neither. (#211)
-- [ ] 11.2 Recheck the source layer revision before accepting a result and
-      refuse a stale preview with a visible reason. (#211)
+      **Done except the preview.** A run is a job with the engine's progress
+      forwarded to the interface and the agent, cancellable, and outstanding
+      to `jobs`, captures and `wait` until it lands; its result is a new mesh
+      subtool beside the intact source in one history entry, with
+      `in_place` as the opt-in to rebuild the source. What remains is holding
+      the finished result as a drawn preview with explicit accept/discard
+      instead of publishing it when the job lands
+- [x] 11.2 Recheck the source layer revision before accepting a result and
+      refuse a stale preview with a visible reason. (#211) Checked in the
+      ViewModel before publishing and again in the document for both
+      placements; a source that moved or was removed gets nothing and a notice
+- [x] 11.6 Read only the active subtool as the source. Retopology, the UV
+      layout and a conform's edit mesh read the whole visible scene, so a
+      second visible subtool — the sculpt a new-layer result keeps beside it —
+      was folded into the next run and made every conform refuse on its
+      vertex count. (#211)
 - [ ] 11.3 Store editable flow guides and density painting as retopology input,
       independently of sculpt brushes, with undo and visual feedback; test
       that each changes the output in the intended region. (#212)

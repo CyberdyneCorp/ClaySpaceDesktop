@@ -721,6 +721,10 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
                 "adaptivity",
                 clayspace_model::RetopoSettings::default().adaptivity,
             )?,
+            in_place: args.boolean_or(
+                "in_place",
+                clayspace_model::RetopoSettings::default().in_place,
+            )?,
         }),
         ("retopo", "run") => C::RunRetopology,
         ("uv", "set") => C::SetUvSettings(clayspace_model::UvSettings {

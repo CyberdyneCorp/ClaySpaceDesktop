@@ -58,6 +58,7 @@ pub(super) fn scene_section(ui: &mut egui::Ui, state: &ShellState<'_>) {
                         Icon::Hidden
                     },
                     node.visible,
+                    state.strings,
                 );
             });
         });
@@ -227,7 +228,7 @@ pub(super) fn layer_row(
                 } else {
                     Icon::Hidden
                 };
-                if icons::button(ui, eye, layer.visible).clicked() {
+                if icons::button(ui, eye, layer.visible, state.strings).clicked() {
                     queue.push(Command::SetLayerVisible(layer.key, !layer.visible));
                 }
 
@@ -269,7 +270,7 @@ pub(super) fn layer_row(
                             .size(type_scale::LABEL)
                             .color(Tokens::text_dim()),
                     )
-                    .on_hover_text(layer.representation.label());
+                    .on_hover_text(state.strings.representation_name(layer.representation));
                     // The name grows into whatever is left, so without this
                     // the tag sits flush against it and the two read as one
                     // word: "Detalhes_secundariosSDF".
@@ -280,10 +281,12 @@ pub(super) fn layer_row(
                         } else {
                             Icon::Locked
                         };
-                        let response = icons::button(ui, icon, false);
-                        if let Some(refusal) = layer.protection.refusal() {
-                            response.on_hover_text(refusal);
-                        }
+                        let response = icons::button(ui, icon, false, state.strings);
+                        response.on_hover_text(if layer.protection.ghost {
+                            state.strings.refusal_layer_ghost
+                        } else {
+                            state.strings.refusal_layer_protected
+                        });
                     }
                 });
             });
@@ -501,7 +504,7 @@ fn multires_pass_row(
                 } else {
                     Icon::Hidden
                 };
-                if icons::button(ui, eye, pass.visible).clicked() {
+                if icons::button(ui, eye, pass.visible, state.strings).clicked() {
                     queue.push(Command::MultiresSculptLayer(Op::SetVisible {
                         id: pass.id,
                         visible: !pass.visible,
@@ -844,7 +847,7 @@ pub(super) fn sculpt_layer_row(
         } else {
             Icon::Hidden
         };
-        if icons::button(ui, eye, pass.visible).clicked() {
+        if icons::button(ui, eye, pass.visible, state.strings).clicked() {
             queue.push(Command::SculptLayer(SculptLayerOp::SetVisible {
                 index: pass.index,
                 visible: !pass.visible,
@@ -1506,9 +1509,9 @@ pub(super) fn bake_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
         // A refused map is named. Reporting "3 written" without saying the
         // fourth failed is the shape of report this project keeps finding in
         // other people's tools.
-        for (map, why) in &result.refused {
+        for (map, _) in &result.refused {
             ui.label(
-                egui::RichText::new(format!("{}: {why}", s.bake_map_name(*map)))
+                egui::RichText::new(format!("{}: {}", s.bake_map_name(*map), s.status_bake))
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
@@ -1766,6 +1769,17 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
             changed = true;
         }
         pure.on_hover_text(s.retopo_pure_hint);
+
+        let in_place = ui.checkbox(
+            &mut settings.in_place,
+            egui::RichText::new(s.retopo_in_place)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        if in_place.changed() {
+            changed = true;
+        }
+        in_place.on_hover_text(s.retopo_in_place_hint);
 
         for (label, hint, value, range) in [
             (

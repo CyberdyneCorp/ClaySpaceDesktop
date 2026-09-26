@@ -103,7 +103,12 @@ impl Catalogue {
 
     // -- the group tools ----------------------------------------------------
 
-    fn call_group(&self, group: &'static str, arguments: &Value) -> Result<CallResult, Refusal> {
+    fn call_group(
+        &self,
+        group: &'static str,
+        arguments: &Value,
+        client: Option<&str>,
+    ) -> Result<CallResult, Refusal> {
         let action = arguments
             .get("action")
             .and_then(Value::as_str)
@@ -123,7 +128,7 @@ impl Catalogue {
         let capture = capture_of(arguments)?;
 
         if let Some(gate) = gate::gate_of(&command) {
-            self.obtain(gate, &command)?;
+            self.obtain(gate, &command, client)?;
         }
 
         // `changes_the_document` rather than `touches_document`: the narrower
@@ -222,7 +227,12 @@ impl Catalogue {
 
     // -- consent ------------------------------------------------------------
 
-    fn obtain(&self, gate: crate::session::GateKind, command: &Command) -> Result<(), Refusal> {
+    fn obtain(
+        &self,
+        gate: crate::session::GateKind,
+        command: &Command,
+        client: Option<&str>,
+    ) -> Result<(), Refusal> {
         if access::read_consents(&self.store)
             .iter()
             .any(|tag| tag == gate.tag())
@@ -238,7 +248,9 @@ impl Catalogue {
             id: ask_id(gate),
             gate,
             operation: command.label().to_string(),
-            client: "um agente".to_string(),
+            // The application localizes this generic marker for legacy
+            // clients. A supplied client name is carried unchanged.
+            client: client.unwrap_or("").to_string(),
             path: path_of(command),
             bound: self.bounds.consent,
         };
@@ -307,7 +319,7 @@ impl Catalogue {
         self.answer(answer)
     }
 
-    fn call_measure(&self, arguments: &Value) -> Result<CallResult, Refusal> {
+    fn call_measure(&self, arguments: &Value, client: Option<&str>) -> Result<CallResult, Refusal> {
         let group = Args::new("measure", "run", arguments).text("group")?;
         let action = Args::new("measure", "run", arguments).text("action")?;
         let inner = arguments.get("arguments").cloned().unwrap_or(json!({}));
@@ -318,7 +330,7 @@ impl Catalogue {
         let command = actions::build(&group, &action, &args)?;
 
         if let Some(gate) = gate::gate_of(&command) {
-            self.obtain(gate, &command)?;
+            self.obtain(gate, &command, client)?;
         }
 
         let answer = self.queue.submit(self.bounds.capture, move |session| {
@@ -629,7 +641,7 @@ impl ToolSurface for Catalogue {
 
         tools.push(ToolDescriptor {
             name: "describe".into(),
-            title: "Vocabulário".into(),
+            title: "Vocabulary".into(),
             description: "What the groups offer, what each action takes, and which \
                           commands are deliberately not offered and why."
                 .into(),
@@ -759,12 +771,13 @@ impl ToolSurface for Catalogue {
     }
 
     fn call(&self, name: &str, arguments: &Value) -> Result<CallResult, Refusal> {
-        self.call_scoped("", name, arguments)
+        self.call_scoped("", None, name, arguments)
     }
 
     fn call_scoped(
         &self,
         caller: &str,
+        client: Option<&str>,
         name: &str,
         arguments: &Value,
     ) -> Result<CallResult, Refusal> {
@@ -773,9 +786,9 @@ impl ToolSurface for Catalogue {
             "state" => self.call_state(arguments),
             "viewport" => self.call_viewport(caller, arguments),
             "wait" => self.call_wait(arguments),
-            "measure" => self.call_measure(arguments),
+            "measure" => self.call_measure(arguments, client),
             other => match GROUPS.iter().find(|(group, _, _)| *group == other) {
-                Some((group, _, _)) => self.call_group(group, arguments),
+                Some((group, _, _)) => self.call_group(group, arguments, client),
                 None => Err(Refusal::new(
                     RefusalCode::UnknownAction,
                     format!(
@@ -1709,6 +1722,24 @@ mod tests {
     }
 
     #[test]
+    fn consent_names_the_client_that_requested_it() {
+        let bench = Bench::new();
+        bench
+            .catalogue
+            .call_scoped(
+                "agent",
+                Some("Studio Agent"),
+                "document",
+                &json!({ "action": "save" }),
+            )
+            .expect("consent and save");
+        assert_eq!(
+            bench.session.lock().unwrap().asked[0].client,
+            "Studio Agent"
+        );
+    }
+
+    #[test]
     fn an_unanswered_ask_is_refused_after_its_bound_rather_than_held() {
         let bench = Bench::with(FakeSession::new().answering_consent(ConsentOutcome::Pending));
         let started = Instant::now();
@@ -1752,7 +1783,10 @@ mod tests {
             asked[0].path.as_deref(),
             Some(std::path::Path::new("/tmp/cabeça.clayspace"))
         );
-        assert!(!asked[0].client.is_empty());
+        assert!(
+            asked[0].client.is_empty(),
+            "legacy clients use the locale's generic name"
+        );
     }
 
     #[test]
@@ -1879,12 +1913,12 @@ mod tests {
         let capture = json!({"action":"capture", "width":8, "height":8, "remember":"same"});
         bench
             .catalogue
-            .call_scoped("first", "viewport", &capture)
+            .call_scoped("first", None, "viewport", &capture)
             .unwrap();
         bench.session.lock().unwrap().fill = [255, 0, 0, 255];
         bench
             .catalogue
-            .call_scoped("second", "viewport", &capture)
+            .call_scoped("second", None, "viewport", &capture)
             .unwrap();
 
         let compare = json!({"action":"compare", "before":"same", "after":"same"});
@@ -1892,22 +1926,22 @@ mod tests {
             structured(
                 &bench
                     .catalogue
-                    .call_scoped("first", "viewport", &compare)
+                    .call_scoped("first", None, "viewport", &compare)
                     .unwrap()
             )["differing_pixels"],
             0
         );
         bench
             .catalogue
-            .call_scoped("first", "viewport", &json!({"action":"forget"}))
+            .call_scoped("first", None, "viewport", &json!({"action":"forget"}))
             .unwrap();
         assert!(bench
             .catalogue
-            .call_scoped("first", "viewport", &compare)
+            .call_scoped("first", None, "viewport", &compare)
             .is_err());
         assert!(bench
             .catalogue
-            .call_scoped("second", "viewport", &compare)
+            .call_scoped("second", None, "viewport", &compare)
             .is_ok());
     }
 
@@ -2045,6 +2079,22 @@ mod tests {
         let value = structured(&bench.call("describe", json!({})).unwrap());
         assert_eq!(value["groups"].as_array().unwrap().len(), GROUPS.len());
         assert!(!value["not_offered"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn describe_titles_use_the_protocols_english_vocabulary() {
+        for (tag, title, _) in GROUPS {
+            assert!(title.is_ascii(), "{tag} has an untranslated title: {title}");
+            assert_ne!(*title, "Multires");
+        }
+        assert_eq!(
+            GROUPS
+                .iter()
+                .find(|(tag, _, _)| *tag == "hierarchy")
+                .unwrap()
+                .1,
+            "Hierarchy"
+        );
     }
 
     #[test]

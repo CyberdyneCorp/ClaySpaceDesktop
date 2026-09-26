@@ -6,9 +6,9 @@ The catalogue and the dispatch drifted in ways #146 did not cover (#191):
 
 - `measure` built any route the dispatch held, including ones the catalogue
   does not offer, because the builder let an action with no row through.
-- A retopology, UV layout, conform or bake runs on a worker thread. Started
-  through `measure` or its own group, it answered at once, and `wait` reported
-  the session quiet while it was still running.
+- A retopology, UV layout, conform or bake runs on a worker thread, so a
+  measured `run` stops the clock long before the work is done, and the answer
+  did not say so. (`wait` reporting such jobs is #278.)
 - `not_offered` named eight of the eleven commands withheld from agents; a
   bake's run and destination and the profile export were missing, so a caller
   could not tell "not offered" from "does not exist".
@@ -22,9 +22,8 @@ The catalogue and the dispatch drifted in ways #146 did not cover (#191):
 
 - The action builder refuses a group or action with no catalogue row, so every
   group call and `measure` is bound by `GROUPS` and `TABLE`.
-- `outstanding` — what `wait`, a capture's settle and the `jobs` section
-  report — includes background jobs in flight. A measured answer carries the
-  work it left running and says the figure is the time to start it.
+- A measured answer carries the work it left running and says the figure is
+  the time to start it.
 - `not_offered` lists every command `home_of` places as not offered, held by a
   test that reads `home_of`'s arms.
 - The misleading summaries are corrected; `transform.drag` takes `snap`

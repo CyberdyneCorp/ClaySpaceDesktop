@@ -276,12 +276,23 @@ fn a_retopology_and_its_hierarchy_are_shaded_like_the_sculpt() {
     };
 
     let sculpt = shading_variation(&render(&mut document, "184-sculpt"), background);
+    let source = document
+        .scene()
+        .active_layer()
+        .expect("an active layer")
+        .key;
     document
         .retopologise(clayspace_model::RetopoSettings {
             target_quads: 600,
             ..clayspace_model::RetopoSettings::default()
         })
         .expect("the retopology runs");
+    // The result arrives as a new layer beside the sculpt. Hidden, so the
+    // capture is of the result alone: the lit sculpt behind it would pass for
+    // a lit retopology.
+    document
+        .set_layer_visible(source, false)
+        .expect("the source can be hidden");
     let retopology = shading_variation(&render(&mut document, "184-retopology"), background);
 
     let settings = clayspace_model::ConversionSettings::default();

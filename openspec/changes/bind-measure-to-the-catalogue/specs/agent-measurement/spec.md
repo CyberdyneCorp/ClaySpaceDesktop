@@ -1,17 +1,12 @@
 ## ADDED Requirements
 
-### Requirement: Background jobs are outstanding until their result is placed
-A retopology, UV layout, conform or texture bake running off the interface
-thread SHALL be reported as outstanding work — by `wait`, by the settle a
-capture performs and by the `jobs` state section — from the moment it starts
-until its result has been collected, whichever path started it. `wait` SHALL
-NOT report the session quiet while one runs.
-
-A measured command that leaves such a job running SHALL say so in its answer,
-so that the figure is read as the time to start the work rather than to finish
-it.
+### Requirement: A measured answer names the work it left running
+A measured command that leaves work running when the clock stops — a job it
+started off the interface thread, such as a retopology — SHALL list that work
+in its answer and SHALL say that the figure is the time to start it rather
+than to finish it.
 
 #### Scenario: Retopology started through measure
 - **WHEN** an agent measures `retopo` `run`
-- **THEN** the answer lists the retopology as outstanding
-- **AND** a following `wait` reports the session not quiet and names it
+- **THEN** the answer lists the retopology as outstanding and notes that the
+  figure does not include it

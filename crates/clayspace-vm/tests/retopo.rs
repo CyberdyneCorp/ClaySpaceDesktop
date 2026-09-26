@@ -20,7 +20,12 @@ use clayspace_vm::{Command, RetopoViewModel};
 struct Subtool {
     available: Option<String>,
     sources_read: u32,
+    /// The source's geometry revision. Moved by a test to stand for a stroke
+    /// landing on the sculpt while the job runs.
+    revision: u64,
+    /// What was placed, and whether it was asked to replace the source.
     placed: Vec<RetopoResult>,
+    in_place: Vec<bool>,
 }
 
 struct Doubles {
@@ -50,15 +55,22 @@ impl RetopoModel for Doubles {
             normals: Vec::new(),
             indices: vec![0, 1, 2],
             name: "Forma · mesh".to_string(),
+            revision: subtool.revision,
         })
     }
 
-    fn place_retopology(&mut self, result: &RetopoResult) -> Result<(), ModelError> {
-        self.subtool
-            .lock()
-            .expect("not poisoned")
-            .placed
-            .push(result.clone());
+    fn retopo_source_revision(&mut self) -> Result<u64, ModelError> {
+        Ok(self.subtool.lock().expect("not poisoned").revision)
+    }
+
+    fn place_retopology(
+        &mut self,
+        result: &RetopoResult,
+        settings: RetopoSettings,
+    ) -> Result<(), ModelError> {
+        let mut subtool = self.subtool.lock().expect("not poisoned");
+        subtool.placed.push(result.clone());
+        subtool.in_place.push(settings.in_place);
         Ok(())
     }
 }
@@ -115,6 +127,20 @@ impl Retopologiser for Double {
             name: format!("{} · quads · {}", source.name, settings.target_quads),
         })
     }
+}
+
+/// A retopologiser that holds its worker until the test releases it.
+fn held(watch_cancel: bool) -> (Double, std::sync::mpsc::Sender<()>) {
+    let (release, hold) = std::sync::mpsc::channel();
+    (
+        Double {
+            runs: AtomicU32::new(0),
+            fail: None,
+            watch_cancel,
+            hold: Some(std::sync::Mutex::new(hold)),
+        },
+        release,
+    )
 }
 
 fn fixture(engine: Double) -> (RetopoViewModel, Arc<std::sync::Mutex<Subtool>>) {
@@ -207,14 +233,9 @@ fn an_unavailable_subtool_is_refused_without_running_anything() {
 /// the fixture now holds the worker until the cancellation has actually been
 /// dispatched, which is deterministic *and* exercises the real path.
 #[test]
-fn a_cancelled_retopology_places_nothing() {
-    let (release, hold) = std::sync::mpsc::channel();
-    let (mut vm, subtool) = fixture(Double {
-        runs: AtomicU32::new(0),
-        fail: None,
-        watch_cancel: true,
-        hold: Some(std::sync::Mutex::new(hold)),
-    });
+fn a_cancelled_run_publishes_nothing() {
+    let (engine, release) = held(true);
+    let (mut vm, subtool) = fixture(engine);
     vm.dispatch(&Command::RunRetopology);
     assert!(vm.is_running(), "the job did not start");
 
@@ -270,4 +291,99 @@ fn a_second_retopology_is_refused_while_one_runs() {
          is growing behind the sculptor's back"
     );
     settle(&mut vm);
+}
+
+/// A run is a job: it is running, its progress is readable while it runs, and
+/// it stops being outstanding only once it has landed.
+///
+/// What `jobs`, `outstanding` and `wait` read. A run that did not show here was
+/// a run an agent could not see, and `wait` reported the session quiet while
+/// the retopology was still working.
+#[test]
+fn a_retopo_run_is_a_job() {
+    let (engine, release) = held(false);
+    let (mut vm, subtool) = fixture(engine);
+    vm.dispatch(&Command::RunRetopology);
+    assert!(vm.is_running(), "the run did not start a job");
+
+    // The double reports half-way before it blocks; a poll forwards it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        vm.poll();
+        let fraction = vm.jobs().progress().get().as_ref().and_then(|p| p.fraction);
+        if fraction == Some(0.5) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run's progress never left the worker: {fraction:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(vm.is_running(), "the job stopped before it was released");
+    assert!(subtool.lock().expect("not poisoned").placed.is_empty());
+
+    release.send(()).expect("the worker is waiting");
+    settle(&mut vm);
+    assert!(
+        vm.jobs().progress().get().is_none(),
+        "progress outlived the job"
+    );
+    assert_eq!(subtool.lock().expect("not poisoned").placed.len(), 1);
+}
+
+/// A source that moved while the job ran gets nothing.
+///
+/// The work runs off the interface thread and the sculpt stays strokeable, so
+/// a result made from the sculpt as it was must not be published against the
+/// sculpt as it is.
+#[test]
+fn a_stale_result_is_not_published() {
+    let (engine, release) = held(false);
+    let (mut vm, subtool) = fixture(engine);
+    vm.dispatch(&Command::RunRetopology);
+    // A stroke lands on the source while the worker is busy.
+    subtool.lock().expect("not poisoned").revision += 1;
+    release.send(()).expect("the worker is waiting");
+    settle(&mut vm);
+
+    assert!(
+        subtool.lock().expect("not poisoned").placed.is_empty(),
+        "a retopology of a sculpt that has since moved was published"
+    );
+    assert!(
+        vm.last().get().is_none(),
+        "a discarded run reported an outcome"
+    );
+    assert!(
+        vm.notice()
+            .get()
+            .as_deref()
+            .is_some_and(|notice| notice.contains("mudou")),
+        "the discard was not said: {:?}",
+        vm.notice().get()
+    );
+}
+
+/// Where a result lands is decided by the settings the run was asked with.
+///
+/// A new layer is the default; flipping `in_place` while a job runs changes the
+/// next run, not where this one lands.
+#[test]
+fn a_run_lands_where_it_was_asked_to() {
+    let (engine, release) = held(false);
+    let (mut vm, subtool) = fixture(engine);
+    vm.dispatch(&Command::RunRetopology);
+    vm.dispatch(&Command::SetRetopoSettings(RetopoSettings {
+        in_place: true,
+        ..RetopoSettings::default()
+    }));
+    release.send(()).expect("the worker is waiting");
+    settle(&mut vm);
+
+    assert_eq!(
+        subtool.lock().expect("not poisoned").in_place,
+        vec![false],
+        "the default run did not land as a new layer"
+    );
 }

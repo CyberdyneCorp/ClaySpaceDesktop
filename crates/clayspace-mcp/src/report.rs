@@ -17,7 +17,7 @@ use clayspace_model::{
     BrushSettings, CombineSettings, DeformSettings, Diagnostics, FrameLog, LayerKey,
     MaskState as DomainMask, Representation, Scene, ToolKind, Transform,
 };
-use clayspace_vm::{AgentGate, JobRunner};
+use clayspace_vm::AgentGate;
 
 use crate::catalogue::tags;
 use crate::session::{
@@ -25,9 +25,8 @@ use crate::session::{
     CrossingOutcomeState, DeformState, DocumentState, DragState, DynamicsState, ExchangeState,
     ExportState, FallbackState, GateKind, GridState, HierarchyPassState, HierarchyState,
     HistoryState, ImportState, LayerState, MaskState, MemoryPart, MemoryState, ObjectState,
-    OutcomeState, Outstanding, PassState, PhaseCostState, PresentationState, ReferenceState,
-    RemeshOutcomeState, RetopoOutcomeState, SceneState, StallState, StrokeCostState, TimingState,
-    ToolState,
+    OutcomeState, PassState, PhaseCostState, PresentationState, ReferenceState, RemeshOutcomeState,
+    RetopoOutcomeState, SceneState, StallState, StrokeCostState, TimingState, ToolState,
 };
 
 /// How many agent jobs the interface thread does between two frames.
@@ -578,16 +577,16 @@ pub fn memory_state(diagnostics: &Diagnostics, footprint: Option<u64>) -> Option
         // application holds, which overlap nothing. `desenho` is the sum of
         // the four `desenho/` rows after it.
         parts: vec![
-            part("essencial", memory.essential),
-            part("reconstruível", memory.rebuildable),
-            part("desfazível", memory.undoable),
-            part("superfícies", memory.surface_bytes),
+            part("essential", memory.essential),
+            part("rebuildable", memory.rebuildable),
+            part("undoable", memory.undoable),
+            part("surfaces", memory.surface_bytes),
             part("cache", memory.cache_bytes),
-            part("desenho", drawing.total()),
-            part("desenho/geometria", drawing.geometry),
-            part("desenho/buffers", drawing.buffers),
-            part("desenho/staging", drawing.staging),
-            part("desenho/alvos", drawing.targets),
+            part("drawing", drawing.total()),
+            part("drawing/geometry", drawing.geometry),
+            part("drawing/buffers", drawing.buffers),
+            part("drawing/staging", drawing.staging),
+            part("drawing/targets", drawing.targets),
         ],
     })
 }
@@ -756,25 +755,6 @@ mod stroke_tests {
     }
 }
 
-/// A background job still in flight, as `wait` and the `jobs` section name it.
-///
-/// Retopology, a UV layout, a conform and a bake run on a worker thread and
-/// place their result when they return, so a command that starts one — through
-/// its own group or through `measure` — answers long before the work is done.
-/// Left out of what is outstanding, `wait` reported the session quiet while a
-/// retopology was still rebuilding the layer. `what` is the stable English
-/// name; the job's own progress label is interface text and is translated.
-pub fn job_in_flight<T: Send + 'static>(what: &str, jobs: &JobRunner<T>) -> Option<Outstanding> {
-    jobs.is_running().then(|| Outstanding {
-        what: what.to_string(),
-        fraction: jobs
-            .progress()
-            .get()
-            .as_ref()
-            .and_then(|progress| progress.fraction),
-    })
-}
-
 /// The gate, as the ViewModel names it.
 ///
 /// Two enumerations rather than one because `clayspace-vm` does not depend on
@@ -796,36 +776,6 @@ pub fn gates_agree() -> bool {
     GateKind::ALL
         .iter()
         .all(|gate| gate.tag() == gate_for_the_window(*gate).tag())
-}
-
-#[cfg(test)]
-mod job_tests {
-    use super::*;
-
-    #[test]
-    fn a_job_is_outstanding_until_its_result_is_collected() {
-        let mut jobs: JobRunner<()> = JobRunner::new();
-        assert_eq!(job_in_flight("retopology", &jobs), None);
-
-        let (release, held) = std::sync::mpsc::channel::<()>();
-        assert!(jobs.start("Retopologia", move |_| {
-            held.recv().map_err(|error| error.to_string())
-        }));
-        let running = job_in_flight("retopology", &jobs).expect("a job in flight");
-        assert_eq!(running.what, "retopology");
-        assert_eq!(running.fraction, Some(0.0));
-
-        release.send(()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while jobs.poll().is_none() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the job never finished"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert_eq!(job_in_flight("retopology", &jobs), None);
-    }
 }
 
 #[cfg(test)]
@@ -1104,11 +1054,11 @@ mod tests {
                 .find(|part| part.part == name)
                 .map(|part| part.bytes)
         };
-        assert_eq!(bytes("desenho"), Some(1000));
-        assert_eq!(bytes("desenho/geometria"), Some(100));
-        assert_eq!(bytes("desenho/buffers"), Some(200));
-        assert_eq!(bytes("desenho/staging"), Some(300));
-        assert_eq!(bytes("desenho/alvos"), Some(400));
+        assert_eq!(bytes("drawing"), Some(1000));
+        assert_eq!(bytes("drawing/geometry"), Some(100));
+        assert_eq!(bytes("drawing/buffers"), Some(200));
+        assert_eq!(bytes("drawing/staging"), Some(300));
+        assert_eq!(bytes("drawing/targets"), Some(400));
         assert_eq!(bytes("cache"), Some(7));
     }
 
@@ -1613,14 +1563,15 @@ mod tests {
                 decimate_to: Some(0.5),
             },
             &[clayspace_model::ExportWarning {
-                message: "não é estanque".into(),
+                message: "not watertight".into(),
+                kind: clayspace_model::ExportWarningKind::OpenBoundary(1),
             }],
         );
         assert_eq!(state.import.becomes, "clay");
         assert_eq!(state.import.scale, 2.0);
         assert_eq!(state.export.mesher, "sharp");
         assert_eq!(state.export.decimate_to, Some(0.5));
-        assert_eq!(state.export.findings, vec!["não é estanque".to_string()]);
+        assert_eq!(state.export.findings, vec!["not watertight".to_string()]);
     }
     /// The wire's gates and the window's gates are two enumerations of one
     /// idea, and a consent recorded under one tag has to be the consent asked
