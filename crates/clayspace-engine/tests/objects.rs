@@ -1439,3 +1439,107 @@ fn a_long_thin_form_is_still_placed() {
         )
         .expect("a tall thin cylinder was refused");
 }
+
+/// An object in a moved or stretched subtool is reported where it stands.
+///
+/// The regression (#196, D13 and D4): the table's node values were handed to
+/// the interface as they were, so once the subtool holding an object moved,
+/// the object's outline, its manipulator and its position readout stayed where
+/// the object had stood before — a stale box around empty space. Reported in
+/// the world now, and taken back in the world.
+#[test]
+fn an_object_in_a_moved_subtool_is_reported_where_it_stands() {
+    let mut document = document();
+    let key = document.scene().active.expect("an active layer");
+    let id = document
+        .place_object(Shape::Sphere, &[0.2], [0.5, 0.0, 0.0], subtracting())
+        .expect("place");
+    let position_of = |document: &mut ClayDocument| {
+        document
+            .objects()
+            .iter()
+            .find(|object| object.id == id)
+            .map(|object| (object.position, object.scale))
+            .expect("still listed")
+    };
+    assert_eq!(position_of(&mut document), ([0.5, 0.0, 0.0], [1.0; 3]));
+
+    // The subtool moves up by one and stretches twice in x.
+    let subtool = clayspace_model::Transform {
+        position: [0.0, 1.0, 0.0],
+        scale: [2.0, 1.0, 1.0],
+        ..clayspace_model::Transform::default()
+    };
+    document
+        .set_target_transform(GizmoTarget::Layer(key), subtool)
+        .expect("move the subtool");
+
+    let (position, scale) = position_of(&mut document);
+    let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4);
+    assert!(
+        near(position, [1.0, 1.0, 0.0]),
+        "the object is listed at {position:?}, where it stood before its \
+         subtool moved, rather than at (1, 1, 0)"
+    );
+    assert!(near(scale, [2.0, 1.0, 1.0]), "listed at scale {scale:?}");
+    let manipulated = document
+        .target_transform(GizmoTarget::Object(id))
+        .expect("a transform");
+    assert!(
+        near(manipulated.position, [1.0, 1.0, 0.0]),
+        "the manipulator stands at {:?}",
+        manipulated.position
+    );
+    // And it is where the field says: the object subtracts, so the point it
+    // is reported at is a hole in the stretched form.
+    assert!(!inside(&document, [1.0, 1.0, 0.0]));
+
+    // Written back unchanged, nothing moves.
+    document
+        .set_target_transform(GizmoTarget::Object(id), manipulated)
+        .expect("write it back");
+    let (again, _) = position_of(&mut document);
+    assert!(near(again, position), "a round trip moved it to {again:?}");
+
+    // A world move lands in the world.
+    document
+        .set_target_transform(
+            GizmoTarget::Object(id),
+            clayspace_model::Transform {
+                position: [1.4, 1.0, 0.0],
+                ..manipulated
+            },
+        )
+        .expect("move the object");
+    let (moved, _) = position_of(&mut document);
+    assert!(near(moved, [1.4, 1.0, 0.0]), "moved to {moved:?}");
+}
+
+/// A placement aimed at the world lands there inside a moved subtool.
+#[test]
+fn a_placement_in_a_moved_subtool_lands_where_it_was_aimed() {
+    let mut document = document();
+    let key = document.scene().active.expect("an active layer");
+    document
+        .set_target_transform(
+            GizmoTarget::Layer(key),
+            clayspace_model::Transform::at([0.0, 1.0, 0.0]),
+        )
+        .expect("move the subtool");
+    // Clear of the moved starting form.
+    let aim = [3.0, 1.0, 0.0];
+    let id = document
+        .place_object(Shape::Sphere, &[0.3], aim, CombineSettings::default())
+        .expect("place");
+    assert!(
+        inside(&document, aim),
+        "the sphere aimed at {aim:?} is not there — it landed as far from the \
+         aim as the subtool had moved"
+    );
+    let listed = document
+        .objects()
+        .into_iter()
+        .find(|object| object.id == id)
+        .expect("listed");
+    assert!((0..3).all(|i| (listed.position[i] - aim[i]).abs() < 1e-4));
+}

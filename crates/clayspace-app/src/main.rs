@@ -2038,6 +2038,8 @@ impl App {
                 eprintln!("the surface could not be meshed: {e}");
             }
         }
+        // Counted after the rebuild, which is what records them.
+        self.sculpt.refresh_stats();
         // And the carried layers, which the surface rebuild does not touch.
         //
         // Forgotten rather than compared. `mesh_revision` is derived from what
@@ -2424,6 +2426,10 @@ impl App {
                 .renderer
                 .set_mesh_layers(&gpu, &vertices, &indices, &spans);
         });
+        // The buffer just built is what the geometry panel counts. Read now,
+        // not at the next edit: a remesh or a display change moves no brick,
+        // so nothing else would re-read them.
+        self.sculpt.refresh_stats();
     }
 
     /// Tells the viewport which subtool a dab would land on.

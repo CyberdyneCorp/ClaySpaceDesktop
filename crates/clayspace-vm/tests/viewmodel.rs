@@ -55,7 +55,10 @@ struct FakeModel {
     /// What the next stroke reports.
     outcome: EditOutcome,
     history: HistoryState,
-    stats: SceneStats,
+    /// Shared, so a test can say what the viewport recorded after the
+    /// ViewModel read the counts — a re-mesh lands after the edit that asked
+    /// for it.
+    stats: Rc<Cell<SceneStats>>,
     /// Whether the double banks a gesture the way a mesh layer does.
     ///
     /// A mesh gesture is previewed while it is made and banked as *one* record
@@ -92,13 +95,13 @@ impl FakeModel {
                 depth: 1,
                 redo_depth: 0,
             },
-            stats: SceneStats {
+            stats: Rc::new(Cell::new(SceneStats {
                 triangles: 100,
                 faces: None,
                 vertices: 60,
                 objects: 1,
                 detail: clayspace_model::Detail::Full,
-            },
+            })),
             banks_the_gesture_whole: false,
             gesture_open: false,
             gesture_stamps: 0,
@@ -228,7 +231,7 @@ impl SculptModel for FakeModel {
     }
 
     fn stats(&self) -> SceneStats {
-        self.stats
+        self.stats.get()
     }
 
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
@@ -1158,6 +1161,56 @@ fn view_commands_never_touch_history_or_stats() {
     assert!(
         !stats.take_change(vm.stats()),
         "a view change altered the statistics"
+    );
+}
+
+/// The geometry panel shows what the viewport built, not what it built last
+/// time.
+///
+/// The regression (#196, V8): the counts were read when an edit landed, and
+/// the re-mesh that edit asked for recorded new ones afterwards, so after a
+/// remesh or a display change the panel showed the previous update's counts
+/// until the next edit.
+#[test]
+fn the_counts_follow_the_viewport_as_it_catches_up() {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let model = FakeModel::new(recorded);
+    let stats = model.stats.clone();
+    let mut vm = SculptViewModel::new(Box::new(model));
+
+    // The viewport re-meshes and records what it built.
+    let rebuilt = SceneStats {
+        triangles: 4_000,
+        faces: None,
+        vertices: 2_002,
+        objects: 1,
+        detail: clayspace_model::Detail::Full,
+    };
+    stats.set(rebuilt);
+    vm.acknowledge_remesh();
+    assert_eq!(
+        *vm.stats().get(),
+        rebuilt,
+        "acknowledging a re-mesh left the counts the re-mesh replaced"
+    );
+
+    // A carried layer's buffer is rebuilt without a re-mesh.
+    let redisplayed = SceneStats {
+        triangles: 1_200,
+        vertices: 602,
+        ..rebuilt
+    };
+    stats.set(redisplayed);
+    vm.refresh_stats();
+    assert_eq!(*vm.stats().get(), redisplayed);
+
+    // And reading the same counts again is not a change.
+    let mut watcher = Watcher::new();
+    watcher.accept(vm.stats());
+    vm.refresh_stats();
+    assert!(
+        !watcher.take_change(vm.stats()),
+        "re-reading unchanged counts scheduled a redraw"
     );
 }
 

@@ -1264,7 +1264,8 @@ pub(super) fn conform_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: 
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
-            let slider = ui.add(
+            let slider = fitted_slider(
+                ui,
                 egui::Slider::new(&mut settings.threshold, 0.001..=1.0)
                     .logarithmic(true)
                     .show_value(true),
@@ -1402,8 +1403,10 @@ pub(super) fn bake_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
-            let slider =
-                ui.add(egui::Slider::new(&mut settings.cage_distance, 0.0..=0.2).show_value(true));
+            let slider = fitted_slider(
+                ui,
+                egui::Slider::new(&mut settings.cage_distance, 0.0..=0.2).show_value(true),
+            );
             if slider.changed() {
                 changed = true;
             }
@@ -1424,24 +1427,33 @@ pub(super) fn bake_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
                         .size(type_scale::LABEL)
                         .color(Tokens::text_dim()),
                 );
-                if ui
-                    .add(
-                        egui::Slider::new(&mut settings.ao_samples, 4..=512)
-                            .logarithmic(true)
-                            .show_value(true),
-                    )
-                    .changed()
+                if fitted_slider(
+                    ui,
+                    egui::Slider::new(&mut settings.ao_samples, 4..=512)
+                        .logarithmic(true)
+                        .show_value(true),
+                )
+                .changed()
                 {
                     changed = true;
                 }
+            });
+            // A row of its own. Beside the sample count it made the row two
+            // sliders wide, which ran past the panel's edge and widened the
+            // whole left region by the overrun — so on a mesh layer, the one
+            // representation that bakes, the viewport and the representation
+            // bar above it lost about 170 pixels and the crossings ran off it.
+            ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(s.bake_ao_radius)
                         .size(type_scale::LABEL)
                         .color(Tokens::text_dim()),
                 );
-                if ui
-                    .add(egui::Slider::new(&mut settings.ao_radius, 0.05..=5.0).show_value(true))
-                    .changed()
+                if fitted_slider(
+                    ui,
+                    egui::Slider::new(&mut settings.ao_radius, 0.05..=5.0).show_value(true),
+                )
+                .changed()
                 {
                     changed = true;
                 }
@@ -1568,7 +1580,8 @@ pub(super) fn uv_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut 
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
-            let slider = ui.add(
+            let slider = fitted_slider(
+                ui,
                 egui::Slider::new(&mut settings.max_chart_angle_degrees, 1.0..=180.0)
                     .show_value(true),
             );
@@ -1584,9 +1597,11 @@ pub(super) fn uv_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut 
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
-            if ui
-                .add(egui::Slider::new(&mut settings.pack_margin, 0.0..=0.05).show_value(true))
-                .changed()
+            if fitted_slider(
+                ui,
+                egui::Slider::new(&mut settings.pack_margin, 0.0..=0.05).show_value(true),
+            )
+            .changed()
             {
                 changed = true;
             }
@@ -1719,7 +1734,8 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
             // numbers a sculptor moves between are 500, 2000, 8000, and on a
             // linear track the whole useful lower half is the first
             // centimetre.
-            let slider = ui.add(
+            let slider = fitted_slider(
+                ui,
                 egui::Slider::new(
                     &mut settings.target_quads,
                     clayspace_model::RetopoSettings::TARGET_QUADS,
@@ -1801,7 +1817,7 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
                         .size(type_scale::LABEL)
                         .color(Tokens::text_dim()),
                 );
-                let slider = ui.add(egui::Slider::new(value, range).show_value(true));
+                let slider = fitted_slider(ui, egui::Slider::new(value, range).show_value(true));
                 if slider.changed() {
                     changed = true;
                 }
@@ -1896,7 +1912,8 @@ pub(super) fn remesh_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
         // Logarithmic, because the numbers a sculptor moves between are 64,
         // 128, 256 rather than 128, 129, 130: on a linear track the whole
         // useful lower half of the range is the first centimetre.
-        let slider = ui.add(
+        let slider = fitted_slider(
+            ui,
             egui::Slider::new(
                 &mut settings.resolution,
                 clayspace_model::RemeshSettings::RESOLUTION,
@@ -2051,4 +2068,23 @@ pub(super) fn sculpt_recording_control(
             );
         }
     }
+}
+
+/// Adds a slider whose track is shortened to what is left of its row.
+///
+/// A row is a label, a track and the value box, and the label's length is the
+/// locale's. At the default track a long label pushed the value box past the
+/// panel's edge — "Ángulo de la isla" in Spanish, "Arestas vivas" beside a
+/// three-digit angle in Portuguese — and a row wider than its panel widens the
+/// whole left region, taking the overrun from the viewport and the
+/// representation bar above it. A shorter track costs nothing a drag needs.
+fn fitted_slider(ui: &mut egui::Ui, slider: egui::Slider<'_>) -> egui::Response {
+    // The value box: at least an interactive control wide, and wider for a
+    // value like 0.0050, which is the longest the left panel shows.
+    const VALUE_BOX: f32 = 56.0;
+    const LEAST_TRACK: f32 = 40.0;
+    let room = ui.available_width() - VALUE_BOX - ui.spacing().item_spacing.x;
+    let track = ui.spacing().slider_width.min(room.max(LEAST_TRACK));
+    ui.spacing_mut().slider_width = track;
+    ui.add(slider)
 }

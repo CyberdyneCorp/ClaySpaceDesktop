@@ -432,6 +432,47 @@ impl Transform {
         normalize(turned).unwrap_or(turned)
     }
 
+    /// A transform given in this frame's coordinates, as the world sees it.
+    ///
+    /// What an object standing in a moved subtool is: the engine composes
+    /// `layer.xform * diag(layer_scale) * node.xform * diag(node_scale)`, so a
+    /// manipulator, an outline or a readout drawn from the node's own values
+    /// stands where the object was before its subtool moved.
+    ///
+    /// The position is exact. The rotation is this frame's after the inner
+    /// one, and the scale is the two multiplied per axis — exact while this
+    /// frame's scale is uniform or the inner transform is unturned, and the
+    /// nearest per-axis answer otherwise, since a turned box inside a squashed
+    /// frame is sheared and no position, rotation and three factors say that.
+    /// [`Self::unplace`] is its exact inverse either way, so a value read and
+    /// written back unchanged moves nothing.
+    pub fn place(&self, inner: &Transform) -> Transform {
+        let (rotation_axis, rotation_angle) = compose(
+            (inner.rotation_axis, inner.rotation_angle),
+            (self.rotation_axis, self.rotation_angle),
+        );
+        Transform {
+            position: self.into_world(inner.position),
+            rotation_axis,
+            rotation_angle,
+            scale: std::array::from_fn(|i| inner.scale[i] * self.factor(i)),
+        }
+    }
+
+    /// The way back: a transform the world sees, in this frame's coordinates.
+    pub fn unplace(&self, world: &Transform) -> Transform {
+        let (rotation_axis, rotation_angle) = compose(
+            (world.rotation_axis, world.rotation_angle),
+            (self.rotation_axis, -self.rotation_angle),
+        );
+        Transform {
+            position: self.into_local(world.position),
+            rotation_axis,
+            rotation_angle,
+            scale: std::array::from_fn(|i| world.scale[i] / self.factor(i)),
+        }
+    }
+
     /// One component of the scale, floored so the frame is never singular.
     fn factor(&self, axis: usize) -> f32 {
         self.scale[axis].max(Self::LEAST_SCALE)
@@ -850,6 +891,56 @@ mod tests {
             // Looking down −z, which is where the default camera is. Only the
             // outer ring reads it.
             view_axis: [0.0, 0.0, 1.0],
+        }
+    }
+
+    /// A subtool moved, turned a quarter about z and scaled by two.
+    fn moved_subtool() -> Transform {
+        Transform {
+            position: [1.0, 0.0, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: std::f32::consts::FRAC_PI_2,
+            scale: [2.0; 3],
+        }
+    }
+
+    #[test]
+    fn a_placed_transform_stands_where_the_frame_puts_it() {
+        let frame = moved_subtool();
+        let inner = Transform::at([0.5, 0.0, 0.0]);
+        let placed = frame.place(&inner);
+        // Scaled to 1.0, turned onto +y, moved by +x.
+        assert!(close(placed.position, [1.0, 1.0, 0.0]), "{placed:?}");
+        assert!(close(placed.scale, [2.0; 3]), "{placed:?}");
+        // The frame's turn, since the inner transform has none.
+        let probe = placed.turn([1.0, 0.0, 0.0]);
+        assert!(close(probe, [0.0, 1.0, 0.0]), "turned {probe:?}");
+        // And a point of the inner frame lands where the two frames, applied
+        // one after the other, put it.
+        let point = [0.2, -0.3, 0.4];
+        assert!(close(
+            placed.into_world(point),
+            frame.into_world(inner.into_world(point))
+        ));
+    }
+
+    #[test]
+    fn unplacing_is_the_inverse_of_placing() {
+        let frame = Transform {
+            scale: [2.0, 0.5, 1.0],
+            ..moved_subtool()
+        };
+        let inner = Transform {
+            position: [0.3, -0.2, 0.7],
+            rotation_axis: [1.0, 1.0, 0.0],
+            rotation_angle: 0.6,
+            scale: [1.5, 1.0, 0.8],
+        };
+        let back = frame.unplace(&frame.place(&inner));
+        assert!(close(back.position, inner.position), "{back:?}");
+        assert!(close(back.scale, inner.scale), "{back:?}");
+        for v in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
+            assert!(close(back.turn(v), inner.turn(v)), "{back:?}");
         }
     }
 

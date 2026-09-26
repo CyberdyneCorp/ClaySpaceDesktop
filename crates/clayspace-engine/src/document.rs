@@ -15906,6 +15906,52 @@ impl ClayDocument {
         (transform != clayspace_model::Transform::default()).then_some(transform)
     }
 
+    /// An object as the world sees it: its node's transform, placed by the
+    /// subtool it stands in.
+    ///
+    /// The table keeps the node's own values, which are what the engine is
+    /// given; everything the interface and an agent read goes through here.
+    /// Read raw, a moved or stretched subtool left its objects' outline,
+    /// manipulator and readout where the objects stood before it moved.
+    fn object_in_world(&self, object: &PlacedObject) -> clayspace_model::SceneObject {
+        let mut presented = object.presented();
+        if let Some(frame) = self.carried_placement(object.layer) {
+            let world = frame.place(&clayspace_model::Transform {
+                position: object.position,
+                rotation_axis: object.rotation_axis,
+                rotation_angle: object.rotation_angle,
+                scale: object.scale,
+            });
+            presented.position = world.position;
+            presented.rotation_axis = world.rotation_axis;
+            presented.rotation_angle = world.rotation_angle;
+            presented.scale = world.scale;
+        }
+        presented
+    }
+
+    /// The way back: a transform given in the world, in the node's own terms
+    /// inside the subtool at `layer`.
+    fn object_into_layer(
+        &self,
+        layer: LayerKey,
+        world: clayspace_model::Transform,
+    ) -> clayspace_model::Transform {
+        match self.carried_placement(layer) {
+            Some(frame) => frame.unplace(&world),
+            None => world,
+        }
+    }
+
+    /// A world point, in the coordinates of the subtool at `layer` — where a
+    /// placement aimed at the world has to land inside a moved subtool.
+    fn point_into_layer(&self, layer: LayerKey, point: [f32; 3]) -> [f32; 3] {
+        match self.carried_placement(layer) {
+            Some(frame) => Self::into_local(&frame, point),
+            None => point,
+        }
+    }
+
     /// Where the *active* layer's content stands against the world, when that
     /// is anywhere but where the layer holds it.
     ///
@@ -17138,7 +17184,7 @@ impl ObjectModel for ClayDocument {
         self.objects
             .iter()
             .filter(|object| object.layer == key && nodes.contains(&object.node))
-            .map(PlacedObject::presented)
+            .map(|object| self.object_in_world(object))
             .collect()
     }
 
@@ -17160,6 +17206,9 @@ impl ObjectModel for ClayDocument {
         combine: CombineSettings,
     ) -> Result<ObjectId, ModelError> {
         let (key, layer) = self.layer_for_objects()?;
+        // Aimed at the world, and stood inside the subtool: a moved one would
+        // otherwise take the object as far from the aim as the subtool moved.
+        let at = self.point_into_layer(key, at);
         let parameters = shape.sanitised(parameters);
         // Priced before anything is placed, so a refusal leaves the document
         // exactly as it stood — no item, no undo entry, no dirty region. The
@@ -17429,6 +17478,7 @@ impl ObjectModel for ClayDocument {
         combine: CombineSettings,
     ) -> Result<ObjectId, ModelError> {
         let (key, layer) = self.layer_for_objects()?;
+        let at = self.point_into_layer(key, at);
         let source_index = self.index_of(from)?;
         if self.layers[source_index].representation != Representation::Mesh {
             return Err(ModelError::Conversion(Refusal::WrongSource {
@@ -17501,6 +17551,22 @@ impl ObjectModel for ClayDocument {
             .ok_or_else(|| self.no_objects_here())?;
         let layer = self.layer_id(id.layer)?;
         let node = self.objects[at].node;
+        // Given in the world, as `objects` reports it; the node is written in
+        // its subtool's own terms.
+        let clayspace_model::Transform {
+            position,
+            rotation_axis,
+            rotation_angle,
+            scale,
+        } = self.object_into_layer(
+            id.layer,
+            clayspace_model::Transform {
+                position,
+                rotation_axis,
+                rotation_angle,
+                scale,
+            },
+        );
 
         // Where it was, before it stops being there. Refilling only the
         // destination leaves the surface it used to cut still cut.
@@ -17635,9 +17701,10 @@ impl ObjectModel for ClayDocument {
 
     fn target_transform(&mut self, target: GizmoTarget) -> Option<clayspace_model::Transform> {
         match target {
+            // In the world, as the manipulator drags it: see `object_in_world`.
             GizmoTarget::Object(id) => {
                 let at = self.object_index(id)?;
-                let object = &self.objects[at];
+                let object = self.object_in_world(&self.objects[at]);
                 Some(clayspace_model::Transform {
                     position: object.position,
                     rotation_axis: object.rotation_axis,

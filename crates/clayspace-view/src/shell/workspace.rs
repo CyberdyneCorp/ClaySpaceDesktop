@@ -37,6 +37,17 @@ pub fn convert_to_id(target: Representation) -> egui::Id {
     egui::Id::new(("convert-to", target))
 }
 
+/// The id the bar's visible strip is recorded under, so a test can ask
+/// whether what the bar drew fits inside it without scrolling.
+pub fn representation_bar_id() -> egui::Id {
+    egui::Id::new("representation-bar-visible")
+}
+
+/// The id the folded crossings' single button is recorded under.
+pub fn convert_folded_id() -> egui::Id {
+    egui::Id::new("convert-folded")
+}
+
 /// The icon a representation wears. Shape, never hue: the four are equals,
 /// and a discriminator that is only a colour is one a colour-blind sculptor
 /// cannot read.
@@ -94,6 +105,12 @@ fn card_width(
 /// vocabulary once and then say the same thing forever, and they survive in
 /// the tooltip. The heading goes next: three cards under it already read as
 /// one group, and the word is the least load-bearing thing in the row.
+///
+/// Past those, the crossings fold into one button that opens the conversion
+/// panel, where the same crossings are offered by name. The Converter button is
+/// then still inside the bar, which a row scrolled past its end was not: at
+/// 1280 the row ran off in every language, from a mesh layer by four chips.
+/// Past that the bar scrolls — a card keeps its icon *and* its name.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Density {
     /// Heading, and cards carrying their phrase.
@@ -102,6 +119,8 @@ pub(super) enum Density {
     Compact,
     /// Cards alone.
     Tight,
+    /// Cards alone, and the crossings folded into one button.
+    Folded,
 }
 
 impl Density {
@@ -110,7 +129,12 @@ impl Density {
     }
 
     pub(super) fn shows_heading(self) -> bool {
-        self != Self::Tight
+        matches!(self, Self::Full | Self::Compact)
+    }
+
+    /// Whether the crossings are one button rather than a row.
+    pub(super) fn folds_crossings(self) -> bool {
+        self == Self::Folded
     }
 }
 
@@ -146,8 +170,11 @@ fn density(ui: &egui::Ui, state: &ShellState<'_>) -> Density {
         Density::Full
     } else if cards(true) + heading <= room {
         Density::Compact
-    } else {
+    } else if cards(true) <= room {
         Density::Tight
+    } else {
+        // The last rung whether or not it fits: past it the bar scrolls.
+        Density::Folded
     }
 }
 
@@ -191,7 +218,7 @@ pub fn representation_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut
     ui.add_space(space::SNUG);
     // Scrolls sideways rather than cutting the last crossing off, as the
     // options bar does and for the same reason.
-    egui::ScrollArea::horizontal()
+    let shown = egui::ScrollArea::horizontal()
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .id_salt("representation-bar")
         .show(ui, |ui| {
@@ -211,9 +238,18 @@ pub fn representation_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut
                     ui.add_space(space::SNUG);
                 }
                 ui.add_space(space::ROOMY);
-                conversion_row(ui, state, queue);
+                if density.folds_crossings() {
+                    folded_conversion(ui, state, queue);
+                } else {
+                    conversion_row(ui, state, queue);
+                }
             });
         });
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(representation_bar_id(), shown.inner_rect)
+    });
     ui.add_space(space::SNUG);
 }
 
@@ -311,6 +347,36 @@ fn representation_card(
     } else {
         state_hint.to_owned()
     });
+}
+
+/// The crossings folded into one button, for a bar too narrow for the row.
+///
+/// Opens the conversion panel rather than aiming it: the panel offers the same
+/// crossings by name, and is where one is chosen when the row cannot show
+/// them. Their names are in the tooltip, so the button still says where it
+/// leads.
+fn folded_conversion(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let crossings = Direction::from_representation(state.representation);
+    if crossings.is_empty() {
+        conversion_row(ui, state, queue);
+        return;
+    }
+    let names: Vec<&str> = crossings
+        .iter()
+        .map(|direction| s.representation_name(direction.to()))
+        .collect();
+    let response = ui.add(egui::Button::new(
+        egui::RichText::new(format!("{}…", s.action_convert))
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    ));
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(convert_folded_id(), response.rect));
+    let hint = format!("{} {}", s.label_convert_to, names.join(", "));
+    if response.on_hover_text(hint).clicked() && !state.show_convert {
+        queue.push(Command::ToggleConvert);
+    }
 }
 
 /// The crossings the active representation actually has, as buttons.

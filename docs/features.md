@@ -426,7 +426,7 @@ moves in whole cells, which is the only difference left between the columns.
 What backs each column differs, and is worth knowing before quoting either. The
 grid's is held by `voxel_grab_taper.rs`, which drags a slab at this brush size
 and cell and asserts that a drag cannot outrun its radius. The field's was
-measured once, during the investigation recorded in the `grid-brush-radius`
+measured once, during the investigation recorded in the archived `grid-brush-radius`
 change, and no test holds it; it does agree to four places with the inverse
 map's closed form for a linear taper, `drag x radius / (radius + drag)`, which
 is the better reason to trust it.
@@ -4093,6 +4093,19 @@ the engine's interface takes a single scale factor" was written into the
 domain, the manipulator, the readout and the specification, and nothing went
 back to check it. A capsule could not be squashed into a slot.
 
+**An object is read and moved in the world.** A placed object's node transform
+lives inside its subtool — the engine composes `layer * node` — so the object's
+outline, manipulator and position readout are the node's values placed by the
+subtool's transform, and a value typed or dragged is carried back through it.
+They were once the node's raw values, which stayed put when the subtool moved or
+stretched: a box around empty space where the object had been, and a shape
+placed into a moved subtool landed as far from where it was aimed as the subtool
+had travelled. Position is exact; the rotation is composed; the scale is
+multiplied per axis, which is exact unless a turned object sits inside a
+non-uniformly stretched subtool — a sheared box that no position, rotation and
+three factors can state — and a value read and written back unchanged never
+moves anything either way.
+
 What a stretch costs is not what one would guess: the field stays 1-Lipschitz,
 so the safe step scale is unchanged and a marcher takes the steps it always
 did. What is lost is exactness — the value becomes a bound on the distance,
@@ -4182,10 +4195,18 @@ recorded on, and the offer to collapse a costly field appears under the layer
 list only while the engine is advising it.
 
 As the window narrows the bar gives up its phrases first, into the tooltip,
-then its heading, and never its crossings. A card always keeps its icon *and*
-its name: below about five hundred pixels of central region the bar scrolls,
-because a representation told by shape alone is exactly what the contrast tests
-elsewhere refuse to allow.
+then its heading, and then folds its crossings into one **Convert…** button
+that opens the conversion panel, which offers the same crossings by name (they
+are also listed on the button's hover). At 1280 wide the crossing row does not
+fit beside five cards in any language, so it folds there; wider, the crossings
+stand as a row again. A card always keeps its icon *and* its name: past the fold
+the bar scrolls, because a representation told by shape alone is exactly what
+the contrast tests elsewhere refuse to allow.
+
+No row of a side panel is wider than the panel. A slider row shortens its track
+to what is left beside its label, in every language; a row that overran used to
+widen the whole left region and take the overrun from the viewport — about 170
+pixels on a mesh layer, whose bake section once put two sliders on one row.
 
 The **accent marks active state**, at the scale of a rail, a ring or a label
 and never as a fill: the active brush wears a ring and an accented name, the
