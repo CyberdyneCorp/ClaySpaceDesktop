@@ -596,11 +596,14 @@ impl ObjectViewModel {
             Command::ToggleLattice => {
                 self.target.set(None);
             }
-            Command::SetGizmoTarget(Some(GizmoTarget::Curve))
-                if self.model.target_transform(GizmoTarget::Curve).is_none() =>
+            // A target the model cannot place is refused rather than held: a
+            // manipulator on an object id or a layer key that is not in the
+            // document drags nothing, and it used to be accepted in silence.
+            Command::SetGizmoTarget(Some(target))
+                if self.model.target_transform(*target).is_none() =>
             {
                 self.target.set(None);
-                self.notice.set(Some("select a curve control point".into()));
+                self.notice.set(Some(Self::no_such_target(*target).into()));
             }
             Command::SetGizmoTarget(target) => {
                 self.target.set(*target);
@@ -615,6 +618,15 @@ impl ObjectViewModel {
             Command::DragGizmo(to, snap) => self.drag_to(*to, *snap),
             Command::EndGizmoDrag => self.end(),
             _ => {}
+        }
+    }
+
+    /// Why a manipulator target was refused, by what it named.
+    fn no_such_target(target: GizmoTarget) -> &'static str {
+        match target {
+            GizmoTarget::Curve => "select a curve control point",
+            GizmoTarget::Object(_) => "that object is not in the document",
+            GizmoTarget::Layer(_) => "that layer is not in the document",
         }
     }
 
@@ -691,8 +703,9 @@ impl ObjectViewModel {
         if representation != Representation::Sdf {
             // Said here as well as refused by the model, so the picker can
             // grey the button rather than offering an action that will fail.
-            self.notice
-                .set(Some(self.model.no_objects_here().to_string()));
+            self.notice.set(Some(
+                clayspace_model::no_objects_on(representation).to_string(),
+            ));
             return;
         }
         let (shape, parameters, combine) = (

@@ -996,9 +996,9 @@ const HUD_MARGIN: f32 = 12.0;
 /// several answers, and a readout that changed its numbers when nothing had
 /// moved would be worse than one that shows what the document holds.
 ///
-/// The scale is three, because the engine's node transform has taken three
-/// since ABI 0.54.0. It showed one for as long as nothing had bound
-/// `clay_layer_set_transform_nonuniform`.
+/// The scale is three where they differ, because the engine's node transform
+/// has taken three since ABI 0.54.0 — and one where they agree, as the shape
+/// panel reads it: see [`hud_scale`].
 pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
     let Some(clayspace_model::GizmoTarget::Object(id)) = state.gizmo_target else {
         return;
@@ -1013,23 +1013,6 @@ pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
     // -0.0 mm" ran off the card, and three copies of the same word is not
     // three pieces of information.
     let unit = unit_symbol(state.units);
-    let triple = |values: &[f32; 3], decimals: usize| {
-        values
-            .iter()
-            .map(|v| {
-                // A value that rounds to nothing is nothing. Left alone, a
-                // position of -0.0032 mm reads as "-0.0", which is a minus
-                // sign in front of zero and the sort of thing a person reads
-                // twice.
-                let rounded = format!("{v:.decimals$}");
-                match rounded.strip_prefix('-') {
-                    Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_owned(),
-                    _ => rounded,
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("  ")
-    };
     let rows: Vec<(String, String)> = vec![
         (
             format!("{} ({unit})", s.hud_position),
@@ -1043,7 +1026,7 @@ pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
             format!("{:.1}", object.rotation_angle.to_degrees()),
         ),
         (s.hud_axis.to_owned(), triple(&object.rotation_axis, 2)),
-        (s.hud_scale.to_owned(), triple(&object.scale, 3)),
+        (s.hud_scale.to_owned(), hud_scale(object.scale)),
     ];
 
     let line = type_scale::NUMERIC + space::TIGHT;
@@ -1085,6 +1068,39 @@ pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
 
     ui.ctx()
         .memory_mut(|memory| memory.data.insert_temp(transform_hud_id(), card));
+}
+
+/// Numbers for the readout, rounded, with a zero that rounds to nothing shown
+/// as nothing.
+fn triple(values: &[f32], decimals: usize) -> String {
+    values
+        .iter()
+        .map(|v| {
+            // A value that rounds to nothing is nothing. Left alone, a
+            // position of -0.0032 mm reads as "-0.0", which is a minus sign in
+            // front of zero and the sort of thing a person reads twice.
+            let rounded = format!("{v:.decimals$}");
+            match rounded.strip_prefix('-') {
+                Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_owned(),
+                _ => rounded,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// The readout's scale: one number where the three agree, three where there
+/// is a stretch to tell apart.
+///
+/// A uniform scale read "1.500  1.500  1.500", which is one fact said three
+/// times and a row a sculptor has to compare digit by digit to learn it.
+fn hud_scale(scale: [f32; 3]) -> String {
+    let [x, y, z] = scale;
+    if (x - y).abs() < 1e-4 && (y - z).abs() < 1e-4 {
+        triple(&[x], 3)
+    } else {
+        triple(&scale, 3)
+    }
 }
 
 /// The rubber band a press draws across the viewport while it gathers control
@@ -1196,6 +1212,12 @@ fn representation_tag(representation: Representation) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_uniform_scale_reads_as_one_number() {
+        assert_eq!(hud_scale([1.5; 3]), "1.500");
+        assert_eq!(hud_scale([2.0, 1.0, 1.0]), "2.000  1.000  1.000");
+    }
 
     #[test]
     fn counts_are_grouped_as_the_design_shows_them() {
