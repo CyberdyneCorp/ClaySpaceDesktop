@@ -7,6 +7,27 @@ rather than only undone at the time.
 
 ## Requirements
 
+### Requirement: A voxel Move is one captured gesture
+A voxel Move SHALL accumulate displacement from its press point until release.
+Feeding the same path in several updates SHALL leave exactly the same cells
+and palette values as feeding the full path once. Cancelling the gesture SHALL
+restore the cells from before the press.
+
+#### Scenario: Segments do not stack grabs
+- **WHEN** a Move path is sent as several updates and as one full path on
+  otherwise identical voxel layers
+- **THEN** the final grids are equal cell for cell
+
+### Requirement: Voxel Crease remains a pinned recipe
+Voxel Crease SHALL use the narrow, constant-falloff erosion preset of the
+voxel Inflate operation. Its binding SHALL identify it as a recipe, and the
+stroke SHALL cut a groove rather than deposit material.
+
+#### Scenario: Crease cuts with the pinned preset
+- **WHEN** Crease is drawn on a voxel surface
+- **THEN** its preset uses the documented narrow span and negative amount,
+  and the surface loses cells along the groove
+
 ### Requirement: A run of voxel strokes can be recorded as a sculpt layer
 The application SHALL allow the user to begin and end recording on a voxel
 layer, and SHALL record what the strokes between those points changed as a named
