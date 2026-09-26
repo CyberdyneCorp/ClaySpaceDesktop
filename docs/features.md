@@ -2033,7 +2033,24 @@ vertices the sculptor already has, so showing the bend is one pass and taking
 it back is one more — measured at **11.2 ms** a frame on 62,576 vertices. Every
 drag replaces the last rather than adding to it, so the preview never
 compounds and the whole gesture is still one undo. Abandoning the cage takes
-the preview back with it.
+the preview back with it. The preview is the engine's own bend, so
+**Deformar** lands exactly what the last frame showed — every position and
+normal, bit for bit.
+
+That 11.2 ms is a small cage's figure, and **a large cage is still slow on the
+engine this build pins** (#176). The engine evaluates a cage by summing every
+control point it holds, dragged or not, so one corner of a 32³ cage costs
+32,768 terms a vertex — about **1.7 s** a frame on the same mesh, against
+~10 ms at 3³ and ~35 ms at 8³. ClayCore#655 sums the dragged points alone and
+measured ~11 ms at 32³ here; it reaches this build when the pin moves to a
+release carrying it. Until then the cage's state names the cost: the agent's
+cage reads `dragged_points` and `preview_ms`, the last frame's time.
+
+A cage is sized from the layer's bounds as they are when it goes up, **mirrored
+copies included**. A new subtool is mirrored on X, so a form moved off the axis
+has a copy on the other side and the cage encloses both — a ball of radius 0.5
+moved to x = 0.4 is caged at about ±0.96, which is its mirror and not a stale
+box.
 
 **On a field the drawn surface follows too**, by a different route. Applying a
 field cage writes a deformer into the document as an undoable edit and refills

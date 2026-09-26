@@ -100,6 +100,21 @@ pub struct LatticeState {
     /// An untouched cage is exactly the identity, and applying one would pay
     /// for a pass over every vertex to move them all by zero.
     pub touched: bool,
+    /// How many control points stand away from rest.
+    ///
+    /// What a cage evaluation is priced by, rather than how many points the
+    /// cage holds: a point at rest contributes nothing, so a single corner
+    /// dragged on a 32³ cage is one term of the sum and not 32,768. Reported
+    /// beside [`Self::preview_micros`] so a slow frame can be read against the
+    /// work it was given.
+    pub dragged: usize,
+    /// What the last preview frame cost, in microseconds.
+    ///
+    /// From taking the previous frame's bend back to the new bend standing,
+    /// on a mesh layer — the one route that previews by deforming. `None`
+    /// where nothing has been previewed yet, and always on a field, whose
+    /// preview is the viewport's.
+    pub preview_micros: Option<u64>,
 }
 
 impl LatticeState {
@@ -309,6 +324,8 @@ mod tests {
             mode: GizmoMode::default(),
             rest_span: 1.0,
             touched: false,
+            dragged: 0,
+            preview_micros: None,
         }
     }
 
@@ -402,6 +419,7 @@ mod selection_tests {
             mode: GizmoMode::Move,
             rest_span: 2.0,
             touched: false,
+            ..LatticeState::default()
         }
     }
 
@@ -520,6 +538,7 @@ mod handle_tests {
             mode: GizmoMode::Move,
             rest_span: 2.0,
             touched: false,
+            ..LatticeState::default()
         };
         let before = cage.rest_span;
         // One corner hauled a long way out.

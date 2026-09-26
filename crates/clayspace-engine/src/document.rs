@@ -10270,6 +10270,11 @@ struct Cage {
     /// frame produced compounds a rotation into a spiral and a scale into a
     /// runaway.
     dragging: Option<(GizmoDrag, Vec<[f32; 3]>)>,
+    /// What the last preview frame cost, where one was drawn.
+    ///
+    /// Kept on the cage rather than the document because it describes this
+    /// cage's drag and nothing after it: a new cage starts with no figure.
+    last_preview: Option<std::time::Duration>,
 }
 
 impl Cage {
@@ -10308,9 +10313,16 @@ impl Cage {
 
     /// Whether nothing has been dragged.
     fn is_identity(&self) -> bool {
+        self.dragged() == 0
+    }
+
+    /// How many control points stand away from rest — what one evaluation of
+    /// the cage is priced by.
+    fn dragged(&self) -> usize {
         self.offsets
             .iter()
-            .all(|offset| offset.iter().all(|axis| *axis == 0.0))
+            .filter(|offset| offset.iter().any(|axis| *axis != 0.0))
+            .count()
     }
 }
 
@@ -13666,6 +13678,10 @@ impl LatticeModel for ClayDocument {
                 .map(|axis| cage.max[axis] - cage.min[axis])
                 .fold(0.0f32, f32::max),
             touched: !cage.is_identity(),
+            dragged: cage.dragged(),
+            preview_micros: cage
+                .last_preview
+                .map(|took| u64::try_from(took.as_micros()).unwrap_or(u64::MAX)),
         }
     }
 
@@ -13707,6 +13723,7 @@ impl LatticeModel for ClayDocument {
             selection: Vec::new(),
             mode: GizmoMode::default(),
             dragging: None,
+            last_preview: None,
         });
         Ok(())
     }
@@ -14110,15 +14127,23 @@ impl ClayDocument {
     /// and refills the layer's whole brick region, which is not a thing to do
     /// on every pointer move — there the cage moves live and the surface
     /// follows when it is applied.
+    ///
+    /// Timed, and the figure kept on the cage for `lattice()` to report: a
+    /// frame's cost is what a sculptor feels of a cage, and whether it follows
+    /// the points dragged or the points held is decided by the engine's
+    /// evaluation — which is exactly the regression the figure is there to
+    /// make visible.
     fn preview_cage(&mut self) {
-        let Some(cage) = self.lattice.take() else {
+        let Some(mut cage) = self.lattice.take() else {
             return;
         };
         if cage.representation == Representation::Mesh && !cage.is_identity() {
             self.set_previewing(true);
+            let started = std::time::Instant::now();
             if let Err(e) = self.bend_mesh(&cage) {
                 eprintln!("a gaiola não pôde ser pré-visualizada: {e}");
             }
+            cage.last_preview = Some(started.elapsed());
         }
         self.lattice = Some(cage);
     }

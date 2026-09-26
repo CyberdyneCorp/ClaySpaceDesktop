@@ -402,6 +402,8 @@ pub fn cage_state(state: &clayspace_model::LatticeState, divisions: [i32; 3]) ->
         divisions,
         points: state.points.len(),
         selected_points: state.selection.len(),
+        dragged_points: state.dragged,
+        preview_ms: state.preview_micros.map(|micros| micros as f64 / 1000.0),
         mode: tags::tag_of(tags::GIZMO_MODES, state.mode).to_string(),
     }
 }
@@ -1515,6 +1517,30 @@ mod tests {
         assert_eq!(state.points, 27);
         assert_eq!(state.selected_points, 3);
         assert_eq!(state.mode, "rotate");
+        assert_eq!(state.dragged_points, 0);
+        assert_eq!(state.preview_ms, None, "nothing was previewed");
+    }
+
+    /// A drag frame's cost, and the work it was priced by. A 32³ cage whose
+    /// frames took seconds was only visible as a stall with no name; this is
+    /// the line that says which cage, how many points, and how long.
+    #[test]
+    fn a_previewed_cage_reports_what_its_last_frame_cost() {
+        let state = cage_state(
+            &clayspace_model::LatticeState {
+                active: true,
+                divisions: [32, 32, 32],
+                points: vec![[0.0; 3]; 32 * 32 * 32],
+                selection: vec![0],
+                touched: true,
+                dragged: 1,
+                preview_micros: Some(11_250),
+                ..Default::default()
+            },
+            [32, 32, 32],
+        );
+        assert_eq!(state.dragged_points, 1);
+        assert_eq!(state.preview_ms, Some(11.25));
     }
 
     /// Both ends and the angle, whichever verb is in hand: a caller that set a

@@ -820,7 +820,9 @@ fn every_ring_turns_the_cage_when_dragged_across_the_screen() {
             "the ring about axis {index} moved the cage by {moved} on a \
              quarter turn across the screen"
         );
+        eprintln!("mem during {:?}", document.memory().map(|m| m.total));
         document.cancel_lattice();
+        eprintln!("mem after {:?}", document.memory().map(|m| m.total));
     }
 }
 
@@ -962,4 +964,180 @@ fn the_cage_refuses_a_subtool_that_has_been_stretched_per_axis() {
     document
         .apply_lattice()
         .expect("an unstretched subtool still takes the cage");
+}
+
+// -- what a drag frame costs, and what it guarantees --------------------------
+
+/// Drags the cage's first control point over `frames` pointer moves.
+fn drag_the_first_point(document: &mut ClayDocument, frames: usize) {
+    document.select_lattice_point(Some(0));
+    let start = document.lattice().points[0];
+    for frame in 1..=frames {
+        let by = 0.08 * frame as f32 / frames as f32;
+        document
+            .drag_lattice_point([start[0] + by, start[1] - by, start[2]])
+            .expect("the drag was refused");
+    }
+}
+
+#[test]
+fn preview_and_apply_agree() {
+    // The preview is the engine's own bend of the mesh, laid down from the
+    // form as it was on every frame, and apply lays the same cage down once
+    // more — so what the sculptor was looking at when they let go is what
+    // lands, to the bit. An optimisation of the preview that approximated it
+    // would break this before it broke anything a sculptor could name.
+    let mut document = meshed();
+    document.begin_lattice([8, 8, 8]).expect("a cage");
+    drag_the_first_point(&mut document, 6);
+    let (shown, shown_normals, _, shown_faces, _) = document.visible_mesh_geometry();
+    assert!(
+        document.lattice().touched,
+        "the drag moved nothing, so the comparison below would be vacuous"
+    );
+
+    document.apply_lattice().expect("the cage was refused");
+    let (applied, applied_normals, _, applied_faces, _) = document.visible_mesh_geometry();
+
+    assert_eq!(
+        shown_faces, applied_faces,
+        "applying a cage changed topology"
+    );
+    let differing = |a: &[[f32; 3]], b: &[[f32; 3]]| {
+        assert_eq!(a.len(), b.len());
+        a.iter()
+            .zip(b)
+            .filter(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits))
+            .count()
+    };
+    let moved = differing(&shown, &applied);
+    assert_eq!(
+        moved, 0,
+        "{moved} vertices landed somewhere other than where the preview \
+         showed them"
+    );
+    let shaded = differing(&shown_normals, &applied_normals);
+    assert_eq!(
+        shaded, 0,
+        "{shaded} vertices are shaded differently from how the preview \
+         showed them"
+    );
+}
+
+#[test]
+fn a_mesh_drag_reports_what_its_frame_cost_and_what_it_was_given() {
+    // The figure a slow drag is diagnosed from: which work the frame was
+    // given — one dragged point, however many the cage holds — and how long
+    // the frame took. Both reach an agent through the cage state.
+    let mut document = meshed();
+    document.begin_lattice([8, 8, 8]).expect("a cage");
+    let raised = document.lattice();
+    assert_eq!(raised.dragged, 0);
+    assert_eq!(raised.preview_micros, None, "nothing was previewed yet");
+
+    drag_the_first_point(&mut document, 2);
+    let dragged = document.lattice();
+    assert_eq!(dragged.points.len(), 512);
+    assert_eq!(
+        dragged.dragged, 1,
+        "one point was dragged, and the cost is priced by that one"
+    );
+    assert!(
+        dragged.preview_micros.is_some_and(|micros| micros > 0),
+        "a mesh preview frame ran and reported no cost"
+    );
+
+    // A new cage is a new drag, and starts without the old one's figure.
+    document.cancel_lattice();
+    document.begin_lattice([3, 3, 3]).expect("a second cage");
+    assert_eq!(document.lattice().preview_micros, None);
+}
+
+#[test]
+fn a_field_cage_reports_no_preview_cost() {
+    // A field's preview is the viewport displacing what it already drew, not
+    // a bend of the layer, so there is no frame of the document's to time.
+    let mut document = sphere();
+    document.begin_lattice([3, 3, 3]).expect("a cage");
+    drag_the_first_point(&mut document, 2);
+    let cage = document.lattice();
+    assert_eq!(cage.dragged, 1);
+    assert_eq!(cage.preview_micros, None);
+}
+
+// -- where the cage is put ----------------------------------------------------
+
+/// A document with no starting form: one empty field layer, so whatever the
+/// cage measures is only what the test placed.
+fn empty() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    ClayDocument::new(policy).expect("an empty document")
+}
+
+/// A sphere of radius 0.5 placed at the origin and then moved to x = 0.4.
+fn a_moved_ball(document: &mut ClayDocument) {
+    use clayspace_model::{CombineSettings, GizmoTarget, ObjectModel, Shape};
+    let id = document
+        .place_object(Shape::Sphere, &[0.5], [0.0; 3], CombineSettings::default())
+        .expect("place a ball");
+    let target = GizmoTarget::Object(id);
+    let mut moved = document.target_transform(target).expect("a transform");
+    moved.position = [0.4, 0.0, 0.0];
+    document
+        .set_target_transform(target, moved)
+        .expect("move the ball");
+}
+
+#[test]
+fn a_cage_is_sized_from_where_the_form_stands_now() {
+    // Reported as a cage built from bounds captured before the move: ±0.96
+    // around a ball of radius 0.5. With the mirror off the cage is exactly the
+    // moved ball's box, padded — so the bounds are the current ones.
+    let mut document = empty();
+    document.set_symmetry([false; 3]).expect("mirror off");
+    a_moved_ball(&mut document);
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let [low, high] = [cage.points[0], cage.points[7]];
+    // Padded by 5% of the longest side, which is the ball's diameter.
+    let pad = 0.05;
+    for (axis, (lo, hi)) in [(-0.1, 0.9), (-0.5, 0.5), (-0.5, 0.5)]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(
+            (low[axis] - (lo - pad)).abs() < 0.02 && (high[axis] - (hi + pad)).abs() < 0.02,
+            "the cage spans {:?}..{:?} on axis {axis}, not the moved ball's \
+             {lo}..{hi} padded by {pad}",
+            low[axis],
+            high[axis]
+        );
+    }
+}
+
+#[test]
+fn a_mirrored_form_is_caged_with_its_mirror() {
+    // What the report actually measured. A new subtool is mirrored on X, so
+    // moving the ball off the axis leaves a copy at x = -0.4 — real material
+    // the cage has to enclose, which is why it spanned about ±0.96 (±0.9
+    // padded by 5% of 1.8) rather than having been sized before the move.
+    let mut document = empty();
+    a_moved_ball(&mut document);
+    let at_the_mirror = document
+        .document()
+        .eval_points(None, &[[-0.4, 0.0, 0.0]])
+        .expect("sample the field")[0];
+    assert!(
+        at_the_mirror < 0.0,
+        "there is no mirrored copy at x = -0.4, so this is not the case the \
+         report measured"
+    );
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let (low, high) = (cage.points[0][0], cage.points[7][0]);
+    assert!(
+        (low + 0.99).abs() < 0.02 && (high - 0.99).abs() < 0.02,
+        "the cage spans {low}..{high} on x, where the ball and its mirror \
+         together reach ±0.9"
+    );
 }
