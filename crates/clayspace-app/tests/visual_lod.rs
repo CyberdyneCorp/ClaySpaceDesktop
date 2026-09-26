@@ -25,12 +25,8 @@
 //!   full-resolution surface does escape them: sculpting shades with the
 //!   gradient, so they are only ever seen on the coarse one.
 //! - **Missing coarse blocks.** A mip needs all eight children evaluated, and
-//!   the cache only evaluates surface bricks, so a coarse block on the edge of
-//!   the surface band never gets one however long it settles — 70 of 242 here,
-//!   covering 184 of 1043 fine bricks. Meshing those at level 0 and splicing
-//!   them in was measured: it moves 0.69% of the frame, against 2.09% between
-//!   the coarse surface and the full one. Not taken, because mixing levels in
-//!   one surface risks cracks where the spacings meet.
+//!   the cache only evaluates surface bricks. A partial mip set now keeps the
+//!   complete full-resolution surface on screen.
 //!
 //! ```sh
 //! cargo test -p clayspace-app --test visual_lod
@@ -112,6 +108,62 @@ fn compare(a: &Image, b: &Image) -> (f64, u8) {
 }
 
 #[test]
+fn a_partial_mip_set_cannot_leave_a_flat_grey_region() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = settled() else {
+        return;
+    };
+    if document
+        .complete_coarse_keys()
+        .expect("mip coverage")
+        .is_some()
+    {
+        return;
+    }
+    assert!(!document
+        .drawable_coarse_keys()
+        .expect("partial mips")
+        .is_empty());
+    let (camera, _) = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("full surface");
+    let full = harness.capture(geometry.mesh(), &camera, false, "18-lod-complete");
+    let mut complete = geometry.stored_triangles_exact();
+    geometry
+        .set_detail(&harness.gpu, &mut document, Detail::Reduced)
+        .expect("request reduced detail");
+    assert_eq!(geometry.detail(), Detail::Full);
+    let mut fallback = geometry.stored_triangles_exact();
+    complete.sort_unstable();
+    fallback.sort_unstable();
+    assert!(
+        complete == fallback,
+        "the fallback is not the complete surface: {} triangles against {}",
+        fallback.len(),
+        complete.len()
+    );
+    let requested = harness.capture(geometry.mesh(), &camera, false, "18-lod-partial-fallback");
+    // The geometry is identical, so this bounds the rasteriser rather than
+    // the surface. Draw order is fixed, yet a virtualised CI GPU still moves
+    // a few pixels (under 0.01%) between two draws of the same buffers. The
+    // defect this guards against was the uncovered bricks going flat grey,
+    // which moved 0.69% of this frame.
+    let (share, _) = compare(&full, &requested);
+    assert!(
+        share < MAX_RASTER_NOISE,
+        "partial mips changed {:.4}% of the drawing",
+        share * 100.0
+    );
+}
+
+/// The share of a frame two draws of identical geometry may disagree on.
+const MAX_RASTER_NOISE: f64 = 1e-3;
+
+#[test]
 fn the_coarse_surface_is_worth_looking_at() {
     let Some(harness) = Harness::new() else {
         return;
@@ -120,8 +172,8 @@ fn the_coarse_surface_is_worth_looking_at() {
         return;
     };
     if document
-        .drawable_coarse_keys()
-        .map(|keys| keys.is_empty())
+        .complete_coarse_keys()
+        .map(|keys| keys.is_none())
         .unwrap_or(true)
     {
         return;

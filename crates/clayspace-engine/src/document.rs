@@ -1899,6 +1899,17 @@ impl ClayDocument {
         Ok(drawable)
     }
 
+    /// A reduced surface can only replace the full one when every occupied
+    /// region has a mip. Drawing a partial list leaves holes at its boundary.
+    pub fn complete_coarse_keys(&self) -> Result<Option<Vec<BrickKey>>, ClayError> {
+        let covered = self.coarse_keys()?;
+        if covered.is_empty() {
+            return Ok(None);
+        }
+        let drawable = self.drawable_coarse_keys()?;
+        Ok((drawable.len() == covered.len()).then_some(drawable))
+    }
+
     /// How many bricks the surface currently occupies.
     ///
     /// The size input to the detail policy, which never coarsens a model small

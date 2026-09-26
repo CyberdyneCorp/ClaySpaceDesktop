@@ -355,6 +355,20 @@ struct MemoryReading {
     footprint: Option<u64>,
 }
 
+fn visible_scene_bounds(
+    bounds: impl IntoIterator<Item = (bool, Option<([f32; 3], [f32; 3])>)>,
+) -> Option<([f32; 3], [f32; 3])> {
+    bounds
+        .into_iter()
+        .filter_map(|(visible, bounds)| visible.then_some(bounds).flatten())
+        .reduce(|(min, max), (next_min, next_max)| {
+            (
+                std::array::from_fn(|axis| min[axis].min(next_min[axis])),
+                std::array::from_fn(|axis| max[axis].max(next_max[axis])),
+            )
+        })
+}
+
 struct App {
     document: SharedDocument,
     sculpt: SculptViewModel,
@@ -479,6 +493,7 @@ struct App {
     viewport: Option<egui::Rect>,
     /// The symmetry the overlays were last built for.
     overlay_symmetry: [bool; 3],
+    overlay_grid: bool,
     /// Where the mirror planes were last drawn, so a subtool that moves
     /// rebuilds them and one that has not does not.
     overlay_frame: Option<clayspace_model::Transform>,
@@ -854,6 +869,7 @@ impl App {
             hover: None,
             viewport: None,
             overlay_symmetry: [false; 3],
+            overlay_grid: true,
             overlay_frame: None,
             rigging: false,
             skin_preview: true,
@@ -2502,7 +2518,14 @@ impl App {
     }
 
     fn frame_all(&mut self) {
-        match self.sculpt.bounds() {
+        match visible_scene_bounds(
+            self.scene
+                .scene()
+                .get()
+                .layers
+                .iter()
+                .map(|layer| (layer.visible, self.scene.layer_bounds(layer.key))),
+        ) {
             Some((min, max)) => self.camera.frame_bounds(min.into(), max.into()),
             None => self.camera.frame_default(),
         }
@@ -3884,21 +3907,26 @@ impl App {
     /// bar as well as the keyboard and neither should need a nudge to show.
     fn sync_symmetry_overlay(&mut self) {
         let symmetry = self.active_symmetry();
+        let grid = *self.sculpt.grid().get();
         // And where the mirror stands, which moves when the subtool does: the
         // planes are the layer's, so dragging a form has to rebuild them even
         // though the axes did not change.
         let frame = self.mirror_frame();
-        if symmetry == self.overlay_symmetry && frame == self.overlay_frame {
+        if symmetry == self.overlay_symmetry
+            && frame == self.overlay_frame
+            && grid == self.overlay_grid
+        {
             return;
         }
         self.overlay_symmetry = symmetry;
         self.overlay_frame = frame;
+        self.overlay_grid = grid;
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
             graphics.renderer.set_overlays(
                 &gpu,
                 Overlays {
-                    grid: true,
+                    grid,
                     symmetry_planes: symmetry,
                     symmetry_frame: frame,
                 },
@@ -6929,6 +6957,53 @@ impl App {
     }
 }
 
+impl App {
+    fn copy_diagnostics_with(
+        &mut self,
+        write: impl FnOnce(String) -> Result<(), arboard::Error>,
+    ) -> Result<(), Refusal> {
+        write(self.diagnostics(StrokeSection::Summarised).to_report())
+            .map_err(|error| Refusal::new(RefusalCode::Failed, error.to_string()))?;
+        self.diagnostics_copied = true;
+        self.request_redraw();
+        Ok(())
+    }
+
+    fn nothing_to_do(&self, command: &Command) -> Option<&'static str> {
+        match command {
+            Command::CancelStroke if !self.sculpt.is_stroking() => Some("no stroke is open"),
+            Command::Redo if self.sculpt.next_redo().is_none() => Some("nothing to redo"),
+            Command::EndMaskOutline(_) if self.mask.draft().get().is_none() => {
+                Some("no mask outline is open")
+            }
+            Command::AddCurvePoint(..)
+            | Command::InsertCurvePoint(..)
+            | Command::SelectCurvePoint(..)
+            | Command::ToggleCurvePoint(..)
+            | Command::DragCurve(..)
+            | Command::SetCurveJoin(..)
+            | Command::SetCurveProfile(..)
+            | Command::RemoveCurvePoints
+            | Command::ApplyCurve
+                if !self.curve.state().get().active =>
+            {
+                Some("no curve is open")
+            }
+            Command::SculptLayer(clayspace_model::SculptLayerOp::EndRecording)
+                if !self
+                    .document
+                    .with(|document| document.sculpt_layer_cost().recording) =>
+            {
+                Some("no pass is recording")
+            }
+            Command::CommitRenameLayer if self.renaming.is_none() => {
+                Some("no rename is in progress")
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Session for App {
     /// One command, down the path a menu item's click takes.
     ///
@@ -6939,6 +7014,24 @@ impl Session for App {
         let label = agent_command_label(self.strings, &command);
         let touched = command.touches_document();
         let before = self.notice_occurrences();
+
+        if let Some(why) = self.nothing_to_do(&command) {
+            let history = *self.sculpt.history().get();
+            return Ok(Applied {
+                label,
+                outcome: "nothing_to_do",
+                touched_document: false,
+                history_depth: history.depth,
+                undoes: self.sculpt.next_undo().map(str::to_string),
+                notices: vec![why.to_string()],
+            });
+        }
+
+        if matches!(command, Command::CopyDiagnostics) {
+            self.copy_diagnostics_with(|report| {
+                arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(report))
+            })?;
+        }
 
         // Whose gesture this is, recorded before the command is applied so the
         // next call from the same agent is not refused its own stroke.
@@ -6976,6 +7069,7 @@ impl Session for App {
         let history = *self.sculpt.history().get();
         Ok(Applied {
             label,
+            outcome: "applied",
             touched_document: touched,
             history_depth: history.depth,
             // What the next undo would take back, which after a command that
@@ -7652,11 +7746,14 @@ mod tests {
     use super::{
         agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
         localized_agent_refusal, localized_agent_remark, localized_tool_status, notices_written,
-        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status, AgentGesture,
-        GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
+        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status,
+        visible_scene_bounds, AgentGesture, App, GizmoGeometryUpdate, ToolStatusSources,
+        NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
-    use clayspace_mcp::RefusalCode;
-    use clayspace_model::{ModelError, Representation, Unavailable};
+    use clayspace_app::SharedDocument;
+    use clayspace_engine::{BackendPolicy, ClayDocument};
+    use clayspace_mcp::{RefusalCode, Session};
+    use clayspace_model::{ModelError, OutlineFrame, Representation, SculptLayerOp, Unavailable};
     use clayspace_vm::Command;
 
     #[test]
@@ -7727,6 +7824,70 @@ mod tests {
             position: [0.1, 0.0, 0.0],
             pressure: 1.0,
         }
+    }
+
+    fn app() -> App {
+        let policy = BackendPolicy::discover(None).expect("backend");
+        let document = ClayDocument::new(policy.clone())
+            .and_then(ClayDocument::with_starting_form)
+            .expect("starting form");
+        App::new(SharedDocument::new(document), policy)
+    }
+
+    #[test]
+    fn commands_with_no_target_report_nothing_to_do() {
+        let mut app = app();
+        let frame = OutlineFrame {
+            origin: [0.0; 3],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            forward: [0.0, 0.0, 1.0],
+            scale: [1.0; 2],
+        };
+        for command in [
+            Command::CancelStroke,
+            Command::Redo,
+            Command::EndMaskOutline(frame),
+            Command::AddCurvePoint([0.0; 3], 0.1),
+            Command::SculptLayer(SculptLayerOp::EndRecording),
+            Command::CommitRenameLayer,
+        ] {
+            let applied = Session::apply(&mut app, command).expect("harmless no-op");
+            assert_eq!(applied.outcome, "nothing_to_do");
+            assert!(!applied.notices.is_empty());
+        }
+    }
+
+    #[test]
+    fn toggle_grid_changes_the_overlay_state() {
+        let mut app = app();
+        assert!(app.overlay_grid);
+        Session::apply(&mut app, Command::ToggleGrid).expect("toggle grid");
+        app.sync_symmetry_overlay();
+        assert!(!app.overlay_grid);
+    }
+
+    #[test]
+    fn copy_diagnostics_sends_the_current_report_to_the_clipboard() {
+        let mut app = app();
+        let mut copied = None;
+        app.copy_diagnostics_with(|report| {
+            copied = Some(report);
+            Ok(())
+        })
+        .expect("copy report");
+        let report = copied.expect("clipboard write");
+        assert!(!report.is_empty());
+        assert!(app.diagnostics_copied);
+    }
+
+    #[test]
+    fn frame_all_ignores_hidden_subtools() {
+        let bounds = visible_scene_bounds([
+            (true, Some(([0.0; 3], [1.0; 3]))),
+            (false, Some(([100.0; 3], [200.0; 3]))),
+        ]);
+        assert_eq!(bounds, Some(([0.0; 3], [1.0; 3])));
     }
 
     /// A begin the ViewModel refused opened nothing, and the flag that says

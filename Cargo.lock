@@ -554,6 +554,7 @@ name = "clayspace-app"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "arboard",
  "bytemuck",
  "clayspace-engine",
  "clayspace-mcp",

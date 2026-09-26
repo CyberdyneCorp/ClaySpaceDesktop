@@ -6,7 +6,7 @@
 //! `egui`: a surface that can only be tested by someone sitting in front of a
 //! window is a surface nobody tests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use clayspace_vm::Command;
@@ -24,6 +24,8 @@ pub struct FakeSession {
     pub applied: Vec<Command>,
     /// Commands this session refuses, and what it says about each.
     pub refusals: HashMap<&'static str, Refusal>,
+    /// Harmless commands the fixture reports as having no target.
+    pub no_effects: HashSet<&'static str>,
     /// What the next consent ask is answered with.
     pub consent: ConsentOutcome,
     /// Every consent asked for, in order.
@@ -64,6 +66,7 @@ impl FakeSession {
         Self {
             applied: Vec::new(),
             refusals: HashMap::new(),
+            no_effects: HashSet::new(),
             consent: ConsentOutcome::Granted,
             asked: Vec::new(),
             gesture: false,
@@ -92,6 +95,11 @@ impl FakeSession {
             label,
             Refusal::new(RefusalCode::ModelRefused, message.to_string()),
         );
+        self
+    }
+
+    pub fn with_no_effects(mut self, labels: impl IntoIterator<Item = &'static str>) -> Self {
+        self.no_effects.extend(labels);
         self
     }
 
@@ -140,7 +148,8 @@ impl Session for FakeSession {
             command,
             Command::BeginStroke { .. } | Command::ContinueStroke { .. } | Command::CancelStroke
         );
-        if touched && !mid_gesture {
+        let no_effect = self.no_effects.contains(command.label());
+        if touched && !mid_gesture && !no_effect {
             self.history_depth += 1;
             self.modified = true;
         }
@@ -148,7 +157,12 @@ impl Session for FakeSession {
         self.applied.push(command);
         Ok(Applied {
             label: label.clone(),
-            touched_document: touched,
+            outcome: if no_effect {
+                "nothing_to_do"
+            } else {
+                "applied"
+            },
+            touched_document: touched && !no_effect,
             history_depth: self.history_depth,
             undoes: (self.history_depth > 0).then_some(label),
             notices: Vec::new(),

@@ -1033,6 +1033,7 @@ mod tests {
     use super::*;
     use crate::session::ConsentOutcome;
     use crate::testing::FakeSession;
+    use clayspace_model::OutlineFrame;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -1121,6 +1122,43 @@ mod tests {
 
     fn structured(result: &CallResult) -> Value {
         result.structured.clone().unwrap_or(json!({}))
+    }
+
+    #[test]
+    fn harmless_commands_report_no_effect_over_the_wire() {
+        let labels = [
+            Command::CancelStroke.label(),
+            Command::Redo.label(),
+            Command::EndMaskOutline(OutlineFrame {
+                origin: [0.0; 3],
+                right: [1.0, 0.0, 0.0],
+                up: [0.0, 1.0, 0.0],
+                forward: [0.0, 0.0, 1.0],
+                scale: [1.0; 2],
+            })
+            .label(),
+            Command::AddCurvePoint([0.0; 3], 0.1).label(),
+            Command::SculptLayer(clayspace_model::SculptLayerOp::EndRecording).label(),
+            Command::CommitRenameLayer.label(),
+        ];
+        let bench = Bench::with(FakeSession::new().with_no_effects(labels));
+        for (group, arguments) in [
+            ("stroke", json!({"action":"cancel"})),
+            ("history", json!({"action":"redo"})),
+            (
+                "mask",
+                json!({"action":"end_outline","origin":[0,0,0],"right":[1,0,0],"up":[0,1,0],"forward":[0,0,1],"scale":[1,1]}),
+            ),
+            (
+                "curve",
+                json!({"action":"add_point","at":[0,0,0],"radius":0.1}),
+            ),
+            ("passes", json!({"action":"grid","op":"end_recording"})),
+            ("layer", json!({"action":"commit_rename"})),
+        ] {
+            let result = bench.call(group, arguments).expect("harmless no-op");
+            assert_eq!(structured(&result)["outcome"], "nothing_to_do", "{group}");
+        }
     }
 
     // -- the round trip that keeps the table honest -------------------------
