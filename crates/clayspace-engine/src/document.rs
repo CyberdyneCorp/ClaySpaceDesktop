@@ -3721,7 +3721,23 @@ impl ClayDocument {
     /// the same axes wrote nothing and mirrored against whatever plane that
     /// layer happened to carry.
     fn point_the_mirror(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
-        let index = self.active;
+        self.point_the_mirror_of(self.active, symmetry)
+    }
+
+    /// The same, for the layer at `index` rather than the active one — a curve
+    /// is placed on the layer it was begun on, whichever is active now.
+    ///
+    /// **A real change refills both images.** The mirror moves surface the
+    /// brick cache holds: the reflections the old mirror made leave the field
+    /// and the ones the new mirror makes arrive, and neither is inside the
+    /// region of the stroke that asked for the change. Only the new region was
+    /// ever refilled, so a mirror turned off left its reflections drawn —
+    /// 38,913 bright pixels of them measured, and still there after the layer
+    /// was hidden, because hiding refills what the layer reaches *now* (#170).
+    /// So the reflections the change moved are marked — see
+    /// `mark_mirror_change` — and drained once. An unchanged mirror returns
+    /// before any of this.
+    fn point_the_mirror_of(&mut self, index: usize, symmetry: [bool; 3]) -> Result<(), ModelError> {
         if self.layers[index].mirror == Some(symmetry) {
             return Ok(());
         }
@@ -3739,11 +3755,103 @@ impl ClayDocument {
                 }
             }
         }
+        let before = self.layers[index].mirror;
+        let nodes = self.document.layer_nodes(layer).unwrap_or_default();
+        let was = self.node_bounds(layer, &nodes);
         self.document
             .set_layer_mirror(layer, symmetry, 0.0)
             .map_err(ModelError::engine)?;
         self.layers[index].mirror = Some(symmetry);
+        let now = self.node_bounds(layer, &nodes);
+        let marked = match before {
+            Some(old) => self.mark_mirror_change(index, old, symmetry, &was, &now),
+            // What the layer carried could not be read, so neither can what
+            // it reflected: the whole layer is the honest region.
+            None => self.mark_for_refill(layer, &[]),
+        };
+        // Drained on the failing path too: a mark left standing is a cache
+        // that disagrees with the document until something else drains it.
+        let drained = self.drain_dirty();
+        marked.and(drained)
+    }
+
+    /// Each node's influence bound, as the layer's mirror stands now.
+    fn node_bounds(&self, layer: LayerId, nodes: &[NodeId]) -> Vec<Option<Bounds>> {
+        nodes
+            .iter()
+            .map(|node| self.node_bound(layer, *node))
+            .collect()
+    }
+
+    /// Marks what a mirror change moved: the reflections, not the items.
+    ///
+    /// Only a node whose bound changed with the mirror is touched — one that
+    /// stays out of the mirror, or whose reflection lands on its own box, has
+    /// the same bound either way. Marking the whole layer instead refilled the
+    /// starting form on the first stroke after symmetry was turned off: 1043
+    /// keys for a dab that dirties a few dozen. The gap this leaves is a node
+    /// whose *box* is symmetric about the plane while its shape is not — a box
+    /// rotated on the plane — whose reflection changes inside its own bound.
+    ///
+    /// Where one side of the change is no mirror at all, that side's bound is
+    /// the unreflected item, and only its reflections under the other side are
+    /// marked. Between two real mirrors neither side is, so both bounds are.
+    fn mark_mirror_change(
+        &mut self,
+        index: usize,
+        old: [bool; 3],
+        new: [bool; 3],
+        was: &[Option<Bounds>],
+        now: &[Option<Bounds>],
+    ) -> Result<(), ModelError> {
+        let layer = self.layers[index].id;
+        let transform = self.layers[index].transform;
+        let mut regions = Vec::new();
+        for (was, now) in was.iter().zip(now) {
+            let (Some(was), Some(now)) = (was, now) else {
+                // A node whose reach has no bound reaches everything.
+                return self.mark_for_refill(layer, &[]);
+            };
+            if was != now {
+                regions.extend(Self::mirror_change_regions(
+                    &transform, old, new, *was, *now,
+                ));
+            }
+        }
+        for (min, max) in regions {
+            self.cache
+                .mark_dirty(min, max)
+                .map_err(ModelError::engine)?;
+        }
         Ok(())
+    }
+
+    /// The boxes one node's surface can have moved in, when its layer's
+    /// mirror went from `old` to `new` and its bound from `was` to `now`.
+    fn mirror_change_regions(
+        transform: &clayspace_model::Transform,
+        old: [bool; 3],
+        new: [bool; 3],
+        was: Bounds,
+        now: Bounds,
+    ) -> Vec<Bounds> {
+        let (unreflected, axes) = if !old.contains(&true) {
+            (was, new)
+        } else if !new.contains(&true) {
+            (now, old)
+        } else {
+            return vec![was, now];
+        };
+        // Reflected in the layer's own frame, where the planes are.
+        mirrors(axes)
+            .into_iter()
+            .filter(|mirror| !mirror.is_identity())
+            .map(|mirror| {
+                Self::box_through(unreflected, |point| {
+                    transform.into_world(mirror.point(transform.into_local(point)))
+                })
+            })
+            .collect()
     }
 
     /// Forgets what the engine was told every layer's mirror is.
@@ -3908,7 +4016,7 @@ impl ClayDocument {
             // of what symmetry means here.
             ToolKind::Puxar => {
                 self.point_the_mirror(symmetry)?;
-                self.snakehook_stroke(brush, samples)
+                self.snakehook_stroke(brush, samples, symmetry)
             }
             _ => self.stroke_sdf(tool, brush, samples, symmetry),
         }
@@ -4032,6 +4140,12 @@ impl ClayDocument {
         // displacement — leaving it at zero was throwing away most of the
         // brush as well as its soft edge.
         stamp.set_rounding(region).map_err(ModelError::engine)?;
+        // Every stamp is a copy of this template, so the stroke's symmetry is
+        // decided here, once, and stays with the items it made — see
+        // `takes_part_in_the_mirror`.
+        stamp
+            .set_mirror(takes_part_in_the_mirror(symmetry))
+            .map_err(ModelError::engine)?;
 
         // No alpha here, and `alpha_for` is what says so rather than a
         // condition repeated at this call site. A field takes one as a
@@ -4664,6 +4778,7 @@ impl ClayDocument {
         &mut self,
         brush: BrushSettings,
         samples: &[GestureSample],
+        symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
         if samples.len() < 2 {
             return Ok(EditOutcome::NOTHING);
@@ -4794,6 +4909,8 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
         item.set_stroke_blend_k(brush.size * 0.5)
+            .map_err(ModelError::engine)?;
+        item.set_mirror(takes_part_in_the_mirror(symmetry))
             .map_err(ModelError::engine)?;
 
         let node = self
@@ -10373,6 +10490,19 @@ struct SdfRecipe {
     spacing: f32,
 }
 
+/// Whether an item made under `symmetry` takes part in its layer's mirror.
+///
+/// The engine's mirror belongs to the *layer* and reflects every item that
+/// takes part, whenever it was made. Taking part by default made the symmetry
+/// switch reach backwards: a lump sculpted with symmetry off grew a twin as
+/// soon as a later stroke turned the layer's mirror on, and a box placed
+/// one-sided became two (#170). So an item is told when it is made: made with
+/// symmetry on, it follows the layer's mirror; made with it off, it stays out
+/// of every mirror the layer is given afterwards.
+fn takes_part_in_the_mirror(symmetry: [bool; 3]) -> bool {
+    symmetry.contains(&true)
+}
+
 fn sdf_recipe(tool: ToolKind) -> Option<SdfRecipe> {
     let plain = SdfRecipe {
         op: None,
@@ -12884,11 +13014,31 @@ impl ClayDocument {
 
         let mut item = self.curve_item(curve, &guide, kind)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
+        // Mirrored like a stroke. A curve never pointed the layer's mirror, so
+        // one begun with symmetry on stayed one-sided until some brush stroke
+        // happened to write it (#170). The mirror is pointed only for a curve
+        // that takes part in it, for the reason `place_object` gives, and in
+        // one group with the item so one undo takes back both.
+        let symmetry = self.layers[index].symmetry;
+        let mirrored = takes_part_in_the_mirror(symmetry);
+        item.set_mirror(mirrored).map_err(ModelError::engine)?;
 
-        let node = self
-            .document
-            .add_item(layer, &item)
+        self.document
+            .begin_undo_group()
             .map_err(ModelError::engine)?;
+        let added = if mirrored {
+            self.point_the_mirror_of(index, symmetry)
+        } else {
+            Ok(())
+        }
+        .and_then(|()| {
+            self.document
+                .add_item(layer, &item)
+                .map_err(ModelError::engine)
+        });
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let node = added?;
+        closed?;
         if let Some(curve) = self.curve.as_mut() {
             curve.node = Some(node);
             // A sweep placed afresh is the one the curve has now, whatever id
@@ -14982,6 +15132,7 @@ impl ClayDocument {
         parameters: &[f32],
         at: [f32; 3],
         combine: CombineSettings,
+        mirrored: bool,
     ) -> Result<NodeId, ModelError> {
         let mut item =
             claycore::Item::of(primitive_of(shape, parameters)).map_err(ModelError::engine)?;
@@ -14989,6 +15140,7 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         item.set_blend(engine_blend(combine.blend), combine.radius)
             .map_err(ModelError::engine)?;
+        item.set_mirror(mirrored).map_err(ModelError::engine)?;
         let node = self
             .document
             .add_item(layer, &item)
@@ -16087,7 +16239,20 @@ impl ObjectModel for ClayDocument {
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;
-        let placed = self.place_item(layer, shape, &parameters, at, combine);
+        // Placed under the symmetry the layer is worked with, like a stroke:
+        // mirrored from the start when it is on, and left out of any mirror
+        // the layer is given later when it is off. Only an item that takes
+        // part needs the layer's mirror, so it is pointed only then — inside
+        // the group, so one undo takes back the placement and the mirror it
+        // needed together.
+        let symmetry = self.active_layer().symmetry;
+        let mirrored = takes_part_in_the_mirror(symmetry);
+        let placed = if mirrored {
+            self.point_the_mirror(symmetry)
+        } else {
+            Ok(())
+        }
+        .and_then(|()| self.place_item(layer, shape, &parameters, at, combine, mirrored));
         // Closed on the failing path too: a group left open swallows every
         // edit after it into one undo step.
         let closed = self.document.end_undo_group().map_err(ModelError::engine);
@@ -16132,7 +16297,10 @@ impl ObjectModel for ClayDocument {
         let (key, layer, node) = self.insert_subtool(&name, move |doc, layer| {
             // At the layer's own origin, and the layer stands where the
             // sculptor pointed — see `stand_subtool_at`.
-            let node = doc.place_item(layer, shape, &placed, [0.0; 3], combine)?;
+            // Taking part in the mirror, as every item did before an item was
+            // told: the subtool is new, so there is nothing older on it for a
+            // later mirror to reach, and its first stroke points the mirror.
+            let node = doc.place_item(layer, shape, &placed, [0.0; 3], combine, true)?;
             doc.stand_subtool_at(layer, at)?;
             Ok(node)
         })?;
