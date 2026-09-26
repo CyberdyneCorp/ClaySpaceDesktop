@@ -3115,7 +3115,7 @@ subtree, so an object set to **Interseção** dirties the whole layer on every
 frame while the same object subtracting dirties its own box. Measured on the
 same object and the same scene: 21.3 ms a frame subtracting against 49.1 ms
 intersecting — `object.drag_frame` and `object.drag_frame_intersect` in
-`benchmarks/baseline-linux-x86_64.json`, better than twice the cost. It is not
+`benchmarks/archive/linux-x86_64-cuda-engine-0.52.2.json`, better than twice the cost (#282 tracks it). It is not
 visible from the interface, which is why it is worth saying here.
 
 ### A model as an operand

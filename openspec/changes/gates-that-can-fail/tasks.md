@@ -6,7 +6,7 @@
 - [x] 1.2 `shell: bash` so `pipefail` stops `tee` discarding the exit status (#32)
 - [x] 1.3 Tell a signal apart from a verdict, and name the issue the quarantine expires with (#32)
 - [x] 1.4 A dispatchable job that records a baseline on the runner, since the Mac nobody had is the one CI runs on (#32)
-- [ ] 1.5 Commit a macOS baseline recorded by that job, and make a refusal to compare a hard failure
+- [x] 1.5 Commit a macOS baseline recorded by that job, and make a refusal to compare a hard failure (#189, `gate-performance-on-both-platforms`)
 
 ## 2. Visual verification
 

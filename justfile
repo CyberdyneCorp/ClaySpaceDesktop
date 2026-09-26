@@ -207,6 +207,15 @@ bench-only prefix:
 # One baseline per platform. Comparing a Linux run against a macOS recording
 # measures the difference between two machines and calls it a regression, which
 # is worse than no gate: the figures differ by more than any change would.
+#
+# Both files are recorded by CI's `Record a baseline` job on the runner the gate
+# runs on, and CI compares with `--tolerance-scale` 8 on macOS and 3 on Linux,
+# because hosted runners are that noisy (benchmarks/ci-gate.md). Here the
+# tolerances are the workstation's, and the table says so when this machine is
+# not the one that recorded the file.
+# A refusal to compare — another backend, say a CUDA workstation against the
+# runner's CPU recording — exits 2. For a like-for-like comparison on your own
+# machine, record with `bench-to` and compare with `bench-against`.
 
 # Compare against the recorded baseline for this platform. This is the CI gate.
 bench-compare platform=os():
@@ -217,7 +226,9 @@ bench-compare platform=os():
 # so re-recording hides whatever regressed since the last one. And record it on
 # the platform it is named for — the file's `conditions` say which machine and
 # which engine produced it, and a mismatch there is the first thing to check
-# when a comparison looks wrong.
+# when a comparison looks wrong. The committed files come from the CI runners:
+# `gh workflow run ci.yml -f record_baseline=true`, then commit the two
+# `baseline-*` artifacts. This recipe records this machine instead.
 
 # Re-record the performance baseline for this platform.
 bench-record platform=os():

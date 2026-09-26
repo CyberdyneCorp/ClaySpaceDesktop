@@ -340,23 +340,24 @@ jobs:
   # these runner images, so the file's `conditions.machine` names the hardware
   # the comparison assumes.
   #
-  # `--tolerance-scale 8` is measured, not chosen. Twelve runs of the suite on
-  # macos-14 at engine 0.120.1 — on trees that did not change the measured
-  # code — needed a scale of 6.6 before no pair of them disagreed, because a
-  # hosted runner is a three-core VM at a load of 4–8 per core and single
-  # figures moved by up to 10x between runs. 8 leaves a margin over that. What
-  # this gate catches is an order-of-magnitude regression, a figure that stops
-  # being measured, and a baseline it cannot compare against; the 1.5x
-  # tolerance belongs on a quiet reference machine (`just bench-compare`).
-  # The data is in `benchmarks/ci-gate.md`.
+  # `--tolerance-scale` multiplies every figure's tolerance, and each value is
+  # measured, not chosen (`benchmarks/ci-gate.md` has the data). macOS is 8:
+  # twelve runs of the suite on macos-14 at engine 0.120.1 needed 6.6 before no
+  # pair of them disagreed, because a hosted Mac is a three-core VM at a load
+  # of 4-8 per core and single figures moved by up to 10x between runs. Linux
+  # is 3: its runners are quieter, and the worst figure between runs on two
+  # different processors needed 1.18. What the macOS row catches is an
+  # order-of-magnitude regression; the Linux row, a 4.5x one on a mean. Both
+  # fail on a figure that stops being measured and on a baseline they cannot
+  # compare against. The 1x tolerances belong on a quiet workstation.
   benchmark:
     name: Performance (${{ matrix.slug }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, slug: macos-aarch64 }
-          - { os: ubuntu-24.04, slug: linux-x86_64 }
+          - { os: macos-14, slug: macos-aarch64, tolerance_scale: 8 }
+          - { os: ubuntu-24.04, slug: linux-x86_64, tolerance_scale: 3 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -414,7 +415,7 @@ jobs:
           cargo run --release --bin bench -- \
             --json "$RUNNER_TEMP/now.json" \
             --baseline "benchmarks/baseline-${{ matrix.slug }}.json" \
-            --tolerance-scale 8 \
+            --tolerance-scale ${{ matrix.tolerance_scale }} \
             | tee "$RUNNER_TEMP/report.txt"
 
       # The figures outlive the run, so a regression can be looked at rather

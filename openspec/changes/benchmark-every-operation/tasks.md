@@ -56,7 +56,7 @@
 
 - [x] 8.1 Run the full suite on Linux, check the twenty carried-over figures still match the old baseline within noise, and re-record `benchmarks/baseline-linux-x86_64.json` in its own commit with the reason in the message — the carried-over twenty all matched inside ±10 % with the counts identical, and the gate was then run against its own recording until it passed on an unchanged tree, which took two corrections: a gesture is reported by its mean rather than its median, and every run warms the machine first
 - [x] 8.2 Mark `benchmarks/baseline-macos-aarch64.json` stale, so a macOS comparison refuses rather than reporting the difference between two suites as regressions
-- [ ] 8.3 Re-record the macOS baseline on a macOS machine, in its own commit
+- [x] 8.3 Re-record the macOS baseline on a macOS machine, in its own commit — recorded on the `macos-14` runner by the dispatched `Record a baseline` job, which is the machine the gate runs on (#189)
 - [x] 8.4 State the full run's wall clock in `justfile`'s bench recipes, and add a recipe for a filtered run
 - [x] 8.5 Update `docs/architecture.md` and `README.md` where they describe what the gate covers
 - [x] 8.6 Point `stroke_budget.rs`'s cross-version table and `undo_cost.rs`'s narrative at the baseline as the record, keeping their explanations

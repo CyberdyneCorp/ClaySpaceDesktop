@@ -23,9 +23,9 @@ the reasoning in them rather than as status.
 | `bound-the-chain-by-region` | all of it: consolidate a gesture's region with `clay_layer_consolidate_region`, which is wrapped and tested in `claycore` and called by nothing in the application |
 | `route-layer-reorder-and-protection` | all of it: the specification promises reordering and protecting a layer from the stack, and no command reaches `SceneViewModel::reorder` or `set_protection` |
 | `a-cut-drawn-on-the-view` | a perspective-error bound and an inversion modifier, both deferred with their reasons in the tasks file |
-| `gates-that-can-fail` | the macOS baseline and a hard refusal once it exists, wiring the remaining ViewModels, the untranslated-label ratchet, and splitting `App` and `ClayDocument` |
+| `gates-that-can-fail` | wiring the remaining ViewModels and splitting `App` and `ClayDocument` |
 | `grid-brush-radius` | re-recording the benchmark baseline the wider grid dab moved |
-| `benchmark-every-operation` | the macOS baseline, the same task `gates-that-can-fail` carries |
+| `gate-performance-on-both-platforms` | nothing: both baselines recorded on the runners and gated on macOS and Linux (#189); archive once merged |
 
 **Left for later, and kept visible here.** Three changes finished what they set
 out to do and were archived with follow-ups deliberately unticked. This is where
@@ -1650,7 +1650,21 @@ and engine produced it. Budget breaches are printed but not enforced without
 `--enforce-budgets`: the specification gates on a change *raising* latency, and
 a gate that is red the day it is installed is one people learn to ignore.
 
-The Linux baseline reads engine 0.52.2; the pin is at 0.120.1. It was left there
+**Both baselines now come from the CI runners, at the current pin (#189).** The
+Performance job runs on `macos-14` and `ubuntu-24.04`, each against the file its
+own runner image recorded, and fails on a figure worse than its tolerance times
+eight on macOS or three on Linux, a figure that stopped being measured, or a
+baseline it cannot compare against. The scale is each runner's measured noise,
+not a preference:
+`benchmarks/ci-gate.md` has the twelve runs, the re-run of the intersect
+regression (still 2.7x its subtract control, now explained and tracked as
+#282), and the decision to record now as a floor and re-record as the epic's
+performance work lands.
+
+What follows is the history of the workstation baseline that preceded them,
+kept at `benchmarks/archive/linux-x86_64-cuda-engine-0.52.2.json`.
+
+That Linux baseline read engine 0.52.2 while the pin moved on. It was left there
 deliberately when the pin moved to 0.60.0, and the reasoning then was that
 everything that moved across that upgrade moved *downward* — a dab's p95 1.88x,
 solo's p95 1.61x, the locality dab 1.40x, undo 1.13x, over two full runs — and
@@ -1665,10 +1679,9 @@ record a baseline from one.
 The figures below are that baseline's own conditions: engine 0.52.2,
 CUDA, 1280×800, at 0.13 load per core, with a dab median of 2.10 ms against a
 50 ms budget and a locality key ratio of 0.75 against a budget of 2. The macOS
-baseline still reads engine 0.29.1. It no longer needs a Mac nobody has: the
-`Record a baseline` job runs the same recording on `macos-14` when dispatched,
-and what is left is committing its artifact — task 1.5 of `gates-that-can-fail`
-— after which the Performance job's refusal becomes a failure.
+baseline read engine 0.29.1 until the `Record a baseline` job recorded one on
+`macos-14`; that artifact is what is committed now, and a refusal to compare is
+a failure.
 
 ## Open decisions
 

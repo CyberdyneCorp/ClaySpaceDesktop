@@ -517,6 +517,22 @@ concurrent test suite and database — about 0.2 per core — left the move-brus
 figure inside 2% across three runs, while an unrelated process at roughly 0.6
 per core moved a single measurement by 25%, several times the gate's tolerance.
 
+**CI gates both platforms, at a threshold measured on the runner.** The
+Performance job is a matrix of `macos-14` and `ubuntu-24.04`, each compared
+against a baseline the same runner image recorded (the dispatchable
+`Record a baseline` job), with `--tolerance-scale` multiplying every figure's
+tolerance — 8 on macOS, 3 on Linux. A hosted macOS runner is a three-core VM at
+a load of four to eight per core, and twelve runs of an unchanged suite moved
+single figures by up to 10x; 6.6 was the smallest scale at which no pair of
+those runs disagreed. The Linux runners are far quieter, and the worst figure
+between two of them on different processors needed 1.18
+(`benchmarks/ci-gate.md`). The baseline's `conditions.machine`
+records the processor, cores, memory, OS and runner image, and a comparison
+against a different machine says so above the table. A baseline the run
+refuses to compare against — another suite, platform, architecture or backend
+— exits 2 and fails the job; it used to exit 0, which is how the macOS gate
+was green for months against a file from engine 0.29.1.
+
 16-cell bricks were also tried, and are worse: a third as many keys but eight
 times the cells each, so a dilated set meshes more overall — 64 ms against 39.
 
@@ -677,7 +693,7 @@ prevent.
 | ViewModel | `clayspace-vm/tests` | The interface rules, against a double, with no engine |
 | Session | `clayspace-engine/tests` | The same rules against a real document |
 | Latency | `clayspace-app/tests` | Dab cost against the budget |
-| Performance | `clayspace-app/src/bin/bench` | Every operation a sculptor can invoke, against a recorded baseline |
+| Performance | `clayspace-app/src/bin/bench` | Every operation a sculptor can invoke, against a baseline recorded on each CI runner (macOS and Linux) |
 | Visual | `clayspace-app/tests` | Real frames, written as PNGs |
 
 ### A fixture that cannot be built is a failure, not a skip

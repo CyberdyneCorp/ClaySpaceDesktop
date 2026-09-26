@@ -827,3 +827,21 @@ candidate item. This application calls that entry point directly, in
 `ClayDocument::pick_item`, which is why the improvement arrives without a line
 changing — and it also clears the 1.133x this report had recorded against
 v0.78.0 for the same figure.
+
+---
+
+# Addendum: the intersect row at v0.120.1 (#189)
+
+Re-run on the current pin for #189, from twelve Performance-job runs on the
+`macos-14` runner. Absolute times are not comparable with the Linux reference
+machine above; the ratio within one run is:
+
+| | v0.73.0 | v0.78.0 | v0.84.0 | v0.120.1 |
+|---|---:|---:|---:|---:|
+| intersect ÷ subtract, within one run | 2.25x | 2.59x | 2.54x | **2.73x** (1.80–3.75) |
+
+**Still there, no longer unexplained.** The mechanism is the one identified
+above — an intersect's influence bound is its layer, so each drag frame refills
+the whole layer — and it is now tracked as issue #282 with the figure to watch.
+The committed baselines no longer hide it: both platforms' gates carry
+`object.drag_frame_intersect`. See `benchmarks/ci-gate.md`.
