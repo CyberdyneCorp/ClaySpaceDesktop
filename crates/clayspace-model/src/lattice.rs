@@ -43,6 +43,9 @@ pub fn division_limit(representation: Representation) -> Option<i32> {
         // ABI offers no entry point for. The hierarchy's own cage is dragged
         // by sculpting level 0, which is a stroke and not a lattice.
         Representation::Multires => None,
+        // Nor an adaptive surface. `clay_mesh_sculptor_lattice` takes a fixed
+        // mesh, and the ABI has no forward point map over a DynamicSurface.
+        Representation::Dynamic => None,
     }
 }
 

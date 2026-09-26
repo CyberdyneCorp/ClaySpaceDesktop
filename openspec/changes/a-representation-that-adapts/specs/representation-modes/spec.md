@@ -18,3 +18,23 @@ explained to the sculptor and agent.
 #### Scenario: Layer is deliberately absent
 - **WHEN** a Dynamic layer is active
 - **THEN** Layer is absent from the default shelf and browsing it explains why it has no Dynamic binding
+
+### Requirement: Adaptive remeshing is scheduled per verb
+A Dynamic stroke SHALL remesh around each stamp at the time its verb needs:
+Move SHALL refine after its deformation, the deposit brushes (including Clay)
+SHALL refine before it, and Snake Hook SHALL refine both before and after. The
+schedule SHALL be stated per tool where the interface and the agent can read it
+rather than offered as one global setting, and a colour brush SHALL be refused
+on a Dynamic layer that carries no vertex colour rather than remeshing it.
+
+#### Scenario: A deposit refines before it deposits
+- **WHEN** a Standard stroke lands on a coarse Dynamic layer
+- **THEN** the layer has more triangles afterwards, and the same stroke on a mesh layer leaves the triangle count unchanged
+
+#### Scenario: A move refines what it stretched
+- **WHEN** a Move stroke drags a Dynamic layer's surface far from where it was
+- **THEN** the stretched region has gained triangles
+
+#### Scenario: Paint over a surface with no colour is refused
+- **WHEN** Paint is applied to a Dynamic layer read from a mesh without vertex colour
+- **THEN** the stroke is refused as a missing attribute and the surface and history are unchanged

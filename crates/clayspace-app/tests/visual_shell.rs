@@ -176,6 +176,7 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             held: 2,
             lost: vec!["Cabeça · hierarquia".into()],
         }),
+        adaptive: None,
         // A document whose surfaces carry rather more than its edit list does,
         // which is the case the breakdown exists for: the plain roll-up would
         // report the 40 MB and leave the 96 MB of sculpting session out.
@@ -1393,10 +1394,10 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
     // whose panel offers nothing is a panel with a heading and no rows.
     //
     // Not a single number for all of them. A field and a grid reach each other
-    // and a mesh; a mesh reaches all three of the others, since it is also the
-    // only way into a subdivision hierarchy; and a hierarchy reaches only a
-    // mesh, because a cage is built from one call and read back by one call and
-    // there is no third. Asserted per representation against the domain's own
+    // and a mesh; a mesh reaches all four of the others, since it is also the
+    // only way into a subdivision hierarchy and an adaptive surface; and each
+    // of those two reaches only a mesh, because each is built from one call and
+    // read back by one call and there is no third. Asserted per representation against the domain's own
     // table, so that a crossing added or withdrawn is a figure to update here
     // rather than a silent change in what this panel draws.
     for representation in clayspace_model::Representation::ALL {
@@ -1408,8 +1409,9 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
         );
         let expected = match representation {
             clayspace_model::Representation::Sdf | clayspace_model::Representation::Voxel => 2,
-            clayspace_model::Representation::Mesh => 3,
-            clayspace_model::Representation::Multires => 1,
+            clayspace_model::Representation::Mesh => 4,
+            clayspace_model::Representation::Multires
+            | clayspace_model::Representation::Dynamic => 1,
         };
         assert_eq!(
             crossings, expected,
@@ -4242,6 +4244,8 @@ fn a_crossing_aims_the_panel_rather_than_converting() {
 
 /// The bar sheds its phrases before it sheds anything else.
 ///
+/// Five cards and a mesh's four crossings keep their phrases at 1920 wide.
+///
 /// A ladder, not a switch: the crossings are what a sculptor cannot do
 /// without, the phrases explain a vocabulary once and then repeat themselves,
 /// and the heading is the least load-bearing word in the row. So a narrower
@@ -4249,7 +4253,7 @@ fn a_crossing_aims_the_panel_rather_than_converting() {
 ///
 /// What this does **not** claim is that everything fits at any width. It does
 /// not: at 1024 with both inspectors open the central region is under five
-/// hundred pixels, and three cards carrying `icon + name` plus two crossings
+/// hundred pixels, and five cards carrying `icon + name` plus the crossings
 /// need more than that. The bar scrolls there. Going further would mean cards
 /// of icon alone, and the design requires a representation to be told by icon
 /// *and* text — a shape on its own is exactly what the tests elsewhere here
@@ -4300,11 +4304,11 @@ fn a_narrow_bar_gives_up_its_phrases_first() {
         card.width()
     };
 
-    let roomy = card_width(1600.0);
+    let roomy = card_width(1920.0);
     let cramped = card_width(1024.0);
     assert!(
         cramped < roomy,
-        "the card is {cramped} wide at 1024 and {roomy} at 1600, so the bar          kept its phrases while the crossings ran off the end"
+        "the card is {cramped} wide at 1024 and {roomy} at 1920, so the bar          kept its phrases while the crossings ran off the end"
     );
 }
 

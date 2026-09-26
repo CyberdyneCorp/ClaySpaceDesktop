@@ -56,7 +56,7 @@ pub enum Icon {
     Curve,
     Undo,
     Redo,
-    /// The four representations, told apart by shape and never by hue: a
+    /// The representations, told apart by shape and never by hue: a
     /// field is nested contours around a form, a grid is cells, a mesh is
     /// triangles, and a hierarchy is a cage with the surface it implies inside
     /// it. Drawn because the representation bar states each one with an icon
@@ -66,10 +66,13 @@ pub enum Icon {
     VoxelRepresentation,
     MeshRepresentation,
     MultiresRepresentation,
+    /// A triangle refined unevenly, densest in one corner: a surface whose
+    /// triangles go where the brush needed them.
+    DynamicRepresentation,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 29] = [
+    pub const ALL: [Icon; 30] = [
         Self::Visible,
         Self::Hidden,
         Self::Locked,
@@ -99,6 +102,7 @@ impl Icon {
         Self::VoxelRepresentation,
         Self::MeshRepresentation,
         Self::MultiresRepresentation,
+        Self::DynamicRepresentation,
     ];
 
     /// What a screen reader or a tooltip says.
@@ -136,6 +140,7 @@ impl Icon {
             Self::VoxelRepresentation => "grade de voxels",
             Self::MeshRepresentation => "malha de triângulos",
             Self::MultiresRepresentation => "hierarquia de subdivisão",
+            Self::DynamicRepresentation => "superfície dinâmica",
         }
     }
 }
@@ -518,6 +523,20 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, icon: Icon, tint: egui::
                 egui::StrokeKind::Middle,
             );
             painter.circle_stroke(centre, half, stroke);
+        }
+        Icon::DynamicRepresentation => {
+            // The mesh's triangle, refined in one corner only: a fan of edges
+            // from the left vertex to the right side, crowded toward the top.
+            // Uneven on purpose — the mesh icon is split evenly by its
+            // midpoints, and density that follows the brush is what tells an
+            // adaptive surface from a fixed one at a glance.
+            let top = centre + egui::vec2(0.0, -unit * 0.66);
+            let left = centre + egui::vec2(-unit * 0.72, unit * 0.5);
+            let right = centre + egui::vec2(unit * 0.72, unit * 0.5);
+            painter.add(egui::Shape::closed_line(vec![top, left, right], stroke));
+            for t in [0.2f32, 0.4, 0.65] {
+                painter.line_segment([left, top + (right - top) * t], stroke);
+            }
         }
     }
 }

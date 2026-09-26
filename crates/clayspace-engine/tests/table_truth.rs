@@ -37,6 +37,8 @@ use clayspace_model::{
 };
 use std::collections::BTreeSet;
 
+mod adaptive_fixture;
+
 // -- the names ---------------------------------------------------------------
 
 /// Every verb the table names is a symbol the pinned engine declares.
@@ -208,6 +210,7 @@ fn every_tool_note_is_proved_here() {
             ToolNote::VoxelCreaseIsErodeRecipe => "voxel_crease_cuts_a_groove",
             ToolNote::VoxelSmearHasNoColourVerb => "a_recipe_is_expressible_and_is_marked_as_one",
             ToolNote::VoxelClayHasNoBuildup => "a_recipe_is_expressible_and_is_marked_as_one",
+            ToolNote::DynamicHasNoLayer => "layer_is_absent_on_an_adaptive_surface_for_real",
             // Both in `sdf_tool_identities.rs`, beside the measurements that
             // decided them.
             ToolNote::SdfPolishIsPlanar | ToolNote::SdfRelaxIsSmooth => {
@@ -312,6 +315,45 @@ fn a_colour_brush_on_a_hierarchy_is_refused_for_real() {
         "a hierarchy took a colour brush. It stores where a vertex went and \
          not what colour it is, so the colour would land in the level's \
          rebuildable cache and evaporate — which is worse than a refusal."
+    );
+}
+
+/// Layer has no binding on an adaptive surface, and the absence is the
+/// engine's rather than this table's.
+///
+/// Asked twice: the application refuses it with the note, and the engine,
+/// handed the verb directly on the same surface, refuses it too — so the note
+/// describes a boundary that exists rather than one this table invented.
+#[test]
+fn layer_is_absent_on_an_adaptive_surface_for_real() {
+    let mut mesh = worked(Representation::Mesh);
+    mesh.apply_stroke(
+        ToolKind::Camada,
+        painting(),
+        &path_over(Representation::Mesh),
+        [false; 3],
+    )
+    .expect("a mesh layer takes Layer, which is what makes the absence worth a note");
+
+    let mut adaptive = worked(Representation::Dynamic);
+    let refused = adaptive.apply_stroke(
+        ToolKind::Camada,
+        painting(),
+        &path_over(Representation::Dynamic),
+        [false; 3],
+    );
+    assert!(matches!(
+        refused,
+        Err(clayspace_model::ModelError::Unavailable(
+            clayspace_model::Unavailable::NoVerbHere {
+                note: Some(ToolNote::DynamicHasNoLayer),
+                ..
+            }
+        ))
+    ));
+    assert!(
+        !claycore::MeshBrush::Layer.offered_by_adaptive(),
+        "and the engine declines the verb on its own surface"
     );
 }
 
@@ -551,8 +593,9 @@ const MESH_CELL: f32 = 0.05;
 /// Where each fixture is worked, and where every stroke here is made.
 fn over(representation: Representation) -> [f32; 3] {
     match representation {
-        // The top of the starting sphere, and of the mesh carried off it.
-        Representation::Sdf | Representation::Mesh => [0.0, 0.0, 1.0],
+        // The top of the starting sphere, and of the mesh or adaptive surface
+        // carried off it.
+        Representation::Sdf | Representation::Mesh | Representation::Dynamic => [0.0, 0.0, 1.0],
         // The middle of the slab, and of the flat cage.
         Representation::Voxel | Representation::Multires => [0.0, 0.0, 0.0],
     }
@@ -568,6 +611,9 @@ fn worked(representation: Representation) -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     match representation {
         Representation::Multires => with_a_hierarchy_of(2).0,
+        // Read from a clean sphere rather than the marched mesh: see the
+        // fixture for why a marched mesh is refused.
+        Representation::Dynamic => adaptive_fixture::adaptive_sphere(),
         Representation::Voxel => {
             let mut document = ClayDocument::new(policy).expect("a document");
             document

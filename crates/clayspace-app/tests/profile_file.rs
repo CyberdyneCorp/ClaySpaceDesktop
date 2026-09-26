@@ -52,6 +52,7 @@ fn diagnostics() -> Diagnostics {
         }),
         mesh: None,
         hierarchies: None,
+        adaptive: None,
         memory: Some(MemoryDiagnostics {
             essential: 8 * 1024 * 1024,
             rebuildable: 2 * 1024 * 1024,

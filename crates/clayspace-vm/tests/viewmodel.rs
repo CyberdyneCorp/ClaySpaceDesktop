@@ -1486,6 +1486,42 @@ mod following_the_active_layer {
         assert_eq!(vm.substitution(), None);
     }
 
+    /// Switching to an adaptive layer offers its own shelf, and Layer — which
+    /// has no adaptive binding — falls back to the deposit that means the same
+    /// act, the same way every time, and the swap is reported.
+    #[test]
+    fn switching_to_a_dynamic_layer_offers_the_dynamic_shelf() {
+        for _ in 0..3 {
+            let (mut vm, representation) = fixture_with_layer_changes();
+            representation.set(Representation::Mesh);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                .expect("select");
+            vm.dispatch(Command::SelectTool(ToolKind::Camada))
+                .expect("layer is a mesh tool");
+
+            representation.set(Representation::Dynamic);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(2)))
+                .expect("select");
+
+            let in_hand = *vm.tool().get();
+            assert!(
+                in_hand.exists_on(Representation::Dynamic),
+                "{} is not on the dynamic shelf",
+                in_hand.label()
+            );
+            assert_ne!(in_hand, ToolKind::Camada);
+            assert_eq!(
+                in_hand,
+                ToolKind::Camada.substitute_on(Representation::Dynamic)
+            );
+            assert_eq!(in_hand.intent(), ToolKind::Camada.intent());
+            let substitution = vm.substitution().expect("the swap is reported");
+            assert_eq!(substitution.chosen, ToolKind::Camada);
+            assert_eq!(substitution.representation, Representation::Dynamic);
+            assert!(substitution.describe().contains("dynamic"));
+        }
+    }
+
     /// Switching away and back returns the tool that was chosen, not the one
     /// the switch away handed over.
     #[test]

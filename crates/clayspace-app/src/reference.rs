@@ -155,7 +155,9 @@ impl Scene {
             Representation::Sdf => Some(Self::Reference),
             Representation::Voxel => Some(Self::VoxelReference),
             Representation::Mesh => Some(Self::MeshReference),
-            Representation::Multires => None,
+            // Nor an adaptive surface yet, for the same reason: a member is
+            // a baseline every committed figure is compared against.
+            Representation::Multires | Representation::Dynamic => None,
         }
     }
 
@@ -492,7 +494,7 @@ impl Scene {
             // this enum's own answer and none of the five says so — and left
             // as a refusal rather than a `_` arm so that a member added
             // without a size to check it against fails here.
-            Representation::Multires => None,
+            Representation::Multires | Representation::Dynamic => None,
         }
     }
 

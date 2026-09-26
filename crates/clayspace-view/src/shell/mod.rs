@@ -1187,6 +1187,9 @@ fn representation_tag(representation: Representation) -> &'static str {
         // already has, and the word for this everywhere from ZBrush's SDiv to
         // Blender's Multiresolution is subdivision.
         Representation::Multires => "SUB",
+        // Never "MSH": an adaptive surface is not a mesh, and the row is
+        // where the difference is read at a glance.
+        Representation::Dynamic => "DYN",
     }
 }
 

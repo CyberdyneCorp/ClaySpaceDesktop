@@ -175,6 +175,9 @@ pub enum BooleanRefusal {
     /// One of the two is a subdivision hierarchy, whose layer holds the cage
     /// rather than the form the sculptor sees.
     Hierarchy { operand: String },
+    /// One of the two is an adaptive surface, whose layer holds the triangles
+    /// it was read from rather than the form the sculptor sees.
+    Adaptive { operand: String },
     /// One of the two is ghosted or locked.
     Protected { operand: String, ghost: bool },
     /// An intersection of two forms that do not meet, which is nothing.
@@ -201,6 +204,11 @@ impl std::fmt::Display for BooleanRefusal {
                 f,
                 "o subtool «{operand}» é uma hierarquia de subdivisão e não entra \
                  numa booleana; converta um nível para malha primeiro"
+            ),
+            Self::Adaptive { operand } => write!(
+                f,
+                "o subtool «{operand}» é uma superfície adaptativa e não entra \
+                 numa booleana; converta-o para malha primeiro"
             ),
             Self::Protected { operand, ghost } => write!(
                 f,
@@ -314,6 +322,11 @@ mod tests {
         };
         assert!(hierarchy.to_string().contains("Cabeça"));
         assert!(hierarchy.to_string().contains("hierarquia"));
+        let adaptive = BooleanRefusal::Adaptive {
+            operand: "Tronco".into(),
+        };
+        assert!(adaptive.to_string().contains("Tronco"));
+        assert!(adaptive.to_string().contains("adaptativa"));
         let ghosted = BooleanRefusal::Protected {
             operand: "Esfera".into(),
             ghost: true,

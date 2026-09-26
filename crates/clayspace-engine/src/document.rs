@@ -275,6 +275,13 @@ struct Layer {
     /// `None` for every other representation, and for a hierarchy row only
     /// between a document being read and its side-car being applied.
     multires: Option<crate::multires::Hierarchy>,
+    /// The adaptive surface this row stands for, where the row is one.
+    ///
+    /// Beside the layer for the hierarchy's reason: a `clay_dynamic_surface`
+    /// is an owning handle the document does not know about, so the row is a
+    /// mesh layer in the `.clayspace` plus this. See [`crate::adaptive`].
+    /// `None` for every other representation.
+    dynamic: Option<crate::adaptive::Adaptive>,
     /// The **authored** edges of this layer's faces, two vertex indices per
     /// edge, in the layer's own vertex order.
     ///
@@ -423,6 +430,7 @@ impl Layer {
             geometry_revision: 0,
             voxel_chunks: std::collections::BTreeMap::new(),
             multires: None,
+            dynamic: None,
             sculpt_layers: Vec::new(),
             symmetry: Self::STARTING_SYMMETRY,
             // A layer the engine has just made carries no mirror — axes
@@ -478,6 +486,16 @@ impl Layer {
     /// answer is no however much material they hold.
     fn is_in_the_field(&self) -> bool {
         self.representation == Representation::Sdf
+    }
+
+    /// The triangles last drawn for a row whose surface stands beside its
+    /// layer — a hierarchy's display level, or an adaptive surface.
+    fn drawn_triangles(&self) -> Option<(&[[f32; 3]], &[u32])> {
+        match (&self.multires, &self.dynamic) {
+            (Some(hierarchy), _) => hierarchy.drawn_triangles(),
+            (None, Some(adaptive)) => adaptive.drawn_triangles(),
+            (None, None) => None,
+        }
     }
 }
 
@@ -935,6 +953,14 @@ enum GestureRecord {
     /// take at level 4 over a 16×16 cage, and 8.15 ms to put back. The bytes
     /// are what [`crate::multires::HISTORY_BYTES`] bounds.
     Hierarchy(Vec<u8>),
+    /// An adaptive gesture, taken back by putting the surface's serialized
+    /// state back.
+    ///
+    /// A bounded snapshot rather than the engine's reversible topology delta,
+    /// which this application does not carry yet. Exact all the same — a
+    /// restore brings connectivity, positions and attributes back together —
+    /// and bounded by the same byte budget as a hierarchy's.
+    Adaptive(Vec<u8>),
 }
 
 /// One crossing, and the layer whose presence in the scene follows it.
@@ -1576,6 +1602,8 @@ pub struct ClayDocument {
     /// diagnostics report, which is the text a sculptor pastes when they ask
     /// why their sculpt came back flat.
     hierarchies_lost: Vec<String>,
+    /// The adaptive surfaces a reopen could not put back, for the same report.
+    surfaces_lost: Vec<String>,
     /// The layer being shown alone, while one is.
     solo: Option<Solo>,
     /// Visibility batches the history hops rather than stops on, newest last,
@@ -1742,6 +1770,7 @@ impl ClayDocument {
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),
+            surfaces_lost: Vec::new(),
             solo: None,
             visibility_undo: Vec::new(),
             visibility_redo: Vec::new(),
@@ -2417,6 +2446,7 @@ impl ClayDocument {
             Representation::Voxel => "voxel",
             Representation::Mesh => "Malha",
             Representation::Multires => "Hierarquia",
+            Representation::Dynamic => "Dinâmica",
         };
         let name = self.unique_layer_name(&format!("{} · {suffix}", source.name));
         // Where the source stands, so the result can take its place, and its
@@ -2443,6 +2473,8 @@ impl ClayDocument {
             Direction::VoxelToMesh => self.voxels_to_mesh(&name),
             Direction::MeshToMultires => self.mesh_to_multires(&name),
             Direction::MultiresToMesh => self.multires_to_mesh(&name),
+            Direction::MeshToDynamic => self.mesh_to_dynamic(&name),
+            Direction::DynamicToMesh => self.dynamic_to_mesh(&name),
         };
         // The source leaves and the result takes its row here rather than
         // after the group: it keeps the entries adjacent, which is what lets
@@ -3237,6 +3269,56 @@ impl ClayDocument {
         self.attach_meshed_layer(baked, name)
     }
 
+    /// The active mesh layer, read into an adaptive surface.
+    ///
+    /// Samples nothing, and refuses rather than repairs, as the cage crossing
+    /// does. The row that comes out carries the surface's own triangles — the
+    /// welded mesh, taken back off it — rather than the ones that went in, so
+    /// the layer saved in the file and the surface saved beside it describe
+    /// the same form.
+    fn mesh_to_dynamic(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let source = self.active_layer();
+        if !source.carries_geometry {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        let id = source.id;
+        let adaptive = self
+            .document
+            .dynamic_from_mesh_layer(id, crate::adaptive::Adaptive::desc())
+            .map(crate::adaptive::Adaptive::holding)
+            .map_err(crate::adaptive::refused)?;
+        let welded = adaptive.to_mesh()?;
+        let key = self.attach_meshed_layer(welded, name)?;
+        if let Ok(index) = self.index_of(key) {
+            self.layers[index].representation = Representation::Dynamic;
+            self.layers[index].dynamic = Some(adaptive);
+        }
+        self.refresh_dynamic_bounds(key);
+        // The fixed sculptor `attach_meshed_layer` armed is for the triangles
+        // the row holds in the file, and nothing sculpts those once the
+        // surface stands for the row: a stroke goes through the adaptive
+        // sculptor, and a pick through the surface's own triangles.
+        self.mesh_sculptors.borrow_mut().forget(key);
+        Ok(key)
+    }
+
+    /// The active adaptive surface as an ordinary mesh, whose topology is
+    /// fixed from here on.
+    ///
+    /// Priced by the engine's preflight before anything is made; a refusal
+    /// leaves the document as it was.
+    fn dynamic_to_mesh(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let index = self.active;
+        let Some(adaptive) = self.layers[index].dynamic.as_ref() else {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        };
+        let baked = adaptive.to_mesh()?;
+        if baked.index_count() == 0 {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        self.attach_meshed_layer(baked, name)
+    }
+
     /// Attaches a mesh this application produced as a new layer.
     ///
     /// The same call an import uses, so a converted mesh and an imported one
@@ -3309,11 +3391,9 @@ impl ClayDocument {
         // path instead. Marking it dirty would ask the cache to mark a layer
         // whose field is empty.
         // A hierarchy's layer is a mesh layer too — it holds the cage — so it
-        // has no bricks and no field for the same reason.
-        if matches!(
-            self.active_layer().representation,
-            Representation::Mesh | Representation::Multires
-        ) {
+        // has no bricks and no field for the same reason, and so has an
+        // adaptive surface's.
+        if self.active_layer().representation.carries_vertices() {
             self.refresh_stats();
             return Ok(key);
         }
@@ -6290,6 +6370,150 @@ impl ClayDocument {
         })
     }
 
+    /// A stroke on an adaptive surface, whose connectivity may change under
+    /// it.
+    ///
+    /// The mesh's descriptor and preset — see [`carried_stroke`] — through
+    /// `clay_dynamic_sculptor_apply_stroke`, which resolves the path and runs
+    /// each stamp's own remesh timing: a Grab refines after its drag, a Clay
+    /// before its deposit, a Snake Hook on both sides of its pull. Every verb,
+    /// Grab included, goes through the resolver, because the engine's Grab
+    /// gathers its region at the first stamp and *maintains* it across the
+    /// remesh; a lone stamp would re-gather over triangles it just split.
+    ///
+    /// **The record** is the surface's bytes before the gesture, taken once on
+    /// the first segment, for the hierarchy's reason: they are what a dragging
+    /// verb is laid down again from and what the gesture enters the undo
+    /// history as. See [`GestureRecord::Adaptive`].
+    fn stroke_dynamic(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        let Some(verb) = adaptive_verb(tool) else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let index = self.active;
+        let key = self.layers[index].key;
+
+        // Into the surface's own coordinates, as every carried representation
+        // takes a gesture.
+        let placement = self.carried_placement(key);
+        let carried = Self::carried_samples(&placement, samples);
+        let samples = carried.as_deref().unwrap_or(samples);
+        let mut brush = brush.sanitized();
+        if let Some(transform) = &placement {
+            brush.size /= transform.largest_scale();
+        }
+        let alpha = self.alpha_for(brush, Combine::Relief).cloned();
+        let chosen = self.colour.current().sanitized();
+        let preset = self.preset(brush, tool);
+
+        // Taken out of the layer for the stroke and put back on every path,
+        // for the reason `stroke_multires` gives.
+        let Some(mut adaptive) = self.layers[index].dynamic.take() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        // Refused before anything is recorded: over a surface with no colour
+        // the engine's paint remeshes and colours nothing.
+        if tool.writes_colour() && !adaptive.carries_colour() {
+            self.layers[index].dynamic = Some(adaptive);
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::MissingAttribute {
+                    needs: "vertex colour",
+                },
+            ));
+        }
+        let stroked = self.stroke_adaptive(
+            &mut adaptive,
+            verb,
+            tool,
+            carried_stroke(verb, brush, samples, preset, alpha.as_ref(), chosen),
+            symmetry,
+        );
+        self.layers[index].dynamic = Some(adaptive);
+        let changed = stroked?;
+
+        self.refresh_dynamic_bounds(key);
+        if self.previewing {
+            // Held rather than banked: one drag is one undo however many
+            // segments drew it.
+            self.live_generation = self.live_generation.wrapping_add(1);
+        } else {
+            self.bank_dynamic_gesture(key);
+        }
+        Ok(EditOutcome {
+            // Not in the brick cache: the viewport reads the surface's own
+            // triangles.
+            changed,
+            dirty_bricks: 0,
+        })
+    }
+
+    /// The engine half of [`ClayDocument::stroke_dynamic`], with the surface
+    /// held apart from the document.
+    fn stroke_adaptive(
+        &self,
+        adaptive: &mut crate::adaptive::Adaptive,
+        verb: claycore::MeshBrush,
+        tool: ToolKind,
+        stroke: CarriedStroke<'_>,
+        symmetry: [bool; 3],
+    ) -> Result<bool, ModelError> {
+        // A dragging verb is laid down again from its anchor on every segment,
+        // so the last one is taken back first.
+        if tool.is_path_driven() && adaptive.gesture_is_open() {
+            adaptive.replay_from_the_anchor()?;
+        }
+        adaptive.open_gesture()?;
+        let CarriedStroke {
+            preset,
+            stamp,
+            points,
+            ..
+        } = stroke;
+        let mask = self.active_mask();
+        let topology = crate::adaptive::Adaptive::topology();
+        let mut sculptor = adaptive
+            .surface_mut()
+            .sculptor()
+            .map_err(ModelError::engine)?;
+        let mut changed = false;
+        for mirror in mirrors(symmetry) {
+            let path: Vec<[f32; 5]> = points
+                .iter()
+                .map(|sample| {
+                    let at = mirror.point([sample[0], sample[1], sample[2]]);
+                    [at[0], at[1], at[2], sample[3], sample[4]]
+                })
+                .collect();
+            let (applied, _) = sculptor
+                .apply_stroke(
+                    &path,
+                    &preset,
+                    claycore::MeshStamp {
+                        verb,
+                        direction: mirror.vector(stamp.direction),
+                        center: mirror.point(stamp.center),
+                        // A seed names a numbering the adaptive surface does
+                        // not share: its vertices are created and retired by
+                        // the remesh.
+                        seed: None,
+                        ..stamp
+                    },
+                    Some(&topology),
+                    mask.as_deref(),
+                )
+                .map_err(ModelError::engine)?;
+            changed |= applied > 0;
+        }
+        drop(sculptor);
+        adaptive.note_gesture_changed(changed);
+        Ok(changed)
+    }
+
     /// The engine half of [`ClayDocument::stroke_multires`], with the
     /// hierarchy held apart from the document.
     ///
@@ -6712,6 +6936,28 @@ impl ClayDocument {
         self.trim_gesture_history();
     }
 
+    /// Banks the open adaptive gesture on a layer, if there is one, into the
+    /// same ordered stack as every other carried gesture.
+    fn bank_dynamic_gesture(&mut self, key: LayerKey) {
+        let Ok(index) = self.index_of(key) else {
+            return;
+        };
+        let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
+            return;
+        };
+        let Some(bytes) = adaptive.close_gesture() else {
+            return;
+        };
+        let stamp = self.stamp_history();
+        self.mesh_undo.push(MeshGesture {
+            layer: key,
+            what: GestureRecord::Adaptive(bytes),
+            stamp,
+        });
+        self.mesh_redo.clear();
+        self.trim_gesture_history();
+    }
+
     /// Where a ray meets the active layer's grid.
     ///
     /// Through a read-only borrow of the grid, which is what lets this answer
@@ -6771,7 +7017,11 @@ impl ClayDocument {
     /// which cost nothing to have: roughly 24,000 of them at level 3 over a
     /// 16x16 cage. It is linear, and a hierarchy deep enough for that to show
     /// is one where a partition rebuilt per dab would show far more.
-    fn pick_active_multires(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
+    ///
+    /// An adaptive surface is walked the same way and for a sharper version of
+    /// the same reason: its connectivity changes under every stroke, so a tree
+    /// over it is stale by construction.
+    fn pick_active_drawn(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
         let key = self.active_layer().key;
         // The ray carried into the hierarchy's own coordinates and the answer
         // carried back out, as every carried representation does it.
@@ -6784,7 +7034,7 @@ impl ClayDocument {
             None => (origin, direction),
         };
         let index = self.index_of(key).ok()?;
-        let (positions, indices) = self.layers[index].multires.as_ref()?.drawn_triangles()?;
+        let (positions, indices) = self.layers[index].drawn_triangles()?;
         let met = nearest_triangle(start, along, positions, indices)?;
         Some(match &placement {
             Some(transform) => Self::into_world(transform, met),
@@ -7351,6 +7601,9 @@ impl ClayDocument {
                 // the sculpt stands off the cage and drawing the cage would
                 // draw the form as it was before anybody touched it.
                 Representation::Multires => self.append_multires_layer(index, &mut carried),
+                // From the surface, never from the triangles the layer was read
+                // from: those are the form before any adaptive stroke.
+                Representation::Dynamic => self.append_dynamic_layer(index, &mut carried),
                 _ => self.append_mesh_layer(layer, &name, &mut carried),
             }
             // A layer that contributed nothing gets no span: an empty range is
@@ -7448,6 +7701,23 @@ impl ClayDocument {
             return;
         };
         let Some((positions, normals, colors, indices)) = hierarchy.level_mesh() else {
+            return;
+        };
+        Self::append_placed(carried, &placement, positions, normals, colors, indices);
+    }
+
+    /// Appends one adaptive surface, standing where its layer transform puts
+    /// it.
+    ///
+    /// Copied whole when the surface has moved and held otherwise, so a
+    /// resting frame pays nothing. Uploading only the chunks a stroke dirtied
+    /// is the next step for this path; what is here is correct at any size.
+    fn append_dynamic_layer(&mut self, index: usize, carried: &mut CarriedBuffer) {
+        let placement = self.carried_placement(self.layers[index].key);
+        let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
+            return;
+        };
+        let Some((positions, normals, colors, indices)) = adaptive.triangles() else {
             return;
         };
         Self::append_placed(carried, &placement, positions, normals, colors, indices);
@@ -7892,12 +8162,20 @@ impl ClayDocument {
                 .wrapping_mul(31)
                 .wrapping_add(u64::from(levels.count))
         });
+        // And every adaptive surface's revisions, for the hierarchy's reason:
+        // its layer's triangles are what it was read from and never move.
+        let adaptive = self.layers.iter().fold(0u64, |sum, layer| {
+            layer.dynamic.as_ref().map_or(sum, |adaptive| {
+                sum.wrapping_mul(31).wrapping_add(adaptive.drawn_revision())
+            })
+        });
         let meshes = (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64;
         meshes
             .wrapping_mul(31)
             .wrapping_add(grids)
             .wrapping_add(carried)
             .wrapping_add(hierarchies.wrapping_mul(4_000_037))
+            .wrapping_add(adaptive.wrapping_mul(5_000_011))
             // A preview banks nothing, so without this the number would sit
             // still while the drag was visibly moving the surface.
             .wrapping_add(self.live_generation.wrapping_mul(1_000_003))
@@ -8749,6 +9027,17 @@ impl ClayDocument {
                 self.refresh_multires_bounds(layer);
                 GestureRecord::Hierarchy(leaving)
             }
+            // The same one-state record, for the same reason: what goes the
+            // other way is the surface this step leaves, connectivity and all.
+            GestureRecord::Adaptive(bytes) => {
+                let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
+                    return Ok(None);
+                };
+                let leaving = adaptive.bytes(0)?;
+                adaptive.restore(&bytes)?;
+                self.refresh_dynamic_bounds(layer);
+                GestureRecord::Adaptive(leaving)
+            }
         };
         Ok(Some(MeshGesture { layer, what, stamp }))
     }
@@ -8765,7 +9054,7 @@ impl ClayDocument {
             stack
                 .iter()
                 .map(|gesture| match &gesture.what {
-                    GestureRecord::Hierarchy(bytes) => bytes.len(),
+                    GestureRecord::Hierarchy(bytes) | GestureRecord::Adaptive(bytes) => bytes.len(),
                     GestureRecord::Deltas(_) => 0,
                 })
                 .sum()
@@ -9529,6 +9818,7 @@ impl SculptModel for ClayDocument {
             Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),
             Representation::Mesh => self.stroke_mesh(tool, brush, samples, symmetry),
             Representation::Multires => self.stroke_multires(tool, brush, samples, symmetry),
+            Representation::Dynamic => self.stroke_dynamic(tool, brush, samples, symmetry),
         }
     }
 
@@ -9593,7 +9883,7 @@ impl SculptModel for ClayDocument {
             return Err(ModelError::Unavailable(
                 clayspace_model::Unavailable::NoVerbHere {
                     active: self.active_representation(),
-                    verbs: operation.verbs(),
+                    verbs: Box::new(operation.verbs()),
                     note: None,
                 },
             ));
@@ -9739,8 +10029,15 @@ impl SculptModel for ClayDocument {
         // cage its layer holds: the sculpt stands off the cage, so a ray
         // stopped at the cage would put the brush ring under the surface by
         // however much detail there is.
-        if self.active_representation() == Representation::Multires {
-            return self.pick_active_multires(origin, direction);
+        //
+        // An adaptive surface is picked the same way, against the triangles it
+        // draws: the ones its layer holds in the file are the ones it was read
+        // from, and every stroke since has changed them.
+        if matches!(
+            self.active_representation(),
+            Representation::Multires | Representation::Dynamic
+        ) {
+            return self.pick_active_drawn(origin, direction);
         }
         // Against the cache rather than the document: the cost is the ray's
         // path through the band rather than a march against the whole tape.
@@ -9902,6 +10199,21 @@ impl SculptModel for ClayDocument {
             .collect();
         for key in hierarchies {
             self.bank_multires_gesture(key);
+        }
+        // And every adaptive surface's, held on its layer for the same reason.
+        let surfaces: Vec<LayerKey> = self
+            .layers
+            .iter()
+            .filter(|layer| {
+                layer
+                    .dynamic
+                    .as_ref()
+                    .is_some_and(crate::adaptive::Adaptive::gesture_is_open)
+            })
+            .map(|layer| layer.key)
+            .collect();
+        for key in surfaces {
+            self.bank_dynamic_gesture(key);
         }
         // After everything the gesture wrote is committed and before the
         // settle, so a collapse is part of this gesture's history — one undo
@@ -10646,6 +10958,16 @@ fn hierarchy_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
     }
 }
 
+/// The same, narrowed by the one verb an adaptive surface declines.
+///
+/// Layer deposits up to a ceiling measured against where each vertex stood
+/// when the stroke began, and an adaptive stroke creates vertices that did not
+/// exist then — the engine refuses it rather than letting it become Draw for
+/// some vertices and Layer for others, and so does this.
+fn adaptive_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
+    mesh_verb(tool).filter(|verb| verb.offered_by_adaptive())
+}
+
 /// Kept so the routing type is visible to readers of this module's imports.
 const _: fn(Operation) -> &'static str = Operation::label;
 
@@ -10869,6 +11191,14 @@ impl SceneModel for ClayDocument {
                  camada de malha para multirresolução",
             ));
         }
+        // And once more: an adaptive surface is read from a mesh and there is
+        // no call that makes an empty one.
+        if representation == Representation::Dynamic {
+            return Err(ModelError::engine(
+                "uma superfície adaptativa vem de uma malha; converta uma \
+                 camada de malha para dinâmica",
+            ));
+        }
         // Made unique before the engine sees it. A voxel layer's grid is
         // reachable only by name (ClayCore #365), so two of them sharing one
         // shadow each other; `rename_layer` refuses a collision a sculptor
@@ -10898,7 +11228,7 @@ impl SceneModel for ClayDocument {
             return Err(ModelError::Unavailable(
                 clayspace_model::Unavailable::NoVerbHere {
                     active: layer.representation,
-                    verbs: clayspace_model::Verbs {
+                    verbs: Box::new(clayspace_model::Verbs {
                         sdf: None,
                         voxel: Some(clayspace_model::Binding::new(
                             "clay_voxel_begin_sculpt_layer",
@@ -10916,7 +11246,8 @@ impl SceneModel for ClayDocument {
                         // column stays empty so that pointing one at the other
                         // is a refusal rather than an off-by-one.
                         multires: None,
-                    },
+                        dynamic: None,
+                    }),
                     note: None,
                 },
             ));
@@ -10966,7 +11297,7 @@ impl SceneModel for ClayDocument {
             return Err(ModelError::Unavailable(
                 clayspace_model::Unavailable::NoVerbHere {
                     active: self.layers[index].representation,
-                    verbs: clayspace_model::Verbs {
+                    verbs: Box::new(clayspace_model::Verbs {
                         sdf: None,
                         voxel: None,
                         mesh: None,
@@ -10976,7 +11307,8 @@ impl SceneModel for ClayDocument {
                             clayspace_model::ExecutionFamily::MultiresVerb,
                             clayspace_model::Fidelity::Native,
                         )),
-                    },
+                        dynamic: None,
+                    }),
                     note: None,
                 },
             ));
@@ -11045,7 +11377,7 @@ impl SceneModel for ClayDocument {
             return Err(ModelError::Unavailable(
                 clayspace_model::Unavailable::NoVerbHere {
                     active: self.layers[index].representation,
-                    verbs: clayspace_model::Verbs {
+                    verbs: Box::new(clayspace_model::Verbs {
                         sdf: None,
                         voxel: None,
                         mesh: None,
@@ -11055,7 +11387,8 @@ impl SceneModel for ClayDocument {
                             clayspace_model::ExecutionFamily::MultiresVerb,
                             clayspace_model::Fidelity::Native,
                         )),
-                    },
+                        dynamic: None,
+                    }),
                     note: None,
                 },
             ));
@@ -11249,11 +11582,9 @@ impl SceneModel for ClayDocument {
         // A hierarchy answers from the same field and for the same reason. Its
         // layer holds the cage and carries no SDF content either, and what is
         // cached there is the *display level's* box — see
-        // `refresh_multires_bounds` for why it cannot be the cage's.
-        if matches!(
-            layer.representation,
-            Representation::Mesh | Representation::Multires
-        ) {
+        // `refresh_multires_bounds` for why it cannot be the cage's. An
+        // adaptive surface caches its own box there too.
+        if layer.representation.carries_vertices() {
             let measured = layer.mesh_bounds?;
             return Some(match self.carried_placement(key) {
                 Some(transform) => Self::placed_box(&transform, measured),
@@ -11791,6 +12122,93 @@ impl ClayDocument {
         }
     }
 
+    /// Writes every adaptive surface this document holds, beside it.
+    ///
+    /// Written whole, and removed when there are none, so a document that has
+    /// crossed its last surface back to a mesh leaves nothing behind to
+    /// promote a mesh row on the next open.
+    fn write_surfaces(&self, path: &std::path::Path) -> Result<(), ModelError> {
+        let held: Vec<crate::multires::Saved> = self
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(position, layer)| {
+                let adaptive = layer.dynamic.as_ref()?;
+                Some(
+                    adaptive
+                        .bytes(0)
+                        .map(|bytes| crate::multires::Saved { position, bytes }),
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        let sidecar = crate::adaptive::sidecar_for(path);
+        crate::adaptive::write_surfaces(&sidecar, &held).map_err(|e| {
+            ModelError::engine(format!(
+                "as superfícies adaptativas não puderam ser gravadas em {sidecar:?}: {e}"
+            ))
+        })
+    }
+
+    /// Puts every adaptive surface the side-car holds back on its row.
+    ///
+    /// The hierarchy's rule: a record that cannot be honoured drops that row,
+    /// which reopens as the mesh layer it demonstrably is, and the loss is
+    /// named. A row is made Dynamic only by a record naming it, and only when
+    /// the engine agrees it is a mesh layer.
+    fn read_surfaces(&mut self, path: &std::path::Path) {
+        let side_car = crate::adaptive::read_surfaces(&crate::adaptive::sidecar_for(path));
+        for fault in &side_car.faults {
+            self.surfaces_lost.push(match fault {
+                crate::multires::SideCarFault::Unreadable(e) => {
+                    format!("o arquivo de superfícies adaptativas não pôde ser lido: {e}")
+                }
+                crate::multires::SideCarFault::UnknownFormat => {
+                    "o arquivo de superfícies adaptativas está num formato desconhecido".to_string()
+                }
+                crate::multires::SideCarFault::Truncated { read } => format!(
+                    "o arquivo de superfícies adaptativas termina no meio de um \
+                     registro, depois de {read}"
+                ),
+            });
+        }
+        for record in side_car.records {
+            let Some(layer) = self.layers.get_mut(record.position) else {
+                self.surfaces_lost
+                    .push(format!("linha {}", record.position + 1));
+                continue;
+            };
+            if layer.representation != Representation::Mesh {
+                self.surfaces_lost.push(layer.name.clone());
+                continue;
+            }
+            match claycore::DynamicSurface::deserialize(&record.bytes) {
+                Ok(surface) => {
+                    layer.representation = Representation::Dynamic;
+                    layer.dynamic = Some(crate::adaptive::Adaptive::holding(surface));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "a superfície adaptativa da camada {:?} não pôde ser reconstruída: {e}",
+                        layer.name
+                    );
+                    self.surfaces_lost.push(layer.name.clone());
+                }
+            }
+        }
+    }
+
+    /// What the adaptive surfaces hold this session, and which were lost.
+    pub fn dynamic_diagnostics(&self) -> clayspace_model::MultiresDiagnostics {
+        clayspace_model::MultiresDiagnostics {
+            held: self
+                .layers
+                .iter()
+                .filter(|layer| layer.dynamic.is_some())
+                .count(),
+            lost: self.surfaces_lost.clone(),
+        }
+    }
+
     /// The spacing a collapse samples at.
     ///
     /// Taken from the brick cache, which is the one place that knows the scale
@@ -12017,6 +12435,10 @@ impl DocumentModel for ClayDocument {
         // where a sculpt was. Telling a sculptor their document did not save
         // is much the lesser harm.
         self.write_hierarchies(path)?;
+        // And the adaptive surfaces, which fail it for the same reason: the
+        // `.clayspace` holds the triangles each was read from and nothing a
+        // stroke has done since.
+        self.write_surfaces(path)?;
         Ok(())
     }
 
@@ -12203,6 +12625,7 @@ impl ClayDocument {
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),
+            surfaces_lost: Vec::new(),
             solo: None,
             visibility_undo: Vec::new(),
             visibility_redo: Vec::new(),
@@ -12277,6 +12700,10 @@ impl ClayDocument {
         // a hierarchy at all. So until this runs, nothing anywhere knows the
         // row was ever one.
         model.read_hierarchies(path);
+        // And the adaptive surfaces, for the same reason: the engine reports
+        // such a row as the mesh layer it was read from, and only the side-car
+        // says it was ever Dynamic.
+        model.read_surfaces(path);
 
         // And where every carried mesh's triangles are, for the same reason:
         // that box is cached on the layer and a layer rebuilt from a file
@@ -12288,17 +12715,13 @@ impl ClayDocument {
         let carried: Vec<(LayerKey, Representation)> = model
             .layers
             .iter()
-            .filter(|layer| {
-                matches!(
-                    layer.representation,
-                    Representation::Mesh | Representation::Multires
-                )
-            })
+            .filter(|layer| layer.representation.carries_vertices())
             .map(|layer| (layer.key, layer.representation))
             .collect();
         for (key, representation) in carried {
             match representation {
                 Representation::Multires => model.refresh_multires_bounds(key),
+                Representation::Dynamic => model.refresh_dynamic_bounds(key),
                 _ => model.refresh_mesh_bounds(key),
             }
         }
@@ -12412,6 +12835,10 @@ impl ExchangeModel for ClayDocument {
         // document edit inside something a sculptor did not ask to be an edit.
         // The route that exports a sculpt is the crossing that bakes a level
         // out to a mesh, which is one step and says what it gives up.
+        //
+        // An adaptive surface has the same gap for the same reason: its layer
+        // holds the triangles it was read from, and Dynamic → Mesh is the
+        // crossing that exports what the brush has made since.
         let mesh = self
             .document
             .mesh_combined(params)
@@ -12453,13 +12880,11 @@ impl ExchangeModel for ClayDocument {
     fn has_mesh_layers(&self) -> bool {
         // A hierarchy's row counts: its layer *is* a mesh layer — it holds the
         // cage — so it is one of the layers `mesh_combined` reaches and one of
-        // the things this question is asked in order to decide about.
-        self.layers.iter().any(|layer| {
-            matches!(
-                layer.representation,
-                Representation::Mesh | Representation::Multires
-            )
-        })
+        // the things this question is asked in order to decide about. An
+        // adaptive row's layer is a mesh layer for the same reason.
+        self.layers
+            .iter()
+            .any(|layer| layer.representation.carries_vertices())
     }
 }
 
@@ -13872,6 +14297,12 @@ impl MaskModel for ClayDocument {
                      converta um nível para malha e depois para SDF",
                 ))
             }
+            Representation::Dynamic => {
+                return Err(ModelError::engine(
+                    "uma superfície adaptativa não tem campo para extrudar; \
+                     converta-a para malha e depois para SDF",
+                ))
+            }
             Representation::Sdf => {}
         }
 
@@ -15132,6 +15563,19 @@ impl ClayDocument {
         self.layers[index].mesh_bounds = measured;
     }
 
+    /// The same for an adaptive surface: measured off the triangles it draws,
+    /// which are the surface's and not the ones its layer holds in the file.
+    fn refresh_dynamic_bounds(&mut self, key: LayerKey) {
+        let Ok(index) = self.index_of(key) else {
+            return;
+        };
+        let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
+            return;
+        };
+        let measured = adaptive.bounds();
+        self.layers[index].mesh_bounds = measured;
+    }
+
     /// The engine half of a placement: the item, then where it goes.
     ///
     /// Split out so the undo group around it has one thing to bracket and one
@@ -15712,7 +16156,7 @@ impl ClayDocument {
             return Err(ModelError::Unavailable(
                 clayspace_model::Unavailable::NoVerbHere {
                     active: layer.representation,
-                    verbs: OBJECT_VERBS,
+                    verbs: Box::new(OBJECT_VERBS),
                     note: None,
                 },
             ));
@@ -15790,10 +16234,15 @@ impl ClayDocument {
     /// then the other operand may already have been baked for nothing.
     fn operand_kind(&mut self, key: LayerKey) -> Result<Bounds, ModelError> {
         let index = self.index_of(key)?;
-        if self.layers[index].representation == Representation::Multires {
-            return Err(ModelError::Boolean(BooleanRefusal::Hierarchy {
-                operand: self.layers[index].name.clone(),
-            }));
+        let operand = self.layers[index].name.clone();
+        match self.layers[index].representation {
+            Representation::Multires => {
+                return Err(ModelError::Boolean(BooleanRefusal::Hierarchy { operand }))
+            }
+            Representation::Dynamic => {
+                return Err(ModelError::Boolean(BooleanRefusal::Adaptive { operand }))
+            }
+            Representation::Sdf | Representation::Voxel | Representation::Mesh => {}
         }
         self.operand_extent(key)
     }
@@ -15980,6 +16429,11 @@ impl ClayDocument {
             // route that works is to bake a level out first, which is one
             // crossing and says what it costs.
             Representation::Multires => Err(ModelError::Boolean(BooleanRefusal::Hierarchy {
+                operand: self.layers[index].name.clone(),
+            })),
+            // Refused for the same reason: the layer holds the triangles the
+            // surface was read from, not the form every stroke since has made.
+            Representation::Dynamic => Err(ModelError::Boolean(BooleanRefusal::Adaptive {
                 operand: self.layers[index].name.clone(),
             })),
         }
@@ -16374,10 +16828,16 @@ impl ObjectModel for ClayDocument {
     fn copyable_subtools(&mut self) -> Vec<(LayerKey, String)> {
         // What the bake can actually sample: a layer with an extent. An empty
         // one would copy to an empty subtool, and a mesh layer is carried
-        // rather than evaluated, so neither contributes a field to sample.
+        // rather than evaluated, so neither contributes a field to sample. Nor
+        // does an adaptive surface, which is carried triangles as well.
         self.layers
             .iter()
-            .filter(|layer| layer.representation != Representation::Mesh)
+            .filter(|layer| {
+                !matches!(
+                    layer.representation,
+                    Representation::Mesh | Representation::Dynamic
+                )
+            })
             .map(|layer| (layer.key, layer.name.clone()))
             .filter(|(key, _)| SceneModel::layer_bounds(self, *key).is_some())
             .collect()

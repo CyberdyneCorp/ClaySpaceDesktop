@@ -66,6 +66,12 @@ impl Screen {
                 self.upload(gpu, document);
                 Ok(())
             }
+            // An adaptive surface is drawn from its own triangles, through the
+            // same whole-buffer rebuild.
+            Representation::Dynamic => {
+                self.upload(gpu, document);
+                Ok(())
+            }
         }
     }
 

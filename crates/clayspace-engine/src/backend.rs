@@ -406,6 +406,7 @@ impl BackendPolicy {
             // renderer and the stalls.
             mesh: None,
             hierarchies: None,
+            adaptive: None,
             memory: None,
             // Which tool is in hand is the interface's answer and not this
             // layer's: the backend knows what the engine can do and not what

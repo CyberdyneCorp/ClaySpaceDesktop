@@ -46,6 +46,7 @@ pub(super) fn representation_icon(representation: Representation) -> Icon {
         Representation::Voxel => Icon::VoxelRepresentation,
         Representation::Mesh => Icon::MeshRepresentation,
         Representation::Multires => Icon::MultiresRepresentation,
+        Representation::Dynamic => Icon::DynamicRepresentation,
     }
 }
 

@@ -192,12 +192,13 @@ pub trait SculptModel {
         let _ = operation;
         Err(ModelError::Unavailable(crate::Unavailable::NoVerbHere {
             active: self.active_representation(),
-            verbs: crate::Verbs {
+            verbs: Box::new(crate::Verbs {
                 sdf: None,
                 voxel: None,
                 mesh: None,
                 multires: None,
-            },
+                dynamic: None,
+            }),
             note: None,
         }))
     }

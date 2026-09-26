@@ -112,8 +112,8 @@ pub use shape::{
 pub use surface::SurfaceOpacity;
 pub use tools::{
     entry_points, every_entry_point, Binding, BrushSettings, Drag, DragFalloff, Dynamics,
-    ExecutionFamily, Falloff, Fidelity, LayerOperation, LayerState, Representation, SemanticIntent,
-    Shaping, Substitution, ToolKind, ToolNote, Unavailable, Verbs, ViewPresetKind,
+    ExecutionFamily, Falloff, Fidelity, LayerOperation, LayerState, RemeshTiming, Representation,
+    SemanticIntent, Shaping, Substitution, ToolKind, ToolNote, Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
 pub use voxel_display::{SmoothBlur, VoxelDisplay};

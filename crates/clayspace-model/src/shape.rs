@@ -460,6 +460,8 @@ pub const OBJECT_VERBS: crate::Verbs = crate::Verbs {
     // item in an ordered list that is evaluated, and a hierarchy's surface is
     // stored rather than evaluated from a list.
     multires: None,
+    // Nor an adaptive surface, which is stored triangles like a mesh.
+    dynamic: None,
 };
 
 /// Where a form put into the scene goes.
@@ -867,7 +869,7 @@ pub trait ObjectModel {
     fn no_objects_here(&self) -> crate::ModelError {
         crate::ModelError::Unavailable(crate::Unavailable::NoVerbHere {
             active: crate::Representation::Sdf,
-            verbs: OBJECT_VERBS,
+            verbs: Box::new(OBJECT_VERBS),
             note: None,
         })
     }
