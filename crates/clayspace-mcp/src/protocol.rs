@@ -117,10 +117,13 @@ impl CallResult {
 pub trait ToolSurface: Send + Sync {
     fn tools(&self) -> Vec<ToolDescriptor>;
     fn call(&self, name: &str, arguments: &Value) -> Result<CallResult, Refusal>;
-    /// The MCP session making a call, for state that belongs to one caller.
+    /// The MCP session making a call, for state that belongs to one caller,
+    /// and the client name that session gave, which belongs to this request
+    /// rather than to the shared surface.
     fn call_scoped(
         &self,
         _caller: &str,
+        _client: Option<&str>,
         name: &str,
         arguments: &Value,
     ) -> Result<CallResult, Refusal> {
@@ -156,6 +159,7 @@ fn refusal_to_result(refusal: &Refusal) -> Value {
 pub struct Protocol<'a> {
     pub surface: &'a dyn ToolSurface,
     caller: Option<&'a str>,
+    client: Option<&'a str>,
 }
 
 impl<'a> Protocol<'a> {
@@ -163,13 +167,19 @@ impl<'a> Protocol<'a> {
         Self {
             surface,
             caller: None,
+            client: None,
         }
     }
 
-    pub fn for_caller(surface: &'a dyn ToolSurface, caller: &'a str) -> Self {
+    pub fn for_caller(
+        surface: &'a dyn ToolSurface,
+        caller: &'a str,
+        client: Option<&'a str>,
+    ) -> Self {
         Self {
             surface,
             caller: Some(caller),
+            client,
         }
     }
 
@@ -235,7 +245,9 @@ impl<'a> Protocol<'a> {
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
         let result = match self.caller {
-            Some(caller) => self.surface.call_scoped(caller, name, &arguments),
+            Some(caller) => self
+                .surface
+                .call_scoped(caller, self.client, name, &arguments),
             None => self.surface.call(name, &arguments),
         };
         match result {

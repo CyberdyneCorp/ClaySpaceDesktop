@@ -61,8 +61,8 @@ pub use diagnostics::{
 };
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
-    ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
-    WrittenMesh,
+    ExchangeModel, ExportMesher, ExportSettings, ExportWarning, ExportWarningKind, Format,
+    ImportAs, ImportSettings, WrittenMesh,
 };
 pub use field::{Clamped, FieldBudget, FieldRefusal};
 pub use gizmo::{

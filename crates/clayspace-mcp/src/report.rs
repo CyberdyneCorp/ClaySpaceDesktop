@@ -613,16 +613,16 @@ pub fn memory_state(diagnostics: &Diagnostics, footprint: Option<u64>) -> Option
         // application holds, which overlap nothing. `desenho` is the sum of
         // the four `desenho/` rows after it.
         parts: vec![
-            part("essencial", memory.essential),
-            part("reconstruível", memory.rebuildable),
-            part("desfazível", memory.undoable),
-            part("superfícies", memory.surface_bytes),
+            part("essential", memory.essential),
+            part("rebuildable", memory.rebuildable),
+            part("undoable", memory.undoable),
+            part("surfaces", memory.surface_bytes),
             part("cache", memory.cache_bytes),
-            part("desenho", drawing.total()),
-            part("desenho/geometria", drawing.geometry),
-            part("desenho/buffers", drawing.buffers),
-            part("desenho/staging", drawing.staging),
-            part("desenho/alvos", drawing.targets),
+            part("drawing", drawing.total()),
+            part("drawing/geometry", drawing.geometry),
+            part("drawing/buffers", drawing.buffers),
+            part("drawing/staging", drawing.staging),
+            part("drawing/targets", drawing.targets),
         ],
     })
 }
@@ -1091,11 +1091,11 @@ mod tests {
                 .find(|part| part.part == name)
                 .map(|part| part.bytes)
         };
-        assert_eq!(bytes("desenho"), Some(1000));
-        assert_eq!(bytes("desenho/geometria"), Some(100));
-        assert_eq!(bytes("desenho/buffers"), Some(200));
-        assert_eq!(bytes("desenho/staging"), Some(300));
-        assert_eq!(bytes("desenho/alvos"), Some(400));
+        assert_eq!(bytes("drawing"), Some(1000));
+        assert_eq!(bytes("drawing/geometry"), Some(100));
+        assert_eq!(bytes("drawing/buffers"), Some(200));
+        assert_eq!(bytes("drawing/staging"), Some(300));
+        assert_eq!(bytes("drawing/targets"), Some(400));
         assert_eq!(bytes("cache"), Some(7));
     }
 
@@ -1682,14 +1682,15 @@ mod tests {
                 decimate_to: Some(0.5),
             },
             &[clayspace_model::ExportWarning {
-                message: "não é estanque".into(),
+                message: "not watertight".into(),
+                kind: clayspace_model::ExportWarningKind::OpenBoundary(1),
             }],
         );
         assert_eq!(state.import.becomes, "clay");
         assert_eq!(state.import.scale, 2.0);
         assert_eq!(state.export.mesher, "sharp");
         assert_eq!(state.export.decimate_to, Some(0.5));
-        assert_eq!(state.export.findings, vec!["não é estanque".to_string()]);
+        assert_eq!(state.export.findings, vec!["not watertight".to_string()]);
     }
     /// The wire's gates and the window's gates are two enumerations of one
     /// idea, and a consent recorded under one tag has to be the consent asked

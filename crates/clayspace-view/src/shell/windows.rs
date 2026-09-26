@@ -360,7 +360,7 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
                 .max_height(ctx.screen_rect().height() * 0.45)
                 .show(ui, |ui| {
                     if heading(ui, s.section_diagnostics) {
-                        diagnostics_build(ui, d);
+                        diagnostics_build(ui, d, s);
                     }
                     // Second, above everything about this machine, and drawn
                     // whether or not anything is listening — for the reason
@@ -369,22 +369,22 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
                     // Whether a second party could have been driving is the
                     // first thing a defect report has to settle.
                     if heading(ui, s.section_agent) {
-                        diagnostics_agent(ui, d);
+                        diagnostics_agent(ui, d, s);
                     }
                     if heading(ui, s.label_backend) {
-                        diagnostics_backend(ui, d);
+                        diagnostics_backend(ui, d, s);
                     }
                     if d.render.is_some() && heading(ui, s.section_rendering) {
-                        diagnostics_render(ui, d);
+                        diagnostics_render(ui, d, s);
                     }
                     if d.mesh.is_some() && heading(ui, s.section_mesh_sculpting) {
-                        diagnostics_mesh(ui, d);
+                        diagnostics_mesh(ui, d, s);
                     }
                     if d.memory.is_some() && heading(ui, s.section_memory) {
-                        diagnostics_memory(ui, d);
+                        diagnostics_memory(ui, d, s);
                     }
                     if d.stroke.is_some() && heading(ui, s.section_stroke) {
-                        diagnostics_stroke(ui, d);
+                        diagnostics_stroke(ui, d, s);
                     }
                 });
 
@@ -418,11 +418,11 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
 }
 
 /// What was built: the application, the engine and where they came from.
-pub(super) fn diagnostics_build(ui: &mut egui::Ui, d: &Diagnostics) {
-    readout(ui, "Aplicação", d.app_version.clone());
-    readout(ui, "Motor", d.engine_version.clone());
-    readout(ui, "Revisão", d.engine_revision.clone());
-    readout(ui, "Plataforma", d.platform.clone());
+pub(super) fn diagnostics_build(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
+    readout(ui, s.diag_application, d.app_version.clone());
+    readout(ui, s.diag_engine, d.engine_version.clone());
+    readout(ui, s.diag_revision, d.engine_revision.clone());
+    readout(ui, s.diag_platform, d.platform.clone());
 }
 
 /// What is running: the backends, the one chosen, and what went wrong on it.
@@ -432,40 +432,46 @@ pub(super) fn diagnostics_build(ui: &mut egui::Ui, d: &Diagnostics) {
 /// and pasted into issues, and a key that reaches one of those is a session
 /// anyone reading it can drive — which is why the secret has a window of its
 /// own, behind a menu item, and is not here.
-pub(super) fn diagnostics_agent(ui: &mut egui::Ui, d: &Diagnostics) {
+pub(super) fn diagnostics_agent(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
     match &d.agent {
-        None => readout(ui, "Porta", "esta versão não tem porta"),
+        None => readout(ui, s.diag_door, s.diag_door_missing),
         Some(agent) if !agent.listening => {
-            readout(ui, "Porta", "fechada");
-            readout(ui, "Comandos de agente", agent.commands.to_string());
+            readout(ui, s.diag_door, s.diag_closed);
+            readout(ui, s.diag_agent_commands, agent.commands.to_string());
         }
         Some(agent) => {
-            readout(ui, "Porta", "ouvindo");
-            readout(ui, "Endereço", agent.address.clone());
-            readout(ui, "Clientes", agent.connected.to_string());
-            readout(ui, "Comandos de agente", agent.commands.to_string());
+            readout(ui, s.diag_door, s.diag_listening);
+            readout(ui, s.diag_address, agent.address.clone());
+            readout(ui, s.diag_clients, agent.connected.to_string());
+            readout(ui, s.diag_agent_commands, agent.commands.to_string());
         }
     }
 }
 
-pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
-    readout(ui, "Disponíveis", d.backends.join(", "));
+pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
+    readout(ui, s.diag_available, d.backends.join(", "));
     readout(
         ui,
-        "Ativo",
+        s.diag_active,
         format!("{} — {}", d.active_backend, d.selection),
     );
     if let Some(renderer) = &d.renderer {
-        readout(ui, "Vídeo", renderer.clone());
+        readout(ui, s.diag_video, renderer.clone());
     }
 
     // The stalls, which are what "it stutters" turns into. Listed even
     // when there are none, for the same reason as the fallbacks below.
     if d.stalls.is_empty() {
-        readout(ui, "Travamentos", "nenhum acima de um quadro");
+        readout(ui, s.diag_stalls, s.diag_no_stalls);
     } else {
         for stall in &d.stalls {
-            readout(ui, "Travamento", stall.clone());
+            let description =
+                if s.locale == clayspace_model::Locale::PtBr && !stall.contains("clay_") {
+                    stall.as_str()
+                } else {
+                    s.diag_stall_recorded
+                };
+            readout(ui, s.diag_stall, description);
         }
     }
 
@@ -473,14 +479,20 @@ pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
     // as "the panel is broken" rather than as "nothing fell back", and
     // a reader cannot tell the two apart.
     if d.fallbacks.is_empty() {
-        readout(ui, "Alternativas", "nenhuma nesta sessão");
+        readout(ui, s.diag_fallbacks, s.diag_none_this_session);
     } else {
         for fallback in &d.fallbacks {
-            readout(
-                ui,
-                "Alternativa",
-                format!("{} recusou {}", fallback.declined_by, fallback.operation),
-            );
+            let description = if s.locale == clayspace_model::Locale::PtBr
+                && !fallback.operation.contains("clay_")
+            {
+                format!(
+                    "{} {} {}",
+                    fallback.declined_by, s.diag_declined, fallback.operation
+                )
+            } else {
+                s.diag_fallback_recorded.to_string()
+            };
+            readout(ui, s.diag_fallback, description);
         }
     }
 }
@@ -493,14 +505,14 @@ pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
 /// nothing, and a stroke that reached nothing looks exactly like a stroke over
 /// a frozen mask. Reported at zero for the same reason the fallbacks are —
 /// silence would read as a broken panel rather than as a quiet session.
-pub(super) fn diagnostics_mesh(ui: &mut egui::Ui, d: &Diagnostics) {
+pub(super) fn diagnostics_mesh(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
     let Some(mesh) = &d.mesh else {
         return;
     };
-    readout(ui, "Esculturas em malha", format!("{}", mesh.sculptors));
+    readout(ui, s.diag_mesh_sculptors, format!("{}", mesh.sculptors));
     readout(
         ui,
-        "Sementes recusadas",
+        s.diag_rejected_seeds,
         format!("{}", mesh.stale_seeds_rejected),
     );
 }
@@ -520,36 +532,40 @@ pub(super) fn diagnostics_mesh(ui: &mut egui::Ui, d: &Diagnostics) {
 /// application asks each session what it costs and folds the answers in, and
 /// the row says how many it asked, so a surface tier of zero reads as "there
 /// are none" rather than as "nobody asked".
-pub(super) fn diagnostics_memory(ui: &mut egui::Ui, d: &Diagnostics) {
+pub(super) fn diagnostics_memory(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
     let Some(m) = &d.memory else {
         return;
     };
-    readout(ui, "Trabalho", megabytes(m.essential));
-    readout(ui, "Reconstruível", megabytes(m.rebuildable));
-    readout(ui, "Desfazer", megabytes(m.undoable));
-    readout(ui, "Total", megabytes(m.total));
+    readout(ui, s.diag_essential, megabytes(m.essential));
+    readout(ui, s.diag_rebuildable, megabytes(m.rebuildable));
+    readout(ui, s.diag_undo, megabytes(m.undoable));
+    readout(ui, s.diag_total, megabytes(m.total));
     readout(
         ui,
-        "Superfícies",
+        s.diag_surfaces,
         format!("{} · {}", m.surfaces, megabytes(m.surface_bytes)),
     );
     // What this application holds beside the document, and the figure the
     // status area shows with it folded in. The engine's total above is the
     // document; this is what the process is charged for it.
-    readout(ui, "Cache", megabytes(m.cache_bytes));
+    readout(ui, s.diag_cache, megabytes(m.cache_bytes));
     readout(
         ui,
-        "Desenho",
+        s.diag_drawing,
         format!(
-            "{} · {} geometria · {} buffers · {} staging · {} alvos",
+            "{} · {} {} · {} {} · {} {} · {} {}",
             megabytes(m.drawing.total()),
             megabytes(m.drawing.geometry),
+            s.diag_geometry,
             megabytes(m.drawing.buffers),
+            s.diag_buffers,
             megabytes(m.drawing.staging),
-            megabytes(m.drawing.targets)
+            s.diag_staging,
+            megabytes(m.drawing.targets),
+            s.diag_targets
         ),
     );
-    readout(ui, "Em uso", megabytes(m.in_use()));
+    readout(ui, s.diag_in_use, megabytes(m.in_use()));
 }
 
 /// Where a stroke's milliseconds went, phase by phase.
@@ -563,33 +579,33 @@ pub(super) fn diagnostics_memory(ui: &mut egui::Ui, d: &Diagnostics) {
 /// A phase that never ran says so rather than showing a zero. A zero reads as
 /// *free*, which is the reading that sends somebody looking in the wrong
 /// place.
-pub(super) fn diagnostics_stroke(ui: &mut egui::Ui, d: &Diagnostics) {
+pub(super) fn diagnostics_stroke(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
     let Some(stroke) = &d.stroke else {
         return;
     };
     if stroke.is_empty() {
-        return readout(ui, "Amostras", "nenhuma nesta sessão".to_string());
+        return readout(ui, s.diag_samples, s.diag_none_this_session.to_string());
     }
     for phase in &stroke.phases {
-        readout(ui, phase_name(&phase.phase), phase_cost(phase));
+        readout(ui, phase_name(&phase.phase, s), phase_cost(phase, s));
     }
 }
 
 /// The phase, in the interface's own words rather than the profile's keys.
-fn phase_name(phase: &str) -> &'static str {
+fn phase_name(phase: &str, s: &Strings) -> &'static str {
     match phase {
-        "engine edit" => "Motor · pincelada",
-        "engine mesh" => "Motor · malha",
-        "read" => "Nosso · leitura",
-        "split" => "Nosso · divisão",
-        _ => "Nosso · envio",
+        "engine edit" => s.diag_engine_edit,
+        "engine mesh" => s.diag_engine_mesh,
+        "read" => s.diag_our_read,
+        "split" => s.diag_our_split,
+        _ => s.diag_our_submit,
     }
 }
 
 /// The median and the worst, or the fact that there is neither.
-fn phase_cost(phase: &clayspace_model::PhaseCost) -> String {
+fn phase_cost(phase: &clayspace_model::PhaseCost, s: &Strings) -> String {
     let (Some(median), Some(worst)) = (phase.median, phase.worst) else {
-        return "sem amostras".to_string();
+        return s.diag_no_samples.to_string();
     };
     format!(
         "{:.2} / {:.2} ms · {}",
@@ -610,46 +626,58 @@ fn megabytes(bytes: u64) -> String {
 /// questions a rendering report is actually opened for — "why is this slow"
 /// and "is occlusion even running" — and a person who can reach the
 /// diagnostics window can reach the answer.
-pub(super) fn diagnostics_render(ui: &mut egui::Ui, d: &Diagnostics) {
+pub(super) fn diagnostics_render(ui: &mut egui::Ui, d: &Diagnostics, s: &Strings) {
     let Some(r) = &d.render else {
         return;
     };
     readout(
         ui,
-        "Área",
+        s.diag_area,
         format!("{}×{} · {}× MSAA", r.viewport[0], r.viewport[1], r.samples),
     );
     match &r.ao {
         Some(ao) => readout(
             ui,
-            "Oclusão",
+            s.diag_occlusion,
             format!(
-                "{}×{} · {} amostras · temporal {}",
+                "{}×{} · {} {} · {} {}",
                 ao.width,
                 ao.height,
                 ao.samples,
-                if ao.temporal { "ligada" } else { "desligada" }
+                s.diag_samples,
+                s.diag_temporal,
+                if ao.temporal {
+                    s.diag_enabled
+                } else {
+                    s.diag_disabled
+                }
             ),
         ),
-        None => readout(ui, "Oclusão", "desligada".to_string()),
+        None => readout(ui, s.diag_occlusion, s.diag_disabled.to_string()),
     }
     readout(
         ui,
-        "Desenhos",
+        s.diag_draw_calls,
         format!(
-            "{} · {} descartados · {} triângulos · {} linhas",
-            r.draw_calls, r.culled, r.triangles, r.lines
+            "{} · {} {} · {} {} · {} {}",
+            r.draw_calls,
+            r.culled,
+            s.diag_culled,
+            r.triangles,
+            s.diag_triangles,
+            r.lines,
+            s.diag_lines
         ),
     );
-    readout(ui, "Enviado", format!("{} bytes", r.uploaded_bytes));
+    readout(ui, s.diag_uploaded, format!("{} bytes", r.uploaded_bytes));
 
     // Listed even when the adapter cannot answer, for the reason the
     // fallbacks are: silence reads as a broken panel rather than as an
     // unmeasurable device, and a reader cannot tell the two apart.
     if !r.gpu_timing {
-        readout(ui, "GPU", "sem marcas de tempo neste adaptador".to_string());
+        readout(ui, "GPU", s.diag_no_gpu_timestamps.to_string());
     } else if r.gpu_passes.is_empty() {
-        readout(ui, "GPU", "nenhum quadro medido ainda".to_string());
+        readout(ui, "GPU", s.diag_no_gpu_frames.to_string());
     } else {
         let total: f32 = r.gpu_passes.iter().map(|(_, ms)| ms).sum();
         readout(ui, "GPU", format!("{total:.2} ms"));
@@ -786,7 +814,11 @@ pub fn convert_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut C
             );
             for direction in &available {
                 let chosen = settings.direction == *direction;
-                if ui.radio(chosen, direction.to().label()).clicked() && !chosen {
+                if ui
+                    .radio(chosen, s.representation_name(direction.to()))
+                    .clicked()
+                    && !chosen
+                {
                     settings.direction = *direction;
                     queue.push(Command::SetConversion(settings));
                 }
@@ -953,8 +985,8 @@ pub fn import_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
             );
             for becomes in ImportAs::ALL {
                 if ui
-                    .radio(settings.becomes == becomes, becomes.label())
-                    .on_hover_text(becomes.detail())
+                    .radio(settings.becomes == becomes, s.import_as_name(becomes))
+                    .on_hover_text(s.import_as_detail(becomes))
                     .clicked()
                 {
                     settings.becomes = becomes;
@@ -996,8 +1028,8 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
                     .color(Tokens::text_dim()),
             );
             for mesher in ExportMesher::ALL {
-                let response = ui.radio(settings.mesher == mesher, mesher.label());
-                let response = match mesher.caveat() {
+                let response = ui.radio(settings.mesher == mesher, s.export_mesher_name(mesher));
+                let response = match s.export_mesher_caveat(mesher) {
                     Some(caveat) => response.on_hover_text(caveat),
                     None => response,
                 };
@@ -1040,7 +1072,7 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
             if !state.export_warnings.is_empty() && heading(ui, s.section_warnings) {
                 for warning in state.export_warnings {
                     ui.label(
-                        egui::RichText::new(&warning.message)
+                        egui::RichText::new(s.export_warning(warning))
                             .size(type_scale::LABEL)
                             .color(Tokens::accent()),
                     );

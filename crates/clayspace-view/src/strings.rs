@@ -26,6 +26,10 @@ pub struct Strings {
     /// places that are not the interface: history entries, engine refusals and
     /// the diagnostics report.
     pub tool_names: [&'static str; clayspace_model::ToolKind::ALL.len()],
+    pub matcap_names: [&'static str; crate::matcap::MatCap::ALL.len()],
+    pub icon_descriptions: [&'static str; crate::icons::Icon::ALL.len()],
+    pub material_count_label: &'static str,
+    pub refusal_layer_ghost: &'static str,
     /// What each brush does, in one sentence, in the order of
     /// [`ToolKind::ALL`]. Shown under the name when a swatch is hovered.
     pub tool_hints: [&'static str; clayspace_model::ToolKind::ALL.len()],
@@ -78,6 +82,83 @@ pub struct Strings {
     /// reads the same in every language; these are the words a sculptor is
     /// offered when a new layer asks what it should be.
     pub representation_names: [&'static str; clayspace_model::Representation::ALL.len()],
+    pub import_as_names: [&'static str; clayspace_model::ImportAs::ALL.len()],
+    pub combine_amplitude: &'static str,
+    pub combine_smoothness: &'static str,
+    pub import_as_details: [&'static str; clayspace_model::ImportAs::ALL.len()],
+    pub export_mesher_names: [&'static str; clayspace_model::ExportMesher::ALL.len()],
+    pub export_mesher_caveats: [Option<&'static str>; clayspace_model::ExportMesher::ALL.len()],
+    pub export_does_not_store: &'static str,
+    pub export_texture_coordinates: &'static str,
+    pub export_vertex_colors: &'static str,
+    pub export_missing_normals: &'static str,
+    pub export_non_manifold: &'static str,
+    pub export_non_manifold_edges: &'static str,
+    pub export_open_boundary: &'static str,
+    pub export_boundary_edges: &'static str,
+    pub refusal_wrong_gesture: &'static str,
+    pub refusal_tool_unavailable: &'static str,
+    pub refusal_layer_protected: &'static str,
+    pub refusal_layer_hidden: &'static str,
+    pub refusal_layer_caged: &'static str,
+    pub refusal_missing_attribute: &'static str,
+    pub refusal_needs_pass: &'static str,
+    pub refusal_conversion: &'static str,
+    pub refusal_boolean: &'static str,
+    pub refusal_field: &'static str,
+    pub refusal_engine: &'static str,
+    pub agent_command: &'static str,
+    pub agent_history_edit: &'static str,
+    pub log_door_no_session: &'static str,
+    pub log_door_publish: &'static str,
+    pub log_door_open: &'static str,
+    pub log_detail_switch: &'static str,
+    pub log_recovery: &'static str,
+    pub log_import: &'static str,
+    pub log_alpha: &'static str,
+    pub log_export: &'static str,
+    pub log_surface_rebuild: &'static str,
+    pub log_mip_build: &'static str,
+    pub log_smooth_mesh: &'static str,
+    pub log_profile: &'static str,
+    pub log_rename: &'static str,
+    pub log_door_reopen: &'static str,
+    pub log_voxel_display: &'static str,
+    pub log_stall: &'static str,
+    pub log_final_remesh: &'static str,
+    pub log_engine: &'static str,
+    pub log_read: &'static str,
+    pub log_upload: &'static str,
+    pub log_other: &'static str,
+    pub dialog_save_sculpt: &'static str,
+    pub dialog_bake_destination: &'static str,
+    pub dialog_bake_stem: &'static str,
+    pub dialog_open_sculpt: &'static str,
+    pub dialog_recovered_title: &'static str,
+    pub dialog_recovered_question: &'static str,
+    pub dialog_import_mesh: &'static str,
+    pub dialog_export_mesh: &'static str,
+    pub dialog_load_alpha: &'static str,
+    pub dialog_mesh_filter: &'static str,
+    pub dialog_alpha_filter: &'static str,
+    pub dialog_unsaved_title: &'static str,
+    pub dialog_unsaved_question: &'static str,
+    pub status_document: &'static str,
+    pub status_reference: &'static str,
+    pub status_mask: &'static str,
+    pub status_object: &'static str,
+    pub status_lattice: &'static str,
+    pub status_curve: &'static str,
+    pub status_armature: &'static str,
+    pub status_scene: &'static str,
+    pub status_sculpt: &'static str,
+    pub status_boolean: &'static str,
+    pub status_cut: &'static str,
+    pub status_retopo: &'static str,
+    pub status_uv: &'static str,
+    pub status_conform: &'static str,
+    pub status_bake: &'static str,
+    pub notice_adjustment: &'static str,
     /// What each representation *is*, in one short phrase, for the card that
     /// stands for it in the representation bar.
     ///
@@ -549,6 +630,7 @@ pub struct Strings {
     /// every screenshot taken afterwards.
     pub hint_agent_secret: &'static str,
     pub title_agent_ask: &'static str,
+    pub agent_generic_client: &'static str,
     pub agent_ask_yes: &'static str,
     pub agent_ask_always: &'static str,
     pub agent_ask_no: &'static str,
@@ -710,6 +792,65 @@ pub struct Strings {
     pub action_attribution: &'static str,
     pub action_copy: &'static str,
     /// Writes the session's profile to a file, for the engine's authors.
+    pub diag_application: &'static str,
+    pub diag_engine: &'static str,
+    pub diag_revision: &'static str,
+    pub diag_platform: &'static str,
+    pub diag_door: &'static str,
+    pub diag_door_missing: &'static str,
+    pub diag_closed: &'static str,
+    pub diag_listening: &'static str,
+    pub diag_agent_commands: &'static str,
+    pub diag_address: &'static str,
+    pub diag_clients: &'static str,
+    pub diag_available: &'static str,
+    pub backend_automatic: &'static str,
+    pub backend_override: &'static str,
+    pub backend_override_unavailable: &'static str,
+    pub diag_active: &'static str,
+    pub diag_video: &'static str,
+    pub diag_stalls: &'static str,
+    pub diag_stall: &'static str,
+    pub diag_no_stalls: &'static str,
+    pub diag_stall_recorded: &'static str,
+    pub diag_fallback_recorded: &'static str,
+    pub diag_fallbacks: &'static str,
+    pub diag_fallback: &'static str,
+    pub diag_none_this_session: &'static str,
+    pub diag_declined: &'static str,
+    pub diag_mesh_sculptors: &'static str,
+    pub diag_rejected_seeds: &'static str,
+    pub diag_essential: &'static str,
+    pub diag_rebuildable: &'static str,
+    pub diag_undo: &'static str,
+    pub diag_total: &'static str,
+    pub diag_surfaces: &'static str,
+    pub diag_cache: &'static str,
+    pub diag_drawing: &'static str,
+    pub diag_in_use: &'static str,
+    pub diag_geometry: &'static str,
+    pub diag_buffers: &'static str,
+    pub diag_staging: &'static str,
+    pub diag_targets: &'static str,
+    pub diag_samples: &'static str,
+    pub diag_no_samples: &'static str,
+    pub diag_engine_edit: &'static str,
+    pub diag_engine_mesh: &'static str,
+    pub diag_our_read: &'static str,
+    pub diag_our_split: &'static str,
+    pub diag_our_submit: &'static str,
+    pub diag_area: &'static str,
+    pub diag_occlusion: &'static str,
+    pub diag_enabled: &'static str,
+    pub diag_disabled: &'static str,
+    pub diag_draw_calls: &'static str,
+    pub diag_culled: &'static str,
+    pub diag_triangles: &'static str,
+    pub diag_lines: &'static str,
+    pub diag_uploaded: &'static str,
+    pub diag_no_gpu_timestamps: &'static str,
+    pub diag_no_gpu_frames: &'static str,
+    pub diag_temporal: &'static str,
     pub action_export_profile: &'static str,
     /// What a debug build's durations are worth, asked before one is written.
     ///
@@ -735,6 +876,10 @@ pub struct Strings {
 
 /// The Portuguese strings, which the design specifies.
 const PT_BR: Strings = Strings {
+    matcap_names: ["MatCap Cinza 01", "MatCap Cinza 02", "Gesso", "Terracota", "Polido"],
+    icon_descriptions: ["visível", "oculto", "bloqueado", "fantasma", "expandir", "recolher", "adicionar", "remover", "mover", "girar", "escalar", "unir", "subtrair", "interseção", "afunilar", "torcer", "pintar máscara", "enquadrar", "malha", "formas", "gaiola", "referência", "curva", "desfazer", "refazer", "campo de distância", "grade de voxels", "malha de triângulos", "hierarquia de subdivisão"],
+    material_count_label: "materiais",
+    refusal_layer_ghost: "esta camada está fantasma",
     combine_names: [
         "Unir",
         "Subtrair",
@@ -851,7 +996,84 @@ const PT_BR: Strings = Strings {
         "Tamanho",
     ],
     insert_as_names: ["Novo subtool", "No subtool ativo"],
-    representation_names: ["Campo (SDF)", "Voxels", "Malha", "Multirresolução"],
+    representation_names: ["Campo (SDF)", "Voxels", "Malha", "Hierarquia"],
+    import_as_names: ["Referência", "Argila"],
+    combine_amplitude: "Amplitude",
+    combine_smoothness: "Suavidade",
+    import_as_details: ["mantém os triângulos; não é esculpível", "reamostra para um campo; passa a ser esculpível"],
+    export_mesher_names: ["Estanque", "Rápido", "Arestas vivas"],
+    export_mesher_caveats: [None, Some("não é uma malha manifold"), Some("experimental no motor")],
+    export_does_not_store: "não guarda",
+    export_texture_coordinates: "coordenadas de textura",
+    export_vertex_colors: "cores de vértice",
+    export_missing_normals: "camadas de malha sem normais removem as normais do resultado",
+    export_non_manifold: "a malha exportada não é manifold",
+    export_non_manifold_edges: "arestas com mais de duas faces",
+    export_open_boundary: "a malha exportada não é fechada",
+    export_boundary_edges: "arestas de borda",
+    refusal_wrong_gesture: "este pincel precisa de outro gesto",
+    refusal_tool_unavailable: "este pincel não atua nesta camada",
+    refusal_layer_protected: "esta camada está travada",
+    refusal_layer_hidden: "esta camada está oculta",
+    refusal_layer_caged: "aplique ou remova a gaiola antes de esculpir",
+    refusal_missing_attribute: "esta camada não tem o atributo necessário",
+    refusal_needs_pass: "selecione um passe primeiro",
+    refusal_conversion: "a conversão foi recusada; confira a representação e a resolução",
+    refusal_boolean: "a operação booleana foi recusada; confira os operandos",
+    refusal_field: "a forma ultrapassa a capacidade do campo",
+    refusal_engine: "o motor recusou a operação; confira a geometria ou tente outra configuração",
+    agent_command: "Comando",
+    agent_history_edit: "Edição anterior",
+    log_door_no_session: "sem diretório de sessão: a porta do agente fica fechada",
+    log_door_publish: "o endereço do agente não pôde ser publicado",
+    log_door_open: "a porta do agente não pôde ser aberta",
+    log_detail_switch: "o nível de detalhe não pôde ser trocado",
+    log_recovery: "a recuperação automática falhou",
+    log_import: "não foi possível importar",
+    log_alpha: "não foi possível carregar o alfa",
+    log_export: "não foi possível exportar",
+    log_surface_rebuild: "a superfície não pôde ser recomposta",
+    log_mip_build: "os níveis de detalhe não puderam ser construídos",
+    log_smooth_mesh: "a malha suave não pôde ser reconstruída",
+    log_profile: "o perfil não pôde ser escrito",
+    log_rename: "a camada não pôde ser renomeada",
+    log_door_reopen: "a porta do agente não pode ser reaberta nesta sessão",
+    log_voxel_display: "a exibição de voxels não pôde ser alterada",
+    log_stall: "a interface travou",
+    log_final_remesh: "re-malha final",
+    log_engine: "motor",
+    log_read: "leitura",
+    log_upload: "envio",
+    log_other: "resto",
+    dialog_save_sculpt: "Salvar escultura",
+    dialog_bake_destination: "Onde gravar os mapas",
+    dialog_bake_stem: "cozido",
+    dialog_open_sculpt: "Abrir escultura",
+    dialog_recovered_title: "Trabalho recuperado",
+    dialog_recovered_question: "A sessão anterior terminou inesperadamente. Recuperar o que estava aberto?",
+    dialog_import_mesh: "Importar malha",
+    dialog_export_mesh: "Exportar malha",
+    dialog_load_alpha: "Carregar alfa",
+    dialog_mesh_filter: "Malhas",
+    dialog_alpha_filter: "Alfas",
+    dialog_unsaved_title: "Alterações não salvas",
+    dialog_unsaved_question: "A escultura tem alterações que não foram salvas. Descartar?",
+    status_document: "a ação no documento foi recusada",
+    status_reference: "a imagem de referência não pôde ser carregada",
+    status_mask: "a ação da máscara foi recusada",
+    status_object: "a ação no objeto foi recusada",
+    status_lattice: "a ação da gaiola foi recusada",
+    status_curve: "a ação da curva foi recusada",
+    status_armature: "a ação do esqueleto foi recusada",
+    status_scene: "a ação da camada foi recusada",
+    status_sculpt: "este pincel não pode atuar aqui",
+    status_boolean: "a operação booleana foi recusada",
+    status_cut: "o corte foi recusado",
+    status_retopo: "a retopologia foi recusada",
+    status_uv: "a operação UV foi recusada",
+    status_conform: "a conformação foi recusada",
+    status_bake: "a gravação de textura foi recusada",
+    notice_adjustment: "a configuração foi ajustada para este documento",
     representation_sentences: [
         "Campo de distância com sinal",
         "Grade de voxels",
@@ -980,7 +1202,7 @@ libera em vez de congelar.",
     state_yes: "sim",
     state_no: "não",
     mesh_topology_fixed: "Topologia fixa: os pincéis movem os vértices que existem e não criam nem removem nenhum.",
-    section_multires: "MULTIRRESOLUÇÃO",
+    section_multires: "HIERARQUIA",
     multires_two_levels: "O nível em que o pincel escreve e o nível desenhado são dois números. O detalhe cortado num nível fino anda junto com a forma movida num nível grosso.",
     label_multires_levels: "Níveis",
     label_multires_sculpt_level: "Nível de escultura",
@@ -1197,6 +1419,7 @@ libera em vez de congelar.",
     title_agent_access: "Como conectar um cliente",
     hint_agent_secret: "Qualquer processo seu que leia esta chave dirige esta sessão. Não a cole em lugar nenhum.",
     title_agent_ask: "Um agente pede permissão",
+    agent_generic_client: "Um agente",
     agent_ask_yes: "Permitir uma vez",
     agent_ask_always: "Permitir sempre",
     agent_ask_no: "Recusar",
@@ -1300,6 +1523,65 @@ libera em vez de congelar.",
         action_shadows: "Sombra do estúdio",
     action_attribution: "Atribuições",
     action_copy: "Copiar relatório",
+    diag_application: "Aplicação",
+    diag_engine: "Motor",
+    diag_revision: "Revisão",
+    diag_platform: "Plataforma",
+    diag_door: "Porta",
+    diag_door_missing: "esta versão não tem porta",
+    diag_closed: "fechada",
+    diag_listening: "ouvindo",
+    diag_agent_commands: "Comandos de agente",
+    diag_address: "Endereço",
+    diag_clients: "Clientes",
+    diag_available: "Disponíveis",
+    backend_automatic: "escolha automática",
+    backend_override: "escolhido manualmente",
+    backend_override_unavailable: "escolha manual indisponível; automática",
+    diag_active: "Ativo",
+    diag_video: "Vídeo",
+    diag_stalls: "Travamentos",
+    diag_stall: "Travamento",
+    diag_no_stalls: "nenhum acima de um quadro",
+    diag_stall_recorded: "travamento registrado nesta sessão",
+    diag_fallback_recorded: "alternativa registrada nesta sessão",
+    diag_fallbacks: "Alternativas",
+    diag_fallback: "Alternativa",
+    diag_none_this_session: "nenhuma nesta sessão",
+    diag_declined: "recusou",
+    diag_mesh_sculptors: "Esculturas em malha",
+    diag_rejected_seeds: "Sementes recusadas",
+    diag_essential: "Trabalho",
+    diag_rebuildable: "Reconstruível",
+    diag_undo: "Desfazer",
+    diag_total: "Total",
+    diag_surfaces: "Superfícies",
+    diag_cache: "Cache",
+    diag_drawing: "Desenho",
+    diag_in_use: "Em uso",
+    diag_geometry: "geometria",
+    diag_buffers: "buffers",
+    diag_staging: "staging",
+    diag_targets: "alvos",
+    diag_samples: "Amostras",
+    diag_no_samples: "sem amostras",
+    diag_engine_edit: "Motor · pincelada",
+    diag_engine_mesh: "Motor · malha",
+    diag_our_read: "Nosso · leitura",
+    diag_our_split: "Nosso · divisão",
+    diag_our_submit: "Nosso · envio",
+    diag_area: "Área",
+    diag_occlusion: "Oclusão",
+    diag_enabled: "ligada",
+    diag_disabled: "desligada",
+    diag_draw_calls: "Desenhos",
+    diag_culled: "descartados",
+    diag_triangles: "triângulos",
+    diag_lines: "linhas",
+    diag_uploaded: "Enviado",
+    diag_no_gpu_timestamps: "sem marcas de tempo neste adaptador",
+    diag_no_gpu_frames: "nenhum quadro medido ainda",
+    diag_temporal: "temporal",
     action_export_profile: "Exportar perfil…",
     ask_profile_from_debug: "Esta é uma compilação de depuração: ela roda cerca de duas \
                              vezes e meia mais devagar, então os tempos deste arquivo não \
@@ -1320,6 +1602,10 @@ libera em vez de congelar.",
 
 /// The English strings.
 const EN_US: Strings = Strings {
+    matcap_names: ["MatCap Grey 01", "MatCap Grey 02", "Plaster", "Terracotta", "Polished"],
+    icon_descriptions: ["visible", "hidden", "locked", "ghost", "expand", "collapse", "add", "remove", "move", "rotate", "scale", "union", "subtract", "intersect", "taper", "twist", "paint mask", "frame", "polyframe", "shapes", "cage", "reference", "curve", "undo", "redo", "distance field", "voxel grid", "triangle mesh", "subdivision hierarchy"],
+    material_count_label: "materials",
+    refusal_layer_ghost: "this layer is ghosted",
     combine_names: [
         "Union",
         "Subtract",
@@ -1436,7 +1722,84 @@ const EN_US: Strings = Strings {
         "Size",
     ],
     insert_as_names: ["New subtool", "Into the active subtool"],
-    representation_names: ["Field (SDF)", "Voxels", "Mesh", "Multires"],
+    representation_names: ["Field (SDF)", "Voxels", "Mesh", "Hierarchy"],
+    import_as_names: ["Reference", "Clay"],
+    combine_amplitude: "Amplitude",
+    combine_smoothness: "Smoothness",
+    import_as_details: ["keeps the triangles; cannot be sculpted", "resamples into a field; can then be sculpted"],
+    export_mesher_names: ["Watertight", "Fast", "Sharp features"],
+    export_mesher_caveats: [None, Some("the mesh is not manifold"), Some("experimental in the engine")],
+    export_does_not_store: "does not store",
+    export_texture_coordinates: "texture coordinates",
+    export_vertex_colors: "vertex colors",
+    export_missing_normals: "mesh layers without normals remove normals from the result",
+    export_non_manifold: "the exported mesh is not manifold",
+    export_non_manifold_edges: "edges have more than two faces",
+    export_open_boundary: "the exported mesh is not watertight",
+    export_boundary_edges: "boundary edges",
+    refusal_wrong_gesture: "this brush needs a different gesture",
+    refusal_tool_unavailable: "this brush cannot act on this layer",
+    refusal_layer_protected: "this layer is locked",
+    refusal_layer_hidden: "this layer is hidden",
+    refusal_layer_caged: "apply or remove the cage before sculpting",
+    refusal_missing_attribute: "this layer lacks the required attribute",
+    refusal_needs_pass: "select a pass first",
+    refusal_conversion: "conversion was refused; check the representation and resolution",
+    refusal_boolean: "the boolean operation was refused; check the operands",
+    refusal_field: "the form exceeds the field's capacity",
+    refusal_engine: "the engine refused the operation; check the geometry or try other settings",
+    agent_command: "Command",
+    agent_history_edit: "Previous edit",
+    log_door_no_session: "no session directory: the agent door stays closed",
+    log_door_publish: "the agent address could not be published",
+    log_door_open: "the agent door could not be opened",
+    log_detail_switch: "the detail level could not be changed",
+    log_recovery: "automatic recovery failed",
+    log_import: "import failed",
+    log_alpha: "the alpha could not be loaded",
+    log_export: "export failed",
+    log_surface_rebuild: "the surface could not be rebuilt",
+    log_mip_build: "the detail levels could not be built",
+    log_smooth_mesh: "the smooth mesh could not be rebuilt",
+    log_profile: "the profile could not be written",
+    log_rename: "the layer could not be renamed",
+    log_door_reopen: "the agent door cannot be reopened in this session",
+    log_voxel_display: "the voxel display could not be changed",
+    log_stall: "the interface stalled",
+    log_final_remesh: "final remesh",
+    log_engine: "engine",
+    log_read: "read",
+    log_upload: "upload",
+    log_other: "other",
+    dialog_save_sculpt: "Save sculpture",
+    dialog_bake_destination: "Where to save the maps",
+    dialog_bake_stem: "baked",
+    dialog_open_sculpt: "Open sculpture",
+    dialog_recovered_title: "Recovered work",
+    dialog_recovered_question: "The previous session ended unexpectedly. Recover the open work?",
+    dialog_import_mesh: "Import mesh",
+    dialog_export_mesh: "Export mesh",
+    dialog_load_alpha: "Load alpha",
+    dialog_mesh_filter: "Meshes",
+    dialog_alpha_filter: "Alphas",
+    dialog_unsaved_title: "Unsaved changes",
+    dialog_unsaved_question: "The sculpture has unsaved changes. Discard them?",
+    status_document: "the document action was refused",
+    status_reference: "the reference image could not be loaded",
+    status_mask: "the mask action was refused",
+    status_object: "the object action was refused",
+    status_lattice: "the cage action was refused",
+    status_curve: "the curve action was refused",
+    status_armature: "the armature action was refused",
+    status_scene: "the layer action was refused",
+    status_sculpt: "this brush cannot act here",
+    status_boolean: "the boolean operation was refused",
+    status_cut: "the cut was refused",
+    status_retopo: "retopology was refused",
+    status_uv: "the UV operation was refused",
+    status_conform: "conforming was refused",
+    status_bake: "texture baking was refused",
+    notice_adjustment: "the setting was adjusted for this document",
     representation_sentences: [
         "Signed Distance Field",
         "Voxel Grid",
@@ -1564,7 +1927,7 @@ instead.",
     state_yes: "yes",
     state_no: "no",
     mesh_topology_fixed: "Fixed topology: the brushes move the vertices that are there and neither add nor remove any.",
-    section_multires: "MULTIRES",
+    section_multires: "HIERARCHY",
     multires_two_levels: "The level the brush writes on and the level being drawn are two numbers. Detail cut at a fine level rides on the form moved at a coarse one.",
     label_multires_levels: "Levels",
     label_multires_sculpt_level: "Sculpt level",
@@ -1778,6 +2141,7 @@ instead.",
     title_agent_access: "How to connect a client",
     hint_agent_secret: "Any process of yours that reads this key drives this session. Do not paste it anywhere.",
     title_agent_ask: "An agent is asking permission",
+    agent_generic_client: "An agent",
     agent_ask_yes: "Allow once",
     agent_ask_always: "Always allow",
     agent_ask_no: "Refuse",
@@ -1881,6 +2245,65 @@ instead.",
         action_shadows: "Studio shadow",
     action_attribution: "Attributions",
     action_copy: "Copy report",
+    diag_application: "Application",
+    diag_engine: "Engine",
+    diag_revision: "Revision",
+    diag_platform: "Platform",
+    diag_door: "Door",
+    diag_door_missing: "this build has no door",
+    diag_closed: "closed",
+    diag_listening: "listening",
+    diag_agent_commands: "Agent commands",
+    diag_address: "Address",
+    diag_clients: "Clients",
+    diag_available: "Available",
+    backend_automatic: "chosen automatically",
+    backend_override: "chosen manually",
+    backend_override_unavailable: "manual choice unavailable; chosen automatically",
+    diag_active: "Active",
+    diag_video: "Video",
+    diag_stalls: "Stalls",
+    diag_stall: "Stall",
+    diag_no_stalls: "none longer than one frame",
+    diag_stall_recorded: "stall recorded this session",
+    diag_fallback_recorded: "fallback recorded this session",
+    diag_fallbacks: "Fallbacks",
+    diag_fallback: "Fallback",
+    diag_none_this_session: "none this session",
+    diag_declined: "declined",
+    diag_mesh_sculptors: "Mesh sculptors",
+    diag_rejected_seeds: "Rejected seeds",
+    diag_essential: "Work",
+    diag_rebuildable: "Rebuildable",
+    diag_undo: "Undo",
+    diag_total: "Total",
+    diag_surfaces: "Surfaces",
+    diag_cache: "Cache",
+    diag_drawing: "Drawing",
+    diag_in_use: "In use",
+    diag_geometry: "geometry",
+    diag_buffers: "buffers",
+    diag_staging: "staging",
+    diag_targets: "targets",
+    diag_samples: "Samples",
+    diag_no_samples: "no samples",
+    diag_engine_edit: "Engine · stroke",
+    diag_engine_mesh: "Engine · mesh",
+    diag_our_read: "App · read",
+    diag_our_split: "App · split",
+    diag_our_submit: "App · submit",
+    diag_area: "Area",
+    diag_occlusion: "Occlusion",
+    diag_enabled: "on",
+    diag_disabled: "off",
+    diag_draw_calls: "Draw calls",
+    diag_culled: "culled",
+    diag_triangles: "triangles",
+    diag_lines: "lines",
+    diag_uploaded: "Uploaded",
+    diag_no_gpu_timestamps: "no timestamps on this adapter",
+    diag_no_gpu_frames: "no frames measured yet",
+    diag_temporal: "temporal",
     action_export_profile: "Export profile…",
     ask_profile_from_debug: "This is a debug build: it runs about two and a half times \
                              slower, so the timings in this file do not compare with \
@@ -1901,6 +2324,10 @@ instead.",
 
 /// The Latin American Spanish strings.
 const ES_419: Strings = Strings {
+    matcap_names: ["MatCap Gris 01", "MatCap Gris 02", "Yeso", "Terracota", "Pulido"],
+    icon_descriptions: ["visible", "oculto", "bloqueado", "fantasma", "expandir", "contraer", "añadir", "eliminar", "mover", "girar", "escalar", "unir", "sustraer", "intersección", "estrechar", "torcer", "pintar máscara", "encuadrar", "malla", "formas", "jaula", "referencia", "curva", "deshacer", "rehacer", "campo de distancia", "cuadrícula de vóxeles", "malla de triángulos", "jerarquía de subdivisión"],
+    material_count_label: "materiales",
+    refusal_layer_ghost: "esta capa es fantasma",
     combine_names: [
         "Unir",
         "Restar",
@@ -2017,7 +2444,84 @@ const ES_419: Strings = Strings {
         "Tamaño",
     ],
     insert_as_names: ["Nuevo subtool", "En el subtool activo"],
-    representation_names: ["Campo (SDF)", "Vóxeles", "Malla", "Multirresolución"],
+    representation_names: ["Campo (SDF)", "Vóxeles", "Malla", "Jerarquía"],
+    import_as_names: ["Referencia", "Arcilla"],
+    combine_amplitude: "Amplitud",
+    combine_smoothness: "Suavidad",
+    import_as_details: ["conserva los triángulos; no se puede esculpir", "remuestrea en un campo; se puede esculpir"],
+    export_mesher_names: ["Hermético", "Rápido", "Aristas definidas"],
+    export_mesher_caveats: [None, Some("la malla no es manifold"), Some("experimental en el motor")],
+    export_does_not_store: "no guarda",
+    export_texture_coordinates: "coordenadas de textura",
+    export_vertex_colors: "colores de vértice",
+    export_missing_normals: "las capas de malla sin normales eliminan las normales del resultado",
+    export_non_manifold: "la malla exportada no es manifold",
+    export_non_manifold_edges: "aristas con más de dos caras",
+    export_open_boundary: "la malla exportada no está cerrada",
+    export_boundary_edges: "aristas de borde",
+    refusal_wrong_gesture: "este pincel necesita otro gesto",
+    refusal_tool_unavailable: "este pincel no funciona en esta capa",
+    refusal_layer_protected: "esta capa está bloqueada",
+    refusal_layer_hidden: "esta capa está oculta",
+    refusal_layer_caged: "aplica o quita la jaula antes de esculpir",
+    refusal_missing_attribute: "esta capa carece del atributo necesario",
+    refusal_needs_pass: "selecciona una pasada primero",
+    refusal_conversion: "se rechazó la conversión; revisa la representación y la resolución",
+    refusal_boolean: "se rechazó la operación booleana; revisa los operandos",
+    refusal_field: "la forma supera la capacidad del campo",
+    refusal_engine: "el motor rechazó la operación; revisa la geometría o prueba otra configuración",
+    agent_command: "Comando",
+    agent_history_edit: "Edición anterior",
+    log_door_no_session: "sin directorio de sesión: la puerta del agente permanece cerrada",
+    log_door_publish: "no se pudo publicar la dirección del agente",
+    log_door_open: "no se pudo abrir la puerta del agente",
+    log_detail_switch: "no se pudo cambiar el nivel de detalle",
+    log_recovery: "falló la recuperación automática",
+    log_import: "falló la importación",
+    log_alpha: "no se pudo cargar el alfa",
+    log_export: "falló la exportación",
+    log_surface_rebuild: "no se pudo reconstruir la superficie",
+    log_mip_build: "no se pudieron construir los niveles de detalle",
+    log_smooth_mesh: "no se pudo reconstruir la malla suave",
+    log_profile: "no se pudo escribir el perfil",
+    log_rename: "no se pudo renombrar la capa",
+    log_door_reopen: "la puerta del agente no se puede reabrir en esta sesión",
+    log_voxel_display: "no se pudo cambiar la visualización de vóxeles",
+    log_stall: "la interfaz se bloqueó",
+    log_final_remesh: "remallado final",
+    log_engine: "motor",
+    log_read: "lectura",
+    log_upload: "envío",
+    log_other: "resto",
+    dialog_save_sculpt: "Guardar escultura",
+    dialog_bake_destination: "Dónde guardar los mapas",
+    dialog_bake_stem: "horneado",
+    dialog_open_sculpt: "Abrir escultura",
+    dialog_recovered_title: "Trabajo recuperado",
+    dialog_recovered_question: "La sesión anterior terminó inesperadamente. ¿Recuperar el trabajo abierto?",
+    dialog_import_mesh: "Importar malla",
+    dialog_export_mesh: "Exportar malla",
+    dialog_load_alpha: "Cargar alfa",
+    dialog_mesh_filter: "Mallas",
+    dialog_alpha_filter: "Alfas",
+    dialog_unsaved_title: "Cambios sin guardar",
+    dialog_unsaved_question: "La escultura tiene cambios sin guardar. ¿Descartarlos?",
+    status_document: "se rechazó la acción del documento",
+    status_reference: "no se pudo cargar la imagen de referencia",
+    status_mask: "se rechazó la acción de la máscara",
+    status_object: "se rechazó la acción del objeto",
+    status_lattice: "se rechazó la acción de la jaula",
+    status_curve: "se rechazó la acción de la curva",
+    status_armature: "se rechazó la acción del esqueleto",
+    status_scene: "se rechazó la acción de la capa",
+    status_sculpt: "este pincel no puede actuar aquí",
+    status_boolean: "se rechazó la operación booleana",
+    status_cut: "se rechazó el corte",
+    status_retopo: "se rechazó la retopología",
+    status_uv: "se rechazó la operación UV",
+    status_conform: "se rechazó la conformación",
+    status_bake: "se rechazó el horneado de texturas",
+    notice_adjustment: "se ajustó la configuración para este documento",
     representation_sentences: [
         "Campo de distancia con signo",
         "Rejilla de vóxeles",
@@ -2146,7 +2650,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     state_yes: "sí",
     state_no: "no",
     mesh_topology_fixed: "Topología fija: los pinceles mueven los vértices que existen y no crean ni eliminan ninguno.",
-    section_multires: "MULTIRRESOLUCIÓN",
+    section_multires: "JERARQUÍA",
     multires_two_levels: "El nivel en el que escribe el pincel y el nivel que se dibuja son dos números. El detalle cortado en un nivel fino viaja con la forma movida en uno grueso.",
     label_multires_levels: "Niveles",
     label_multires_sculpt_level: "Nivel de escultura",
@@ -2369,6 +2873,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     title_agent_access: "Cómo conectar un cliente",
     hint_agent_secret: "Cualquier proceso tuyo que lea esta clave maneja esta sesión. No la pegues en ningún lado.",
     title_agent_ask: "Un agente pide permiso",
+    agent_generic_client: "Un agente",
     agent_ask_yes: "Permitir una vez",
     agent_ask_always: "Permitir siempre",
     agent_ask_no: "Rechazar",
@@ -2474,6 +2979,65 @@ lados. Con Ctrl, libera en vez de congelar.",
         action_shadows: "Sombra do estúdio",
     action_attribution: "Atribuciones",
     action_copy: "Copiar informe",
+    diag_application: "Aplicación",
+    diag_engine: "Motor",
+    diag_revision: "Revisión",
+    diag_platform: "Plataforma",
+    diag_door: "Puerta",
+    diag_door_missing: "esta versión no tiene puerta",
+    diag_closed: "cerrada",
+    diag_listening: "escuchando",
+    diag_agent_commands: "Comandos de agente",
+    diag_address: "Dirección",
+    diag_clients: "Clientes",
+    diag_available: "Disponibles",
+    backend_automatic: "elección automática",
+    backend_override: "elegido manualmente",
+    backend_override_unavailable: "elección manual no disponible; elección automática",
+    diag_active: "Activo",
+    diag_video: "Vídeo",
+    diag_stalls: "Bloqueos",
+    diag_stall: "Bloqueo",
+    diag_no_stalls: "ninguno mayor que un fotograma",
+    diag_stall_recorded: "bloqueo registrado en esta sesión",
+    diag_fallback_recorded: "alternativa registrada en esta sesión",
+    diag_fallbacks: "Alternativas",
+    diag_fallback: "Alternativa",
+    diag_none_this_session: "ninguna en esta sesión",
+    diag_declined: "rechazó",
+    diag_mesh_sculptors: "Escultores de malla",
+    diag_rejected_seeds: "Semillas rechazadas",
+    diag_essential: "Trabajo",
+    diag_rebuildable: "Reconstruible",
+    diag_undo: "Deshacer",
+    diag_total: "Total",
+    diag_surfaces: "Superficies",
+    diag_cache: "Caché",
+    diag_drawing: "Dibujo",
+    diag_in_use: "En uso",
+    diag_geometry: "geometría",
+    diag_buffers: "búferes",
+    diag_staging: "preparación",
+    diag_targets: "objetivos",
+    diag_samples: "Muestras",
+    diag_no_samples: "sin muestras",
+    diag_engine_edit: "Motor · trazo",
+    diag_engine_mesh: "Motor · malla",
+    diag_our_read: "Aplicación · lectura",
+    diag_our_split: "Aplicación · división",
+    diag_our_submit: "Aplicación · envío",
+    diag_area: "Área",
+    diag_occlusion: "Oclusión",
+    diag_enabled: "activada",
+    diag_disabled: "desactivada",
+    diag_draw_calls: "Dibujos",
+    diag_culled: "descartados",
+    diag_triangles: "triángulos",
+    diag_lines: "líneas",
+    diag_uploaded: "Enviados",
+    diag_no_gpu_timestamps: "sin marcas de tiempo en este adaptador",
+    diag_no_gpu_frames: "ningún fotograma medido todavía",
+    diag_temporal: "temporal",
     action_export_profile: "Exportar perfil…",
     ask_profile_from_debug: "Esta es una compilación de depuración: se ejecuta unas dos \
                              veces y media más lento, así que los tiempos de este archivo \
@@ -2762,6 +3326,103 @@ impl Strings {
         )
     }
 
+    pub fn import_as_name(&self, what: clayspace_model::ImportAs) -> &'static str {
+        Self::at(&self.import_as_names, clayspace_model::ImportAs::ALL, what)
+    }
+
+    pub fn icon_description(&self, icon: crate::icons::Icon) -> &'static str {
+        Self::at(&self.icon_descriptions, crate::icons::Icon::ALL, icon)
+    }
+
+    pub fn matcap_name(&self, what: crate::matcap::MatCap) -> &'static str {
+        Self::at(&self.matcap_names, crate::matcap::MatCap::ALL, what)
+    }
+
+    pub fn combine_radius_label(&self, settings: clayspace_model::CombineSettings) -> &'static str {
+        if settings.op.displaces_along_the_normal() {
+            self.combine_amplitude
+        } else {
+            self.combine_smoothness
+        }
+    }
+
+    pub fn import_as_detail(&self, what: clayspace_model::ImportAs) -> &'static str {
+        Self::at(
+            &self.import_as_details,
+            clayspace_model::ImportAs::ALL,
+            what,
+        )
+    }
+
+    pub fn export_mesher_name(&self, what: clayspace_model::ExportMesher) -> &'static str {
+        Self::at(
+            &self.export_mesher_names,
+            clayspace_model::ExportMesher::ALL,
+            what,
+        )
+    }
+
+    pub fn export_mesher_caveat(
+        &self,
+        what: clayspace_model::ExportMesher,
+    ) -> Option<&'static str> {
+        clayspace_model::ExportMesher::ALL
+            .iter()
+            .position(|candidate| *candidate == what)
+            .and_then(|index| self.export_mesher_caveats[index])
+    }
+
+    pub fn export_warning(&self, warning: &clayspace_model::ExportWarning) -> String {
+        use clayspace_model::ExportWarningKind as Kind;
+        match warning.kind {
+            Kind::DropsTextureCoordinates(format) => format!(
+                "{} {} {}",
+                format.extension().to_uppercase(),
+                self.export_does_not_store,
+                self.export_texture_coordinates
+            ),
+            Kind::DropsVertexColors(format) => format!(
+                "{} {} {}",
+                format.extension().to_uppercase(),
+                self.export_does_not_store,
+                self.export_vertex_colors
+            ),
+            Kind::Mesher(mesher) => format!(
+                "{}: {}",
+                self.export_mesher_name(mesher),
+                self.export_mesher_caveat(mesher).unwrap_or("")
+            ),
+            Kind::MissingNormals => self.export_missing_normals.to_string(),
+            Kind::NonManifold(edges) => format!(
+                "{}: {} {}",
+                self.export_non_manifold, edges, self.export_non_manifold_edges
+            ),
+            Kind::OpenBoundary(edges) => format!(
+                "{}: {} {}",
+                self.export_open_boundary, edges, self.export_boundary_edges
+            ),
+        }
+    }
+
+    pub fn model_refusal(&self, error: &clayspace_model::ModelError) -> &'static str {
+        use clayspace_model::{ModelError, Unavailable};
+        match error {
+            ModelError::Unavailable(reason) => match reason {
+                Unavailable::WrongGesture { .. } => self.refusal_wrong_gesture,
+                Unavailable::NoVerbHere { .. } => self.refusal_tool_unavailable,
+                Unavailable::LayerProtected => self.refusal_layer_protected,
+                Unavailable::LayerHidden => self.refusal_layer_hidden,
+                Unavailable::LayerCaged => self.refusal_layer_caged,
+                Unavailable::MissingAttribute { .. } => self.refusal_missing_attribute,
+                Unavailable::NeedsAPass => self.refusal_needs_pass,
+            },
+            ModelError::Conversion(_) => self.refusal_conversion,
+            ModelError::Boolean(_) => self.refusal_boolean,
+            ModelError::Field(_) => self.refusal_field,
+            ModelError::Engine(_) => self.refusal_engine,
+        }
+    }
+
     pub fn panel_name(&self, panel: crate::layout::Panel) -> &'static str {
         Self::at(&self.panel_names, crate::layout::Panel::ALL, panel)
     }
@@ -2807,8 +3468,8 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 270] {
-        [
+    pub fn all(&self) -> Vec<&'static str> {
+        let mut all = vec![
             self.label_autosave_in,
             self.state_autosaved,
             self.shelf_filter_favourites,
@@ -3079,7 +3740,157 @@ impl Strings {
             self.state_unsaved,
             self.state_nothing_changed,
             self.document_untitled,
-        ]
+        ];
+        all.extend(self.import_as_names);
+        all.extend(self.matcap_names);
+        all.extend(self.icon_descriptions);
+        all.push(self.material_count_label);
+        all.push(self.refusal_layer_ghost);
+        all.extend(self.import_as_details);
+        all.extend(self.export_mesher_names);
+        all.extend(self.export_mesher_caveats.into_iter().flatten());
+        all.extend([
+            self.export_does_not_store,
+            self.export_texture_coordinates,
+            self.export_vertex_colors,
+            self.export_missing_normals,
+            self.export_non_manifold,
+            self.export_non_manifold_edges,
+            self.export_open_boundary,
+            self.export_boundary_edges,
+            self.refusal_wrong_gesture,
+            self.refusal_tool_unavailable,
+            self.refusal_layer_protected,
+            self.refusal_layer_hidden,
+            self.refusal_layer_caged,
+            self.refusal_missing_attribute,
+            self.refusal_needs_pass,
+            self.refusal_conversion,
+            self.refusal_boolean,
+            self.refusal_field,
+            self.refusal_engine,
+            self.agent_command,
+            self.agent_history_edit,
+            self.status_document,
+            self.status_reference,
+            self.status_mask,
+            self.status_object,
+            self.status_lattice,
+            self.status_curve,
+            self.status_armature,
+            self.status_scene,
+            self.status_sculpt,
+            self.status_boolean,
+            self.status_cut,
+            self.status_retopo,
+            self.status_uv,
+            self.status_conform,
+            self.status_bake,
+            self.notice_adjustment,
+        ]);
+        all.extend([
+            self.dialog_save_sculpt,
+            self.dialog_bake_destination,
+            self.dialog_bake_stem,
+            self.dialog_open_sculpt,
+            self.dialog_recovered_title,
+            self.dialog_recovered_question,
+            self.dialog_import_mesh,
+            self.dialog_export_mesh,
+            self.dialog_load_alpha,
+            self.dialog_mesh_filter,
+            self.dialog_alpha_filter,
+            self.dialog_unsaved_title,
+            self.dialog_unsaved_question,
+        ]);
+        all.extend([
+            self.log_door_no_session,
+            self.log_door_publish,
+            self.log_door_open,
+            self.log_detail_switch,
+            self.log_recovery,
+            self.log_import,
+            self.log_alpha,
+            self.log_export,
+            self.log_surface_rebuild,
+            self.log_mip_build,
+            self.log_smooth_mesh,
+            self.log_profile,
+            self.log_rename,
+            self.log_door_reopen,
+            self.log_voxel_display,
+            self.log_stall,
+            self.log_final_remesh,
+            self.log_engine,
+            self.log_read,
+            self.log_upload,
+            self.log_other,
+        ]);
+        all.push(self.agent_generic_client);
+        all.push(self.combine_amplitude);
+        all.push(self.combine_smoothness);
+        all.extend([
+            self.diag_application,
+            self.diag_engine,
+            self.diag_revision,
+            self.diag_platform,
+            self.diag_door,
+            self.diag_door_missing,
+            self.diag_closed,
+            self.diag_listening,
+            self.diag_agent_commands,
+            self.diag_address,
+            self.diag_clients,
+            self.diag_available,
+            self.backend_automatic,
+            self.backend_override,
+            self.backend_override_unavailable,
+            self.diag_active,
+            self.diag_video,
+            self.diag_stalls,
+            self.diag_stall,
+            self.diag_no_stalls,
+            self.diag_stall_recorded,
+            self.diag_fallback_recorded,
+            self.diag_fallbacks,
+            self.diag_fallback,
+            self.diag_none_this_session,
+            self.diag_declined,
+            self.diag_mesh_sculptors,
+            self.diag_rejected_seeds,
+            self.diag_essential,
+            self.diag_rebuildable,
+            self.diag_undo,
+            self.diag_total,
+            self.diag_surfaces,
+            self.diag_cache,
+            self.diag_drawing,
+            self.diag_in_use,
+            self.diag_geometry,
+            self.diag_buffers,
+            self.diag_staging,
+            self.diag_targets,
+            self.diag_samples,
+            self.diag_no_samples,
+            self.diag_engine_edit,
+            self.diag_engine_mesh,
+            self.diag_our_read,
+            self.diag_our_split,
+            self.diag_our_submit,
+            self.diag_area,
+            self.diag_occlusion,
+            self.diag_enabled,
+            self.diag_disabled,
+            self.diag_draw_calls,
+            self.diag_culled,
+            self.diag_triangles,
+            self.diag_lines,
+            self.diag_uploaded,
+            self.diag_no_gpu_timestamps,
+            self.diag_no_gpu_frames,
+            self.diag_temporal,
+        ]);
+        all
     }
 }
 
@@ -3095,6 +3906,75 @@ mod tests {
                 assert!(!value.is_empty(), "{} has an empty string", locale.label());
             }
         }
+    }
+
+    #[test]
+    fn exchange_choices_have_localized_names_and_explanations() {
+        for locale in Locale::ALL {
+            let s = Strings::for_locale(locale);
+            for choice in clayspace_model::ImportAs::ALL {
+                assert!(!s.import_as_name(choice).is_empty());
+                assert!(!s.import_as_detail(choice).is_empty());
+            }
+            for mesher in clayspace_model::ExportMesher::ALL {
+                assert!(!s.export_mesher_name(mesher).is_empty());
+            }
+        }
+        let en = Strings::for_locale(Locale::EnUs);
+        let pt = Strings::for_locale(Locale::PtBr);
+        assert_ne!(
+            en.import_as_name(clayspace_model::ImportAs::Reference),
+            pt.import_as_name(clayspace_model::ImportAs::Reference)
+        );
+        assert_ne!(
+            en.export_mesher_name(clayspace_model::ExportMesher::Watertight),
+            pt.export_mesher_name(clayspace_model::ExportMesher::Watertight)
+        );
+        assert_eq!(
+            en.representation_name(clayspace_model::Representation::Multires),
+            "Hierarchy"
+        );
+        assert_eq!(en.section_multires, "HIERARCHY");
+        let es = Strings::for_locale(Locale::Es419);
+        assert_eq!(
+            pt.representation_name(clayspace_model::Representation::Multires),
+            "Hierarquia"
+        );
+        assert_eq!(
+            es.representation_name(clayspace_model::Representation::Multires),
+            "Jerarquía"
+        );
+    }
+
+    #[test]
+    fn export_warnings_use_the_active_locale() {
+        let warning =
+            clayspace_model::ExportWarning::for_written_mesh(clayspace_model::WrittenMesh {
+                watertight: false,
+                manifold: true,
+                boundary_edges: 7,
+                non_manifold_edges: 0,
+            });
+        let en = Strings::for_locale(Locale::EnUs).export_warning(&warning[0]);
+        let es = Strings::for_locale(Locale::Es419).export_warning(&warning[0]);
+        assert!(en.contains("7 boundary edges"), "{en}");
+        assert!(es.contains("7 aristas de borde"), "{es}");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn backend_selection_and_icons_follow_the_locale() {
+        let en = Strings::for_locale(Locale::EnUs);
+        let es = Strings::for_locale(Locale::Es419);
+        assert_eq!(en.backend_automatic, "chosen automatically");
+        assert_eq!(es.backend_automatic, "elección automática");
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            for icon in crate::icons::Icon::ALL {
+                assert!(!strings.icon_description(icon).is_empty());
+            }
+        }
+        assert_eq!(en.icon_description(crate::icons::Icon::Locked), "locked");
     }
 
     /// The warning a debug build shows before it writes a profile.

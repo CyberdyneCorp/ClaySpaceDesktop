@@ -79,7 +79,10 @@ impl DocumentShape {
             .enumerate()
             .map(|(index, layer)| LayerShape {
                 index,
-                representation: layer.representation.label().to_string(),
+                representation: match layer.representation {
+                    clayspace_model::Representation::Multires => "hierarchy".to_string(),
+                    other => other.label().to_string(),
+                },
                 visible: layer.visible,
                 sculpt_layers: layer.sculpt_layers.len(),
                 multires_levels: layer
