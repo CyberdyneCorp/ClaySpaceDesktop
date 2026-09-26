@@ -26,11 +26,16 @@ pub struct Figure {
 
 impl Figure {
     /// Whether this is worse than the baseline by more than noise.
-    pub fn regressed_against(&self, baseline: f64) -> bool {
+    ///
+    /// `scale` widens the tolerance for a machine noisier than the one it was
+    /// chosen on: 1.0 on a quiet workstation, and the value `--tolerance-scale`
+    /// states on a hosted CI runner, whose run-to-run variance is several times
+    /// larger (see `benchmarks/ci-gate.md`).
+    pub fn regressed_against(&self, baseline: f64, scale: f64) -> bool {
         if self.value <= self.noise_floor && baseline <= self.noise_floor {
             return false;
         }
-        self.value / baseline.max(f64::MIN_POSITIVE) > self.tolerance
+        self.value / baseline.max(f64::MIN_POSITIVE) > self.tolerance * scale
     }
 
     pub fn ms(value: f64, budget: Option<f64>) -> Self {
@@ -340,6 +345,16 @@ mod tests {
     #[test]
     fn a_figure_at_the_noise_floor_does_not_regress_against_nothing() {
         let discovery = Figure::ms(0.4, None);
-        assert!(!discovery.regressed_against(0.0007));
+        assert!(!discovery.regressed_against(0.0007, 1.0));
+    }
+
+    /// The CI gate's wider tolerance moves the line and nothing else: a
+    /// figure 3x its baseline fails at the workstation's 1.5 and passes at
+    /// 1.5 x 8, and one 13x its baseline fails at both.
+    #[test]
+    fn a_tolerance_scale_widens_the_line_without_removing_it() {
+        assert!(Figure::ms(30.0, None).regressed_against(10.0, 1.0));
+        assert!(!Figure::ms(30.0, None).regressed_against(10.0, 8.0));
+        assert!(Figure::ms(130.0, None).regressed_against(10.0, 8.0));
     }
 }

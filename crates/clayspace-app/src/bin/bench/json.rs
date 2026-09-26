@@ -16,6 +16,7 @@ use clayspace_app::Conditions;
 
 use crate::figures::Spread;
 use crate::load::Load;
+use crate::machine::Machine;
 use crate::run::Run;
 
 /// A recorded run, as read back from a baseline file.
@@ -47,13 +48,22 @@ pub struct Baseline {
     /// which is why it is an `Option` rather than a defaulted number: "quiet"
     /// and "did not say" are different claims.
     pub load_per_core: Option<f64>,
+    /// The machine that recorded it, as `machine.rs` describes one. Empty for
+    /// a baseline recorded before the section existed.
+    pub machine: BTreeMap<String, String>,
 }
 
-pub fn write(path: &str, where_: &Conditions, load: Option<&Load>, run: &Run) -> Result<()> {
-    std::fs::write(path, render(where_, load, run))
+pub fn write(
+    path: &str,
+    where_: &Conditions,
+    machine: &Machine,
+    load: Option<&Load>,
+    run: &Run,
+) -> Result<()> {
+    std::fs::write(path, render(where_, machine, load, run))
 }
 
-fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
+fn render(where_: &Conditions, machine: &Machine, load: Option<&Load>, run: &Run) -> String {
     let mut out = String::from("{\n  \"conditions\": {\n    \"scenes\": {\n");
     let members: Vec<String> = where_
         .scenes
@@ -62,25 +72,25 @@ fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
         .collect();
     out.push_str(&members.join(",\n"));
     out.push_str("\n    },\n");
-    out.push_str(&format!("    \"platform\": \"{}\",\n", where_.platform));
-    out.push_str(&format!(
-        "    \"architecture\": \"{}\",\n",
-        where_.architecture
-    ));
-    out.push_str(&format!("    \"backend\": \"{}\",\n", where_.backend));
-    out.push_str(&format!("    \"engine\": \"{}\",\n", where_.engine));
-    out.push_str(&format!("    \"revision\": \"{}\",\n", where_.revision));
-    out.push_str(&format!(
-        "    \"viewport\": [{}, {}]",
-        where_.viewport.0, where_.viewport.1
-    ));
-    match load {
-        Some(load) => out.push_str(&format!(
-            ",\n    \"load_per_core\": {:.4}\n  }},\n",
-            load.per_core()
-        )),
-        None => out.push_str("\n  },\n"),
+    let mut lines = vec![
+        format!("    \"platform\": \"{}\"", where_.platform),
+        format!("    \"architecture\": \"{}\"", where_.architecture),
+        format!("    \"backend\": \"{}\"", where_.backend),
+        format!("    \"engine\": \"{}\"", where_.engine),
+        format!("    \"revision\": \"{}\"", where_.revision),
+        format!(
+            "    \"viewport\": [{}, {}]",
+            where_.viewport.0, where_.viewport.1
+        ),
+    ];
+    if let Some(load) = load {
+        lines.push(format!("    \"load_per_core\": {:.4}", load.per_core()));
     }
+    if let Some(section) = machine_section(machine) {
+        lines.push(section);
+    }
+    out.push_str(&lines.join(",\n"));
+    out.push_str("\n  },\n");
 
     let figures: Vec<String> = run
         .figures()
@@ -128,6 +138,25 @@ fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
     out
 }
 
+/// The recording machine, or nothing where it could not be identified.
+///
+/// Strings throughout, the numbers included: the section describes the
+/// machine to whoever reads the file, and nothing compares it field by field.
+fn machine_section(machine: &Machine) -> Option<String> {
+    let fields: Vec<String> = machine
+        .fields()
+        .iter()
+        .map(|(key, value)| format!("      \"{key}\": \"{}\"", escape(value)))
+        .collect();
+    (!fields.is_empty()).then(|| format!("    \"machine\": {{\n{}\n    }}", fields.join(",\n")))
+}
+
+/// The two escapes the reader understands. A processor name is the one value
+/// in this file that did not come from this program.
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 pub fn read(path: &str) -> Result<Baseline> {
     parse(&std::fs::read_to_string(path)?)
 }
@@ -162,6 +191,11 @@ fn parse(text: &str) -> Result<Baseline> {
         load_per_core: conditions
             .get("load_per_core")
             .and_then(|v| v.clone().into_number().ok()),
+        // Absent in a baseline recorded before the machine was named.
+        machine: match conditions.get("machine") {
+            Some(value) => strings(value.clone())?,
+            None => BTreeMap::new(),
+        },
         figures: field(&root, "figures")?
             .clone()
             .into_object()?
@@ -407,7 +441,8 @@ mod tests {
 
     #[test]
     fn what_is_written_is_what_is_read() {
-        let read = parse(&render(&conditions(), None, &run())).expect("parses");
+        let read =
+            parse(&render(&conditions(), &Machine::default(), None, &run())).expect("parses");
         assert_eq!(read.scenes["reference"], "r1");
         assert_eq!(read.scenes["reference-10x"], "r1");
         assert_eq!(read.platform, "linux");
@@ -469,7 +504,13 @@ mod tests {
             one_minute: 3.0,
             cores: 24,
         };
-        let read = parse(&render(&conditions(), Some(&load), &run())).expect("parses");
+        let read = parse(&render(
+            &conditions(),
+            &Machine::default(),
+            Some(&load),
+            &run(),
+        ))
+        .expect("parses");
         assert_eq!(read.load_per_core, Some(0.125));
     }
 
@@ -477,15 +518,43 @@ mod tests {
     fn a_baseline_without_a_load_says_so_rather_than_claiming_quiet() {
         // Every baseline recorded before this field existed. Reading those as
         // 0.0 would assert a quiet machine nobody measured.
-        let read = parse(&render(&conditions(), None, &run())).expect("parses");
+        let read =
+            parse(&render(&conditions(), &Machine::default(), None, &run())).expect("parses");
         assert_eq!(read.load_per_core, None);
+    }
+
+    /// Issue #189: a baseline has to say which machine produced it, or a
+    /// comparison against a different box of the same platform is read as a
+    /// regression. A processor name is outside text, so it is escaped.
+    #[test]
+    fn the_recording_machine_survives_the_round_trip() {
+        let machine = Machine {
+            cpu: Some(r#"Apple M1 "Virtual" \ 3"#.into()),
+            cores: Some(3),
+            memory_gib: Some(7),
+            os: Some("macOS 14.7".into()),
+            runner: Some("macos14 20260921.1".into()),
+        };
+        let read = parse(&render(&conditions(), &machine, None, &run())).expect("parses");
+        assert_eq!(read.machine["cpu"], r#"Apple M1 "Virtual" \ 3"#);
+        assert_eq!(read.machine["cores"], "3");
+        assert_eq!(read.machine["memory_gib"], "7");
+        assert_eq!(read.machine["os"], "macOS 14.7");
+        assert_eq!(read.machine["runner"], "macos14 20260921.1");
+    }
+
+    #[test]
+    fn a_baseline_from_before_the_machine_was_named_reads_with_none() {
+        let read =
+            parse(&render(&conditions(), &Machine::default(), None, &run())).expect("parses");
+        assert!(read.machine.is_empty());
     }
 
     #[test]
     fn a_run_that_skipped_nothing_reads_back_empty() {
         let mut run = Run::new(None);
         run.insert("dab.median", Figure::ms(1.0, None));
-        let read = parse(&render(&conditions(), None, &run)).expect("parses");
+        let read = parse(&render(&conditions(), &Machine::default(), None, &run)).expect("parses");
         assert!(read.skipped.is_empty());
     }
 
