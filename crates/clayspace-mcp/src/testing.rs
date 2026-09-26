@@ -153,6 +153,21 @@ impl Session for FakeSession {
             self.history_depth += 1;
             self.modified = true;
         }
+        // The jobs that run off the interface thread answer at once and keep
+        // running, as the application's do, so a test can assert that work
+        // started this way is still reported by `wait`.
+        let job = match command {
+            Command::RunRetopology => Some("retopology"),
+            Command::RunUvAtlas => Some("uv layout"),
+            Command::RunConform => Some("conform"),
+            _ => None,
+        };
+        if let Some(what) = job {
+            self.outstanding.push(Outstanding {
+                what: what.to_string(),
+                fraction: Some(0.0),
+            });
+        }
         let label = command.label().to_string();
         self.applied.push(command);
         Ok(Applied {
@@ -335,6 +350,7 @@ impl Session for FakeSession {
             backend: "cpu".into(),
             platform: "test".into(),
             live_session: true,
+            outstanding: self.outstanding.clone(),
         })
     }
 

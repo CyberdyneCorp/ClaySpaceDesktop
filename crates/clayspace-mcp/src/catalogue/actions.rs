@@ -361,14 +361,30 @@ const ENVELOPE: &[&str] = &["action", "capture", "width", "height", "camera"];
 /// read, because the row is what `describe` and the schema told the agent —
 /// and `every_argument_the_builder_reads_is_declared` holds the two together.
 ///
-/// An action with no row is let through unchecked. The catalogue contract
-/// test keeps every dispatched route paired with a row.
+/// An action with no row is refused, whoever asks. The table is the whole of
+/// what is offered, so a route the dispatch below still holds is not a side
+/// door: `measure` builds through here too, and it once reached groups no
+/// client had been told about. The catalogue contract test keeps every
+/// dispatched route paired with a row, so this refuses only what a client
+/// could not have learned from `describe`.
 fn accept_declared(group: &str, action: &str, args: &Args<'_>) -> Result<(), Refusal> {
+    if !super::table::GROUPS
+        .iter()
+        .any(|(name, _, _)| *name == group)
+    {
+        return Err(Refusal::new(
+            RefusalCode::UnknownAction,
+            format!(
+                "there is no group named {group}; the groups are {}",
+                super::table::group_names().join(", ")
+            ),
+        ));
+    }
     let Some(spec) = super::table::TABLE
         .iter()
         .find(|spec| spec.group == group && spec.name == action)
     else {
-        return Ok(());
+        return Err(unknown(group, action, &actions_of(group)));
     };
     let declared: Vec<&str> = spec.arguments.iter().map(|arg| arg.name).collect();
     args.accept_only(&declared, ENVELOPE)
@@ -558,7 +574,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
             args.vec3("anchor")?,
             args.vec3_or("view_axis", [0.0, 0.0, 1.0])?,
         ),
-        ("transform", "drag") => C::DragGizmo(args.vec3("at")?, args.boolean_or("invert", false)?),
+        ("transform", "drag") => C::DragGizmo(args.vec3("at")?, args.boolean_or("snap", false)?),
         ("transform", "end_drag") => C::EndGizmoDrag,
 
         // -- lattice --------------------------------------------------------

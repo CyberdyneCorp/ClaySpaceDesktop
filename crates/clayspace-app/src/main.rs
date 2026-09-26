@@ -7280,6 +7280,7 @@ impl Session for App {
             backend: diagnostics.active_backend,
             platform: diagnostics.platform,
             live_session: true,
+            outstanding: self.outstanding_work(),
         })
     }
 

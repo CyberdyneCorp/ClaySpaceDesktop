@@ -1137,6 +1137,12 @@ pub struct Measured {
     /// drawn and a person's session in memory is evidence, not a baseline, and
     /// nothing here may write one.
     pub live_session: bool,
+    /// What was still running when the clock stopped — a retopology the
+    /// command started on a worker thread, say. The figure is the time to
+    /// start it, not to finish it, and this is how the caller tells the two
+    /// apart; `wait` reports the same work until it is done.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub outstanding: Vec<Outstanding>,
 }
 
 #[cfg(test)]
