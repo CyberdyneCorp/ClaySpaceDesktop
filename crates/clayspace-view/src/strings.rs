@@ -801,6 +801,8 @@ const PT_BR: Strings = Strings {
         "Numa grelha, Vinco corta uma ranhura estreita com erosão; não afia as bordas existentes",
         "Numa grelha, Borrar não está disponível: não há verbo para espalhar cor. Use Pintar para cor ou Nudge para mover a forma",
         "Numa grelha, Argila não está disponível: células cheias não guardam acúmulo gradual. Use Padrão ou Inflar para depositar material",
+        "Num campo, Polir não está disponível: o campo tem um só aplanar, e é o do Planar. Use Planar",
+        "Num campo, Relaxar não está disponível: um campo não tem vértices para redistribuir. Use Suavizar",
     ],
     shape_names: [
         "Caixa",
@@ -1380,6 +1382,8 @@ const EN_US: Strings = Strings {
         "On a grid, Crease cuts a narrow groove by erosion; it does not sharpen existing edges",
         "On a grid, Smear is unavailable: there is no colour-smear verb. Use Paint for colour or Nudge to move the shape",
         "On a grid, Clay is unavailable: filled cells cannot hold gradual buildup. Use Standard or Inflate to deposit material",
+        "On a field, Polish is unavailable: a field has one flatten, and it is Planar's. Use Planar",
+        "On a field, Relax is unavailable: a field has no vertices to even out. Use Smooth",
     ],
     shape_names: [
         "Box",
@@ -1955,6 +1959,8 @@ const ES_419: Strings = Strings {
         "En una rejilla, Pliegue corta una ranura estrecha por erosión; no afila los bordes existentes",
         "En una rejilla, Difuminar no está disponible: no hay una operación para extender el color. Usa Pintar para el color o Nudge para mover la forma",
         "En una rejilla, Arcilla no está disponible: las celdas llenas no guardan acumulación gradual. Usa Estándar o Inflar para añadir material",
+        "En un campo, Pulir no está disponible: un campo tiene un solo aplanar, y es el de Planar. Usa Planar",
+        "En un campo, Relajar no está disponible: un campo no tiene vértices que redistribuir. Usa Suavizar",
     ],
     shape_names: [
         "Caja",

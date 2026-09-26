@@ -218,7 +218,6 @@ fn ordinary_releases_compact_exactly_without_meshing_again() {
         ToolKind::Argila,
         ToolKind::Vinco,
         ToolKind::Camada,
-        ToolKind::Polir,
         ToolKind::Planar,
         ToolKind::Puxar,
     ] {

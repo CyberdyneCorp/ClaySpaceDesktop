@@ -178,8 +178,6 @@ fn every_sdf_brush_comes_out_on_both_sides() {
             ToolKind::Vinco => "vinco",
             ToolKind::Camada => "camada",
             ToolKind::Puxar => "puxar",
-            ToolKind::Polir => "polir",
-            ToolKind::Relaxar => "relaxar",
             other => panic!("{other:?} has no name here"),
         };
         let image = harness.capture(geometry.mesh(), &camera, false, &format!("sdf-sym-{name}"));

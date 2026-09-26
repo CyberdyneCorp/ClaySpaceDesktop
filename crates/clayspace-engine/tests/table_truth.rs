@@ -178,6 +178,11 @@ fn every_tool_note_is_proved_here() {
             ToolNote::VoxelCreaseIsErodeRecipe => "voxel_crease_cuts_a_groove",
             ToolNote::VoxelSmearHasNoColourVerb => "a_recipe_is_expressible_and_is_marked_as_one",
             ToolNote::VoxelClayHasNoBuildup => "a_recipe_is_expressible_and_is_marked_as_one",
+            // Both in `sdf_tool_identities.rs`, beside the measurements that
+            // decided them.
+            ToolNote::SdfPolishIsPlanar | ToolNote::SdfRelaxIsSmooth => {
+                "a_field_offers_one_flatten_and_one_smooth_and_says_so"
+            }
         };
         assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
     }
