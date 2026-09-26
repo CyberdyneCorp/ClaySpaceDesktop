@@ -535,10 +535,15 @@ object made with symmetry on point the layer's mirror themselves, in the same
 undo group as the item, so they are mirrored from the start; before, a curve
 stayed one-sided until some brush stroke happened to write the mirror.
 
-A real mirror change refills the layer under the mirror it had **and** the one
-it gets. The reflections the old mirror made leave the field outside the
-stroke's own region, and refilling only that region left them drawn — on a
-hidden subtool too, since hiding refills only what the layer reaches now.
+A real mirror change refills the reflections it moved, under the mirror the
+layer had **and** the one it gets. The reflections the old mirror made leave
+the field outside the stroke's own region, and refilling only that region left
+them drawn — on a hidden subtool too, since hiding refills only what the layer
+reaches now. Only nodes whose influence bound changed with the mirror are
+marked, and only their reflected boxes, so turning symmetry off on the starting
+sphere (whose reflection is itself) costs nothing extra; marking the whole
+layer re-meshed all 1043 of its keys on the next dab. The gap is a node whose
+box is symmetric about the plane while its shape is not.
 
 Still open on #170: turning symmetry *off*, or moving it to another axis,
 re-points the layer's mirror and so still changes items made under the old

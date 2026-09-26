@@ -3690,9 +3690,9 @@ impl ClayDocument {
     /// ever refilled, so a mirror turned off left its reflections drawn —
     /// 38,913 bright pixels of them measured, and still there after the layer
     /// was hidden, because hiding refills what the layer reaches *now* (#170).
-    /// So the layer is marked under the mirror it had, then under the one it
-    /// gets, and drained once. A symmetry change is rare and costs one refill
-    /// of the layer; an unchanged one returns before any of this.
+    /// So the reflections the change moved are marked — see
+    /// `mark_mirror_change` — and drained once. An unchanged mirror returns
+    /// before any of this.
     fn point_the_mirror_of(&mut self, index: usize, symmetry: [bool; 3]) -> Result<(), ModelError> {
         if self.layers[index].mirror == Some(symmetry) {
             return Ok(());
@@ -3711,19 +3711,103 @@ impl ClayDocument {
                 }
             }
         }
-        self.mark_for_refill(layer, &[])?;
-        let written = self
-            .document
+        let before = self.layers[index].mirror;
+        let nodes = self.document.layer_nodes(layer).unwrap_or_default();
+        let was = self.node_bounds(layer, &nodes);
+        self.document
             .set_layer_mirror(layer, symmetry, 0.0)
-            .map_err(ModelError::engine);
-        if written.is_ok() {
-            self.layers[index].mirror = Some(symmetry);
-            self.mark_for_refill(layer, &[])?;
-        }
+            .map_err(ModelError::engine)?;
+        self.layers[index].mirror = Some(symmetry);
+        let now = self.node_bounds(layer, &nodes);
+        let marked = match before {
+            Some(old) => self.mark_mirror_change(index, old, symmetry, &was, &now),
+            // What the layer carried could not be read, so neither can what
+            // it reflected: the whole layer is the honest region.
+            None => self.mark_for_refill(layer, &[]),
+        };
         // Drained on the failing path too: a mark left standing is a cache
         // that disagrees with the document until something else drains it.
-        self.drain_dirty()?;
-        written
+        let drained = self.drain_dirty();
+        marked.and(drained)
+    }
+
+    /// Each node's influence bound, as the layer's mirror stands now.
+    fn node_bounds(&self, layer: LayerId, nodes: &[NodeId]) -> Vec<Option<Bounds>> {
+        nodes
+            .iter()
+            .map(|node| self.node_bound(layer, *node))
+            .collect()
+    }
+
+    /// Marks what a mirror change moved: the reflections, not the items.
+    ///
+    /// Only a node whose bound changed with the mirror is touched — one that
+    /// stays out of the mirror, or whose reflection lands on its own box, has
+    /// the same bound either way. Marking the whole layer instead refilled the
+    /// starting form on the first stroke after symmetry was turned off: 1043
+    /// keys for a dab that dirties a few dozen. The gap this leaves is a node
+    /// whose *box* is symmetric about the plane while its shape is not — a box
+    /// rotated on the plane — whose reflection changes inside its own bound.
+    ///
+    /// Where one side of the change is no mirror at all, that side's bound is
+    /// the unreflected item, and only its reflections under the other side are
+    /// marked. Between two real mirrors neither side is, so both bounds are.
+    fn mark_mirror_change(
+        &mut self,
+        index: usize,
+        old: [bool; 3],
+        new: [bool; 3],
+        was: &[Option<Bounds>],
+        now: &[Option<Bounds>],
+    ) -> Result<(), ModelError> {
+        let layer = self.layers[index].id;
+        let transform = self.layers[index].transform;
+        let mut regions = Vec::new();
+        for (was, now) in was.iter().zip(now) {
+            let (Some(was), Some(now)) = (was, now) else {
+                // A node whose reach has no bound reaches everything.
+                return self.mark_for_refill(layer, &[]);
+            };
+            if was != now {
+                regions.extend(Self::mirror_change_regions(
+                    &transform, old, new, *was, *now,
+                ));
+            }
+        }
+        for (min, max) in regions {
+            self.cache
+                .mark_dirty(min, max)
+                .map_err(ModelError::engine)?;
+        }
+        Ok(())
+    }
+
+    /// The boxes one node's surface can have moved in, when its layer's
+    /// mirror went from `old` to `new` and its bound from `was` to `now`.
+    fn mirror_change_regions(
+        transform: &clayspace_model::Transform,
+        old: [bool; 3],
+        new: [bool; 3],
+        was: Bounds,
+        now: Bounds,
+    ) -> Vec<Bounds> {
+        let (unreflected, axes) = if !old.contains(&true) {
+            (was, new)
+        } else if !new.contains(&true) {
+            (now, old)
+        } else {
+            return vec![was, now];
+        };
+        // Reflected in the layer's own frame, where the planes are.
+        mirrors(axes)
+            .into_iter()
+            .filter(|mirror| !mirror.is_identity())
+            .map(|mirror| {
+                Self::box_through(unreflected, |point| {
+                    transform.into_world(mirror.point(transform.into_local(point)))
+                })
+            })
+            .collect()
     }
 
     /// Forgets what the engine was told every layer's mirror is.
