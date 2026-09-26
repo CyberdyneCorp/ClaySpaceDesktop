@@ -17,9 +17,9 @@ use clayspace_app::{
 };
 use clayspace_engine::{BackendPolicy, ClayDocument, RefillBudget};
 use clayspace_mcp::{
-    report, Applied, CaptureRequest, CaptureWhat, Catalogue, Consent, ConsentOutcome, Frame,
-    JobQueue, Measured, Outstanding, Refusal, RefusalCode, Server, ServerHandle, Session, Settled,
-    StateQuery, StateReport,
+    report, Applied, CaptureCamera, CaptureRequest, CaptureWhat, Catalogue, Consent,
+    ConsentOutcome, Frame, JobQueue, Measured, Outstanding, Refusal, RefusalCode, Server,
+    ServerHandle, Session, Settled, StateQuery, StateReport,
 };
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
@@ -6795,11 +6795,31 @@ impl Session for App {
     /// is using — they are the renderer's own state and are whatever the last
     /// frame set them to.
     fn capture(&mut self, request: CaptureRequest) -> Result<Frame, Refusal> {
+        // A command runs between window events. Draw its requested frame now so
+        // the retained egui primitives and scene geometry describe the command
+        // that this capture accompanies, rather than the previous frame.
+        self.redraw();
         let outstanding = self.outstanding_work();
         let bare = self.rigging && !self.skin_preview;
         let primitives = self.last_ui.clone();
         let pixels_per_point = self.last_ppp;
-        let camera = self.camera;
+        let mut camera = self.camera;
+        if let Some(preset) = request.camera {
+            camera.apply_preset(match preset {
+                CaptureCamera::Perspective => ViewPreset::Perspective,
+                CaptureCamera::Front => ViewPreset::Front,
+                CaptureCamera::Side => ViewPreset::Side,
+                CaptureCamera::Top => ViewPreset::Top,
+            });
+        }
+        let scene_viewport = self.viewport.map(|rect| {
+            [
+                rect.min.x * pixels_per_point,
+                rect.min.y * pixels_per_point,
+                rect.width() * pixels_per_point,
+                rect.height() * pixels_per_point,
+            ]
+        });
 
         let Some(graphics) = self.graphics.as_mut() else {
             return Err(Refusal::new(
@@ -6831,16 +6851,19 @@ impl Session for App {
         let format = graphics.surface.format();
         let target =
             clayspace_view::OffscreenTarget::with_format(&graphics.gpu, width, height, format);
-        // The window's scene sits in a sub-rectangle; an offscreen target is
-        // all scene. The next frame sets this again from the layout, so
-        // nothing has to put it back.
-        graphics.renderer.set_scene_viewport(None);
+        // A window image has the same scene rectangle as the displayed frame.
+        // A viewport-only image uses the entire requested target.
+        graphics.renderer.set_scene_viewport(match request.what {
+            CaptureWhat::Window => scene_viewport,
+            CaptureWhat::Viewport => None,
+        });
         let mesh = if bare {
             &graphics.nothing
         } else {
             graphics.geometry.mesh()
         };
         let image = target.capture(&graphics.gpu, &graphics.renderer, &camera, mesh, true);
+        graphics.renderer.set_scene_viewport(scene_viewport);
 
         let image = match request.what {
             CaptureWhat::Viewport => image,

@@ -108,10 +108,7 @@ fn a_name_is_trimmed_rather_than_stored_with_its_padding() {
 }
 
 #[test]
-fn two_sdf_layers_may_share_a_name() {
-    // Names are not unique upstream and are not made unique here: nothing
-    // about an SDF layer is looked up by name, so refusing a duplicate would
-    // buy a guarantee that costs the artist a natural thing to do.
+fn two_sdf_layers_cannot_share_a_name() {
     let mut document = document();
     let first = document
         .add_layer("A", Representation::Sdf)
@@ -121,11 +118,9 @@ fn two_sdf_layers_may_share_a_name() {
         .expect("another");
 
     document.rename_layer(second, "Detalhe").expect("rename");
-    document
-        .rename_layer(first, "Detalhe")
-        .expect("a duplicate name is allowed on SDF layers");
+    assert!(document.rename_layer(first, "Detalhe").is_err());
 
-    assert_eq!(name_of(&document, first).as_deref(), Some("Detalhe"));
+    assert_eq!(name_of(&document, first).as_deref(), Some("A"));
     assert_eq!(name_of(&document, second).as_deref(), Some("Detalhe"));
 }
 
@@ -168,11 +163,7 @@ fn a_voxel_layer_keeps_its_grid_across_a_rename() {
 }
 
 #[test]
-fn a_voxel_layer_will_not_take_another_voxel_layers_name() {
-    // The one uniqueness rule, enforced only where it can actually go wrong.
-    // Two voxel layers sharing a name shadow one another's grid, because the
-    // lookup answers with the first in stack order — so a stroke would land on
-    // the wrong layer's volume.
+fn a_voxel_layer_will_not_take_any_other_layers_name() {
     let mut document = document();
     let first = document
         .add_layer("Volume A", Representation::Voxel)
@@ -187,12 +178,9 @@ fn a_voxel_layer_will_not_take_another_voxel_layers_name() {
     );
     assert_eq!(name_of(&document, second).as_deref(), Some("Volume B"));
 
-    // An SDF layer carrying the name is not the problem, so it is not refused.
     let sdf = document
         .add_layer("Superfície", Representation::Sdf)
         .expect("an sdf layer");
-    document
-        .rename_layer(sdf, "Volume A")
-        .expect("an SDF layer may share a voxel layer's name");
+    assert!(document.rename_layer(sdf, "Volume A").is_err());
     let _ = first;
 }

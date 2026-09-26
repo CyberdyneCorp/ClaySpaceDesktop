@@ -523,7 +523,14 @@ impl ObjectViewModel {
                 self.mesh_cost.set(cost);
             }
             Command::SelectObject(id) => {
+                self.refresh();
+                if id.is_some_and(|id| !self.holds(id)) {
+                    self.notice
+                        .set(Some("este objeto não existe no documento".to_string()));
+                    return;
+                }
                 self.model.select_object(*id);
+                self.notice.set_if_changed(None);
                 // The manipulator follows the selection, which is what makes
                 // picking a shape in the viewport put a widget on it.
                 self.target.set(id.map(GizmoTarget::Object));

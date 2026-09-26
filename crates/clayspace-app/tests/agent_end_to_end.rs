@@ -294,6 +294,24 @@ fn decode(base64: &str) -> Vec<u8> {
     pixels
 }
 
+fn image_pixels(answer: &Value) -> Vec<u8> {
+    let block = answer["content"]
+        .as_array()
+        .expect("content")
+        .iter()
+        .find(|block| block["type"] == "image")
+        .expect("an image block");
+    decode(block["data"].as_str().expect("base64 image"))
+}
+
+fn changed_pixels(before: &[u8], after: &[u8]) -> usize {
+    before
+        .chunks_exact(4)
+        .zip(after.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count()
+}
+
 fn from_base64(text: &str) -> Vec<u8> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
@@ -427,6 +445,51 @@ fn a_mask_release_does_not_rebuild_a_single_request_surface() {
 /// One test, not several: starting the application costs a window, an engine
 /// and a first document, and every assertion below is about the same running
 /// session. Split into named steps so a failure says which one.
+#[test]
+fn a_ride_along_capture_shows_the_command_result() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+    // A ride-along window capture is drawn after the panel opens. Its scene
+    // rectangle must also match an immediately following whole-window frame.
+    let closed = call(
+        &running,
+        &session,
+        "viewport",
+        json!({"action":"capture", "what":"window"}),
+    );
+    let opened = call(
+        &running,
+        &session,
+        "shape",
+        json!({"action":"toggle_picker", "capture":"window"}),
+    );
+    let following = call(
+        &running,
+        &session,
+        "viewport",
+        json!({"action":"capture", "what":"window"}),
+    );
+    let closed = image_pixels(&closed);
+    let opened = image_pixels(&opened);
+    let following = image_pixels(&following);
+    assert!(
+        changed_pixels(&closed, &opened) > 1000,
+        "the opened panel is absent from the ride-along image"
+    );
+    assert!(
+        changed_pixels(&opened, &following) < changed_pixels(&closed, &opened) / 4,
+        "the ride-along scene or interface differs from the next window capture"
+    );
+    call(
+        &running,
+        &session,
+        "shape",
+        json!({"action":"toggle_picker"}),
+    );
+}
+
 #[test]
 fn an_agent_drives_the_running_application() {
     let Some(running) = start() else {

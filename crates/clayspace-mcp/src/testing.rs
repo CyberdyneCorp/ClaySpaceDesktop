@@ -40,6 +40,7 @@ pub struct FakeSession {
     /// nothing.
     pub reads: std::cell::Cell<usize>,
     pub captures: usize,
+    pub last_capture: Option<CaptureRequest>,
     /// The colour a captured frame is filled with, so two captures can be made
     /// to differ on purpose.
     pub fill: [u8; 4],
@@ -74,6 +75,7 @@ impl FakeSession {
             outstanding: Vec::new(),
             reads: std::cell::Cell::new(0),
             captures: 0,
+            last_capture: None,
             fill: [40, 44, 52, 255],
             document_name: "sem título".to_string(),
             modified: false,
@@ -292,6 +294,7 @@ impl Session for FakeSession {
 
     fn capture(&mut self, request: CaptureRequest) -> Result<Frame, Refusal> {
         self.captures += 1;
+        self.last_capture = Some(request);
         let width = request.width.unwrap_or(64);
         let height = request.height.unwrap_or(48);
         // The window variant is drawn larger here only so a test can tell the
