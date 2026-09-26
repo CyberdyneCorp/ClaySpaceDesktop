@@ -524,6 +524,27 @@ writing the default over what was loaded would be worse, since a mirror applies
 to items added before the call as well as after and a form saved unmirrored
 would come back mirrored.
 
+**Symmetry mirrors what is made while it is on, not what was already there.**
+The layer's mirror reflects every item that takes part in it, whenever that
+item was made, so each item is told when it is made: a stroke's stamps, a
+Puxar tendril, a curve and a placed object made with symmetry off stay out of
+every mirror the layer is given later (`clay_item_set_mirror`). Before this a
+lump sculpted one-sided grew a twin as soon as the next stroke turned the
+mirror on, and a box placed one-sided became two (#170). A curve and a placed
+object made with symmetry on point the layer's mirror themselves, in the same
+undo group as the item, so they are mirrored from the start; before, a curve
+stayed one-sided until some brush stroke happened to write the mirror.
+
+A real mirror change refills the layer under the mirror it had **and** the one
+it gets. The reflections the old mirror made leave the field outside the
+stroke's own region, and refilling only that region left them drawn — on a
+hidden subtool too, since hiding refills only what the layer reaches now.
+
+Still open on #170: turning symmetry *off*, or moving it to another axis,
+re-points the layer's mirror and so still changes items made under the old
+one; a Move drag exactly on the mirror plane is applied once per image; and rig
+edits.
+
 On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
 That covers the brushes that *add* an item: Padrão, Inflar, Camada and Puxar.
