@@ -3547,6 +3547,24 @@ which is what makes rigging feel like modelling rather than filling in a form.
   document, so undo reverts the rewrite it forced and cannot revert the slider.
   The change is noted against the engine entry its rewrite left — the same way
   a crossing is — and a step over that entry carries the slider with it.
+- **Each rig has its own thickness.** It is kept on the subtool that holds the
+  rig, so moving the slider rewrites that rig alone, and every rig is read back
+  through its own thickness. It used to be one value for the whole document,
+  which made one rig's thickness the divisor for every other rig on the next
+  undo — their authored radii came back scaled by the ratio and the next edit
+  wrote that out for good. A subtool without a rig refuses a thickness, and
+  setting the one already in effect is not a step.
+- **The thickness is saved with the rig**, in a `.rigs` file beside the
+  document (one line per rig whose thickness is not the default, keyed by its
+  position in the stack). Without it the document holds only the scaled radii,
+  and a reopened rig came back at thickness 1 with the old multiplier baked
+  into its authored radii. A missing or unreadable `.rigs` reopens every rig at
+  the default over the same surface.
+- A sphere asked for with a radius that is not positive is refused — the
+  engine skins whatever it is handed, and a negative radius drew an inverted
+  fan. A tiny positive one is floored at 0.01, as a resize is. An insert on a
+  link is mirrored when the rig's mirror is on, whether it came from the
+  pointer or from `armature/insert`.
 - **A rig survives undo and redo, past its own creation.** The tree is read
   back from the document after every step, for every subtool rather than only
   the ones that already hold a rig: a rig cleared on the way back is exactly

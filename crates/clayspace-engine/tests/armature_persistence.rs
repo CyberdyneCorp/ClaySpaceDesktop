@@ -6,7 +6,7 @@
 //! reopened document held a skinned shape nobody could pose again.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{ArmatureModel, DocumentModel, SculptModel};
+use clayspace_model::{ArmatureModel, DocumentModel, SculptModel, SkinSettings};
 
 fn document() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -118,4 +118,51 @@ fn a_reopened_rig_can_be_posed() {
         "the arm's surface did not follow the shoulder after a reload"
     );
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_rigs_thickness_is_saved_with_it() {
+    // The document holds radii with the thickness applied and nothing that
+    // says what the thickness was, so a reopened rig came back at the default
+    // with the multiplier baked into what it called its authored radii.
+    let mut document = document();
+    let path = scratch("thickness");
+    saved(&mut document, &path);
+    let authored: Vec<f32> = document
+        .armature()
+        .expect("a tree")
+        .nodes
+        .iter()
+        .map(|node| node.radius)
+        .collect();
+    document
+        .set_skin(SkinSettings { thickness: 2.0 })
+        .expect("a thicker skin");
+    document.save(&path).expect("save");
+
+    let mut reopened = document;
+    reopened.open(&path).expect("open");
+
+    assert_eq!(reopened.skin().thickness, 2.0, "the thickness was lost");
+    let radii: Vec<f32> = reopened
+        .armature()
+        .expect("the rig came back")
+        .nodes
+        .iter()
+        .map(|node| node.radius)
+        .collect();
+    for (index, (now, was)) in radii.iter().zip(&authored).enumerate() {
+        assert!(
+            (now - was).abs() < 1e-4,
+            "node {index} came back at {now}, authored {was}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(sidecar(&path));
+}
+
+fn sidecar(path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".rigs");
+    path.with_file_name(name)
 }

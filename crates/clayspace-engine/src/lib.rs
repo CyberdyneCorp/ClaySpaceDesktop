@@ -23,6 +23,7 @@ pub mod multires;
 pub mod objects;
 mod reference;
 mod retopo;
+mod rigs;
 mod sculptors;
 mod seed;
 

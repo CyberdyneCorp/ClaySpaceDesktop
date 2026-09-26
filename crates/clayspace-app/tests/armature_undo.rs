@@ -343,6 +343,33 @@ fn moving_the_thickness_is_itself_one_undo() {
 }
 
 #[test]
+fn thickening_undoing_and_resizing_does_not_compound() {
+    // The sequence from the report, as the interface drives it: grow a sphere,
+    // thicken, undo, resize. Four cycles used to leave the untouched spheres
+    // at sixteen times their size, and setting the thickness back to 1 left
+    // them there.
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+    rig.armature.set_symmetric(false);
+    rig.gesture(Grab::Grow(0), [0.0, 0.0, 0.0], &[[0.3, 0.0, 0.0]]);
+    let root = rig.radii()[0];
+
+    for cycle in 0..4 {
+        rig.thicken(2.0);
+        rig.undo();
+        let before = rig.depth();
+        rig.armature.resize(1, 0.15);
+        let entries = rig.depth().saturating_sub(before);
+        rig.sculpt.record_external_action("resize zsphere", entries);
+        assert_eq!(rig.radii()[0], root, "the root moved on cycle {cycle}");
+    }
+    rig.thicken(1.0);
+    assert_eq!(rig.radii(), vec![root, 0.15]);
+}
+
+#[test]
 fn an_edit_on_a_sphere_that_is_not_there_banks_nothing() {
     // Measured as two entries that did nothing. Both edits rewrite the whole
     // rig into the document, so accepting an index nobody has meant placing

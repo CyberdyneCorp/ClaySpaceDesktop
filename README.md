@@ -982,6 +982,10 @@ how the application says the write went fine.
   so a save that cannot write it fails rather than reporting to stderr and
   carrying on, and a document opened without it comes back as the cage its
   layer holds.
+- Each rig's skin thickness lives in `<name>.clayspace.rigs`, one line per rig
+  whose thickness is not the default. The document holds the rig's radii
+  already scaled, so this is bookkeeping: without it a rig reopens at the
+  default thickness over the same surface.
 - Session state — the recent list, the chosen language, the panel arrangement,
   the viewport profile, the starred brushes and each reference plane's path and
   placement — lives in Application Support on macOS and `$XDG_STATE_HOME` on

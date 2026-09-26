@@ -145,6 +145,100 @@ fn a_thickness_change_is_undoable() {
     assert_eq!(radii(&document), authored);
 }
 
+#[test]
+fn undoing_across_a_thickness_does_not_compound_it() {
+    // The sequence from the report: thicken, undo, resize another sphere.
+    // Each cycle used to write the untouched spheres back scaled once more,
+    // and setting the thickness back to 1 left them there.
+    let mut document = document();
+    rig(&mut document);
+    let root = radii(&document)[0];
+
+    for cycle in 0..4 {
+        document
+            .set_skin(SkinSettings { thickness: 2.0 })
+            .expect("a thicker skin");
+        assert!(SculptModel::undo(&mut document).expect("undo"));
+        document.resize_zsphere(1, 0.15).expect("resize");
+        assert_eq!(
+            radii(&document)[0],
+            root,
+            "the untouched root moved on cycle {cycle}"
+        );
+    }
+    document
+        .set_skin(SkinSettings { thickness: 1.0 })
+        .expect("back to the default");
+    assert_eq!(radii(&document), vec![root, 0.15]);
+}
+
+fn active(document: &ClayDocument) -> clayspace_model::LayerKey {
+    SceneModel::scene(document).active.expect("an active layer")
+}
+
+#[test]
+fn thickness_is_per_rig() {
+    // It was one document-wide value, so a thickness chosen for one rig was
+    // the thickness every other rig was read back through on the next step —
+    // and a rig written at 1 and read at 2 came back with its radii halved.
+    let mut document = document();
+    rig(&mut document);
+    let first = active(&document);
+    let first_radii = radii(&document);
+
+    rig(&mut document);
+    let second = active(&document);
+    assert_ne!(first, second, "each rig has a subtool of its own");
+    document
+        .set_skin(SkinSettings { thickness: 2.0 })
+        .expect("a thicker skin on the second rig");
+    let second_radii = radii(&document);
+
+    for cycle in 0..3 {
+        assert!(SculptModel::undo(&mut document).expect("undo"));
+        assert!(SculptModel::redo(&mut document).expect("redo"));
+        assert_eq!(radii(&document), second_radii, "cycle {cycle}");
+    }
+
+    document.set_active_layer(first).expect("switch");
+    assert_eq!(
+        document.skin().thickness,
+        1.0,
+        "the second rig's thickness showed up on the first"
+    );
+    assert_eq!(
+        radii(&document),
+        first_radii,
+        "the first rig was read back through the second one's thickness"
+    );
+
+    document.set_active_layer(second).expect("switch back");
+    assert_eq!(document.skin().thickness, 2.0);
+    assert_eq!(radii(&document), second_radii);
+}
+
+#[test]
+fn a_thickness_is_refused_without_a_rig_and_unchanged_is_not_a_step() {
+    let mut document = document();
+    let depth = SculptModel::history(&document).depth;
+    assert!(
+        document.set_skin(SkinSettings { thickness: 2.0 }).is_err(),
+        "a subtool without a rig took a thickness"
+    );
+    assert_eq!(SculptModel::history(&document).depth, depth);
+
+    rig(&mut document);
+    let depth = SculptModel::history(&document).depth;
+    document
+        .set_skin(SkinSettings { thickness: 1.0 })
+        .expect("the thickness it already has");
+    assert_eq!(
+        SculptModel::history(&document).depth,
+        depth,
+        "a thickness that changed nothing was recorded as a step"
+    );
+}
+
 /// A curve laid across the front of the starting form.
 fn lay(document: &mut ClayDocument) {
     document.begin_curve();
