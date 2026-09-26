@@ -753,6 +753,13 @@ pub struct CageState {
     pub points: usize,
     /// How many of them are in hand.
     pub selected_points: usize,
+    /// How many of them stand away from rest — what a cage evaluation is
+    /// priced by, so a slow frame can be read against the work it was given.
+    pub dragged_points: usize,
+    /// What the last preview frame of a mesh cage drag cost, in milliseconds.
+    /// `null` before anything was previewed, and on a field, whose preview is
+    /// drawn by the viewport rather than by bending the layer.
+    pub preview_ms: Option<f64>,
     /// Which of the manipulator's three modes is in force.
     pub mode: String,
 }
@@ -1321,6 +1328,8 @@ mod tests {
                 divisions: [2; 3],
                 points: 0,
                 selected_points: 0,
+                dragged_points: 0,
+                preview_ms: None,
                 mode: "move".into(),
             }),
             deform: Some(DeformState {

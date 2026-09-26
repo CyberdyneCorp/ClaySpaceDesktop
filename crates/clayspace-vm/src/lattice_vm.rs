@@ -225,6 +225,7 @@ mod tests {
                 mode: GizmoMode::default(),
                 rest_span: 2.0,
                 touched: false,
+                ..LatticeState::default()
             };
             Ok(())
         }

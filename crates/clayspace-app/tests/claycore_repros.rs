@@ -523,3 +523,56 @@ fn a_placed_node_reports_its_primitive_and_nothing_else() {
         "the bound should at least reflect that the node was scaled up"
     );
 }
+
+/// What one evaluation of a mesh cage costs, against the cage's size, with a
+/// single control point dragged (#176).
+///
+/// `clay_mesh_lattice_displacement` is the evaluation the mesh cage applies
+/// once per vertex, and the one the field preview reads through
+/// `cage_warp`. Today it sums *every* control point, dragged or not, so one
+/// corner of a 32³ cage costs 32,768 terms a point where the same corner of a
+/// 3³ cage costs 27 — which is why a 32³ mesh preview frame takes seconds.
+/// ClayCore#655 sums the dragged points alone; when the pin moves to a
+/// release carrying it this fails, and should be flipped to assert that the
+/// two cages cost within a small multiple of each other.
+#[test]
+fn a_mesh_cage_evaluation_is_priced_by_every_point_the_cage_holds() {
+    use claycore::MeshLattice;
+    let points: Vec<[f32; 3]> = (0..2048)
+        .map(|at| {
+            let t = at as f32 / 2048.0;
+            [2.0 * t - 1.0, (7.0 * t).sin() * 0.9, (3.0 * t).cos() * 0.9]
+        })
+        .collect();
+    // Best of three, so a scheduler hiccup on either side cannot make the
+    // ratio.
+    let cost = |divisions: i32| {
+        let mut cage = MeshLattice::new([-1.0; 3], [1.0; 3], [divisions; 3]).expect("a cage");
+        cage.set_offset([0, 0, 0], [0.05, -0.02, 0.0])
+            .expect("drag one corner");
+        (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                for point in &points {
+                    std::hint::black_box(cage.displacement(*point).expect("evaluate"));
+                }
+                started.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let small = cost(3);
+    let large = cost(32);
+    let ratio = large / small;
+    println!(
+        "one dragged point, {} evaluations: 3³ {:.3} ms, 32³ {:.3} ms — {ratio:.0}x",
+        points.len(),
+        small * 1e3,
+        large * 1e3
+    );
+    assert!(
+        ratio > 20.0,
+        "a 32³ cage with one point dragged costs only {ratio:.1}x a 3³ one: the \
+         engine now prices a cage by its dragged points, so flip this repro and \
+         tighten the cage frame budget (#176)"
+    );
+}
