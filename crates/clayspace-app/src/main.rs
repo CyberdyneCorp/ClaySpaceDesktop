@@ -686,6 +686,8 @@ struct Graphics {
     geometry: SurfaceGeometry,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
+    /// The agent's captures draw into this, reused while the size holds.
+    captures: clayspace_view::CaptureTargets,
 }
 
 impl App {
@@ -1299,6 +1301,7 @@ impl App {
             geometry,
             egui_state,
             egui_renderer,
+            captures: clayspace_view::CaptureTargets::default(),
         });
 
         // Timed under its own name. This meshes the whole starting form, so
@@ -2089,19 +2092,16 @@ impl App {
         }
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
         // The remainder is ours and is the number worth looking at: it is
-        // everything the settle spent that was neither the engine's mesh, nor
-        // reading it, nor the upload.
-        let ours = cost
-            .total_time
-            .saturating_sub(cost.engine_mesh_time)
-            .saturating_sub(cost.read_time)
-            .saturating_sub(cost.upload_time);
+        // everything the settle spent outside the measured stages.
+        let ours = cost.total_time.saturating_sub(cost.parts());
         eprintln!(
-            "  re-malha final [{:?}] {:.0} ms = motor {:.0} + leitura {:.0} + envio {:.0} + resto {:.0}; {} triângulos",
+            "  re-malha final [{:?}] {:.0} ms = motor {:.0} + leitura {:.0} + divisão {:.0} + poda {:.0} + envio {:.0} + resto {:.0}; {} triângulos",
             cost.route,
             ms(cost.total_time),
             ms(cost.engine_mesh_time),
             ms(cost.read_time),
+            ms(cost.split_time),
+            ms(cost.prune_time),
             ms(cost.upload_time),
             ms(ours),
             cost.triangles,
@@ -6755,8 +6755,10 @@ impl Session for App {
         // frame with the reason only in a log, which is why this is not a
         // detail: the whole capture comes back empty and says nothing.
         let format = graphics.surface.format();
-        let target =
-            clayspace_view::OffscreenTarget::with_format(&graphics.gpu, width, height, format);
+        // Taken out for the capture, because painting the interface below
+        // borrows all of `graphics`, and put back before returning.
+        let mut captures = std::mem::take(&mut graphics.captures);
+        let target = captures.get(&graphics.gpu, width, height, format);
         // A window image has the same scene rectangle as the displayed frame.
         // A viewport-only image uses the entire requested target.
         graphics.renderer.set_scene_viewport(match request.what {
@@ -6795,6 +6797,7 @@ impl Session for App {
                 pixel.swap(0, 2);
             }
         }
+        graphics.captures = captures;
 
         Ok(Frame {
             width: image.width,

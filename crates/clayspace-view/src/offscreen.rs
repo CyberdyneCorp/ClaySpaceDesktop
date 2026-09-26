@@ -201,6 +201,49 @@ impl OffscreenTarget {
     }
 }
 
+/// One offscreen target kept between captures.
+///
+/// A capture used to build a texture, a depth framebuffer and a readback
+/// buffer of its own every time, and a repeated-capture loop stalled on the
+/// allocations. Captures come in runs at one size, so one target is kept and
+/// replaced only when the size or format asked for changes — which also keeps
+/// what is held bounded to a single target.
+#[derive(Default)]
+pub struct CaptureTargets {
+    target: Option<OffscreenTarget>,
+    created: usize,
+}
+
+impl CaptureTargets {
+    /// A target of this size and format, reusing the last one when it matches.
+    pub fn get(
+        &mut self,
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> &OffscreenTarget {
+        let (width, height) = (width.max(1), height.max(1));
+        let fits = self.target.as_ref().is_some_and(|target| {
+            target.width() == width && target.height() == height && target.format == format
+        });
+        if !fits {
+            // Released before the replacement is made, so the two are never
+            // resident together.
+            self.target = None;
+            self.target = Some(OffscreenTarget::with_format(gpu, width, height, format));
+            self.created += 1;
+        }
+        self.target.as_ref().expect("a target was just ensured")
+    }
+
+    /// How many targets this has had to create, for checking that a run of
+    /// captures reuses one.
+    pub fn created(&self) -> usize {
+        self.created
+    }
+}
+
 /// A captured frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {

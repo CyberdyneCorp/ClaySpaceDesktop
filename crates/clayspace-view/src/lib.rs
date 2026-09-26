@@ -38,7 +38,7 @@ pub use gpu::{Framebuffer, Gpu, GpuError, MsaaQuality};
 pub use icons::Icon;
 pub use layout::{Layout, Panel};
 pub use matcap::MatCap;
-pub use offscreen::{Image, OffscreenTarget};
+pub use offscreen::{CaptureTargets, Image, OffscreenTarget};
 pub use profiler::{GpuFrameTiming, GpuPass, GpuProfiler};
 pub use quality::{
     InteractionState, QualityGovernor, ShadingMode, StudioMaterial, ViewportProfile,
