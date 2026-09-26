@@ -132,17 +132,36 @@ fn a_partial_mip_set_cannot_leave_a_flat_grey_region() {
         .rebuild(&harness.gpu, &mut document)
         .expect("full surface");
     let full = harness.capture(geometry.mesh(), &camera, false, "18-lod-complete");
+    let mut complete = geometry.stored_triangles_exact();
     geometry
         .set_detail(&harness.gpu, &mut document, Detail::Reduced)
         .expect("request reduced detail");
     assert_eq!(geometry.detail(), Detail::Full);
+    let mut fallback = geometry.stored_triangles_exact();
+    complete.sort_unstable();
+    fallback.sort_unstable();
+    assert!(
+        complete == fallback,
+        "the fallback is not the complete surface: {} triangles against {}",
+        fallback.len(),
+        complete.len()
+    );
     let requested = harness.capture(geometry.mesh(), &camera, false, "18-lod-partial-fallback");
-    assert_eq!(
-        compare(&full, &requested).0,
-        0.0,
-        "partial mips changed the drawing"
+    // The geometry is identical, so this bounds the rasteriser rather than
+    // the surface. Draw order is fixed, yet a virtualised CI GPU still moves
+    // a few pixels (under 0.01%) between two draws of the same buffers. The
+    // defect this guards against was the uncovered bricks going flat grey,
+    // which moved 0.69% of this frame.
+    let (share, _) = compare(&full, &requested);
+    assert!(
+        share < MAX_RASTER_NOISE,
+        "partial mips changed {:.4}% of the drawing",
+        share * 100.0
     );
 }
+
+/// The share of a frame two draws of identical geometry may disagree on.
+const MAX_RASTER_NOISE: f64 = 1e-3;
 
 #[test]
 fn the_coarse_surface_is_worth_looking_at() {
