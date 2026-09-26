@@ -327,6 +327,18 @@ allowed always, or refused. The connection secret is not consent. Opening the
 door, shutting it and answering that request are the only three commands in the
 application an agent cannot reach at all.
 
+Each gated operation takes its path and opens no file panel: `document.save_as`,
+`document.open`, `exchange.run_import` and `exchange.run_export` all take
+`path`. An ask nobody has answered comes back as `consent_timed_out` inside the
+ten-second call bound and stays up at the window, so calling again picks up an
+answer given in between. Nothing over the door opens a native dialog: saving a
+document that has never been saved, opening or quitting over unsaved work, and
+switching layers away from a dragged cage are refused with the call that gives
+the answer up front — `save_as`, `document.new`, or `layer.select` with
+`cage: "apply"` or `"discard"`. The crash-recovery offer is a window in the
+application rather than an alert, so a session with work on offer still serves
+the door.
+
 The door has a suite of its own: `just test-agent` runs the agent-facing
 crate's tests (`clayspace-mcp`), which need no display, no GPU and no engine built, and `just
 test-agent-e2e` drives the real application over loopback. The second is asked
