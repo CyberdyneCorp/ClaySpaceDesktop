@@ -387,6 +387,15 @@ struct Layer {
     /// the bricks the old one used are never told anything changed. Removing an
     /// arm left the arm on screen.
     armature_bounds: Option<([f32; 3], [f32; 3])>,
+    /// How much this subtool's rig radii are scaled by on the way to the
+    /// engine.
+    ///
+    /// The rig's own, not the document's. It used to be one document-wide
+    /// value, so a thickness chosen for one rig was applied to every other:
+    /// the next history step re-read each rig through it, and a rig whose
+    /// radii had been written at another thickness came back with the ratio
+    /// baked in. Saved beside the document by [`crate::rigs`].
+    skin: SkinSettings,
 }
 
 impl Layer {
@@ -439,6 +448,7 @@ impl Layer {
             mirror: Some([false; 3]),
             armature: None,
             armature_bounds: None,
+            skin: SkinSettings::default(),
         }
     }
 
@@ -1002,6 +1012,8 @@ struct SkinChange {
     /// entry a step just crossed is this change rather than something else.
     /// See [`ClayDocument::history_seq`].
     stamp: u64,
+    /// The subtool whose rig it was: the thickness is per rig.
+    layer: LayerId,
     before: SkinSettings,
     after: SkinSettings,
 }
@@ -1656,8 +1668,6 @@ pub struct ClayDocument {
     /// Hands out layer keys. Monotone, so a key is never reused for a
     /// different layer after a removal.
     next_key: u64,
-    /// How much the placed radii are scaled by, for the rigs in this document.
-    skin: SkinSettings,
     /// The thickness changes the engine's undo stack still holds, oldest
     /// first, and the mirror of what has been taken back.
     ///
@@ -1784,7 +1794,6 @@ impl ClayDocument {
             cage_revision: 0,
             mask_revision: 0,
             next_key: 2,
-            skin: SkinSettings::default(),
             skin_undo: Vec::new(),
             skin_redo: Vec::new(),
             objects: Vec::new(),
@@ -8810,7 +8819,9 @@ impl ClayDocument {
         let Some(change) = self.skin_undo.pop() else {
             return;
         };
-        self.skin = change.before;
+        if let Some(skin) = self.skin_of_mut(change.layer) {
+            *skin = change.before;
+        }
         self.skin_redo.push(change);
     }
 
@@ -8827,8 +8838,20 @@ impl ClayDocument {
         let Some(change) = self.skin_redo.pop() else {
             return;
         };
-        self.skin = change.after;
+        if let Some(skin) = self.skin_of_mut(change.layer) {
+            *skin = change.after;
+        }
         self.skin_undo.push(change);
+    }
+
+    /// The thickness a rig's radii are written with, wherever its layer is
+    /// held: a step can reach a layer this side has retired as well as one in
+    /// the stack.
+    fn skin_of_mut(&mut self, layer: LayerId) -> Option<&mut SkinSettings> {
+        match self.layers.iter_mut().find(|row| row.id == layer) {
+            Some(row) => Some(&mut row.skin),
+            None => self.retired.get_mut(&layer).map(|row| &mut row.skin),
+        }
     }
 
     /// The newest carried mesh gesture; voxel pass edits live in the engine's
@@ -12456,6 +12479,13 @@ impl DocumentModel for ClayDocument {
         if let Err(e) = crate::objects::write_table(&sidecar, &self.objects) {
             eprintln!("os objetos colocados não puderam ser registrados em {sidecar:?}: {e}");
         }
+        // Each rig's thickness, beside it, and swallowed on failure for the
+        // object table's reason: the skinned surface is in the `.clay`, and
+        // what is lost is the split between authored radius and multiplier.
+        let sidecar = crate::rigs::sidecar_for(path);
+        if let Err(e) = crate::rigs::write_skins(&sidecar, &self.rig_skins()) {
+            eprintln!("a espessura das armaduras não pôde ser registrada em {sidecar:?}: {e}");
+        }
         // The hierarchies, beside it — and this one **fails the save**.
         //
         // Read that against the four lines above it, because the two look like
@@ -12679,7 +12709,6 @@ impl ClayDocument {
             voxel_grab: None,
             recording_pass: false,
             next_key,
-            skin: SkinSettings::default(),
             skin_undo: Vec::new(),
             skin_redo: Vec::new(),
             objects: Vec::new(),
@@ -12766,12 +12795,25 @@ impl ClayDocument {
         // pose it (#77). Recovering all of them rather than the first is what
         // makes two rigs survive a reopen: the record is per layer now, so a
         // second one no longer overwrites the first.
+        //
+        // Each through the thickness it was saved at, which the side-car keeps
+        // by stack position — the radii in the document carry it, so reading
+        // one at the default would bake it into the authored tree.
+        let skins = crate::rigs::read_skins(&crate::rigs::sidecar_for(path));
         let mut first_rig = None;
         for (index, id) in ids.into_iter().enumerate() {
-            let Some((node, tree)) = Self::recover_armature(&model.document, id, model.skin) else {
+            let skin = skins
+                .iter()
+                .find(|saved| saved.position == index)
+                .map(|saved| SkinSettings {
+                    thickness: saved.thickness,
+                })
+                .unwrap_or_default();
+            let Some((node, tree)) = Self::recover_armature(&model.document, id, skin) else {
                 continue;
             };
-            model.layers[index].armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
+            model.layers[index].skin = skin;
+            model.layers[index].armature_bounds = Some(Self::armature_bounds(&tree, skin));
             // One node, which is the whole rig: since ClayCore 0.30.0 the
             // signs travel with it, so there are no separate cutter items
             // left behind for a reader to miss (#99).
@@ -14666,18 +14708,24 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
-        let before = self.skin;
-        self.skin = skin;
-        if self.active_layer().armature.is_none() {
-            // Nothing placed to rewrite, so nothing lands in the engine's
-            // history for a step to cross and nothing to note against it.
+        // The active subtool's rig, and only it: the thickness is the rig's
+        // own, so there is nothing to set on a subtool without one.
+        let index = self.active;
+        if self.layers[index].armature.is_none() {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        }
+        let before = self.layers[index].skin;
+        if before == skin {
+            // Nothing to rewrite, and a rewrite would be a history entry for
+            // a change nobody made.
             return Ok(());
         }
+        self.layers[index].skin = skin;
         let depth = self.engine_undo_depth();
         if let Err(e) = self.rewrite_armature() {
             // The radii are whatever the failed rewrite left them as, and the
             // slider saying it moved would be the one claim certainly wrong.
-            self.skin = before;
+            self.layers[index].skin = before;
             return Err(e);
         }
         // Only when the rewrite actually left an entry: a stamp handed out
@@ -14687,6 +14735,7 @@ impl ArmatureModel for ClayDocument {
             let stamp = self.engine_top_stamp();
             self.skin_undo.push(SkinChange {
                 stamp,
+                layer: self.layers[index].id,
                 before,
                 after: skin,
             });
@@ -14695,7 +14744,10 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn skin(&self) -> SkinSettings {
-        self.skin
+        self.layers
+            .get(self.active)
+            .map(|layer| layer.skin)
+            .unwrap_or_default()
     }
 }
 
@@ -14716,8 +14768,14 @@ impl ClayDocument {
         // leaves. #99 made the sign a property of the node, so all of that
         // goes away and the rig is one item again.
         let mut item = Item::armature().map_err(ModelError::engine)?;
+        let skin = self
+            .layers
+            .iter()
+            .find(|row| row.id == layer)
+            .map(|row| row.skin)
+            .unwrap_or_default();
 
-        // Radii scaled on the way out. The tree keeps what was authored, so
+        // Radii scaled on the way out, by this rig's own thickness. The tree keeps what was authored, so
         // moving the thickness slider is reversible and does not quietly
         // rewrite the rig.
         let points: Vec<f32> = tree
@@ -14728,7 +14786,7 @@ impl ClayDocument {
                     n.position[0],
                     n.position[1],
                     n.position[2],
-                    self.skin.radius_for(n.radius),
+                    skin.radius_for(n.radius),
                 ]
             })
             .collect();
@@ -14760,7 +14818,7 @@ impl ClayDocument {
         // Bounds over the whole tree, negatives included: they are what the
         // vacated box has to cover when a rig is rewritten. On the rig's own
         // layer, because that is where the rig is.
-        let bounds = Self::armature_bounds(tree, self.skin);
+        let bounds = Self::armature_bounds(tree, skin);
         if let Some(row) = self.layers.iter_mut().find(|row| row.id == layer) {
             row.armature_bounds = Some(bounds);
         }
@@ -14786,10 +14844,6 @@ impl ClayDocument {
             return;
         };
         let active_id = self.layers.get(self.active).map(|layer| layer.id);
-        // Read once, because the loop below borrows the document and a rig it
-        // recovers has to be divided by the thickness its radii were written
-        // with. See [`Self::read_armature`].
-        let skin = self.skin;
 
         // Moved out rather than cloned. A surviving layer carries its meshed
         // chunks, which are megabytes on a worked grid, and this runs on every
@@ -14869,8 +14923,10 @@ impl ClayDocument {
                 // it carried has to be read out of the document again. The rig
                 // is the only part the document can answer for — a mask and a
                 // mirror are host state, and a redone creation starts them
-                // where a fresh layer starts them.
-                armature: Self::recover_armature(&self.document, *id, skin)
+                // where a fresh layer starts them. At the default thickness,
+                // which is the one a fresh layer holds and so the one a rig
+                // made on it was written with.
+                armature: Self::recover_armature(&self.document, *id, SkinSettings::default())
                     .map(|(node, tree)| (vec![node], tree)),
                 ..Layer::new(*id, key, &name, representation)
             });
@@ -14939,7 +14995,6 @@ impl ClayDocument {
     /// asking the rest is one node enumeration per layer per history step,
     /// which is a handful of subtools at a sculptor's pace.
     fn resync_armature(&mut self, rigged_before: &[LayerId]) {
-        let skin = self.skin;
         let layers: Vec<(usize, LayerId)> = self
             .layers
             .iter()
@@ -14952,6 +15007,9 @@ impl ClayDocument {
             // new bounds, and nothing marks those bricks — the same debt a
             // rewrite pays with `refill_region`.
             let vacated = self.layers[index].armature_bounds;
+            // Each rig through its own thickness: reading one through another
+            // rig's is what baked the ratio between them into its radii.
+            let skin = self.layers[index].skin;
             match Self::recover_armature(&self.document, layer, skin) {
                 Some((node, tree)) => {
                     self.layers[index].armature_bounds = Some(Self::armature_bounds(&tree, skin));
@@ -15012,6 +15070,22 @@ impl ClayDocument {
 
     /// Which layers carry a rig as things stand, for the step about to move
     /// them. See [`Self::follow_a_returning_rig`].
+    /// Every rig's thickness that is not the default, by the stack position
+    /// the document is saved in. See [`crate::rigs`].
+    fn rig_skins(&self) -> Vec<crate::rigs::SavedSkin> {
+        let ids = self.document.layer_ids().unwrap_or_default();
+        self.layers
+            .iter()
+            .filter(|layer| layer.armature.is_some() && layer.skin != SkinSettings::default())
+            .filter_map(|layer| {
+                Some(crate::rigs::SavedSkin {
+                    position: ids.iter().position(|id| *id == layer.id)?,
+                    thickness: layer.skin.thickness,
+                })
+            })
+            .collect()
+    }
+
     fn rigged_layers(&self) -> Vec<LayerId> {
         self.layers
             .iter()

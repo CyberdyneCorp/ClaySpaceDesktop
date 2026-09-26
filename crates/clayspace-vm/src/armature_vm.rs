@@ -64,6 +64,9 @@ pub struct ArmatureViewModel {
 }
 
 impl ArmatureViewModel {
+    /// The smallest radius a sphere is given, by any route.
+    const MIN_RADIUS: f32 = 0.01;
+
     pub fn new(model: Box<dyn ArmatureModel>) -> Self {
         let tree = model.armature();
         let skin = model.skin();
@@ -272,7 +275,7 @@ impl ArmatureViewModel {
                             .map(|axis| (at[axis] - node.position[axis]).powi(2))
                             .sum::<f32>()
                             .sqrt();
-                        d.max(0.01)
+                        d.max(Self::MIN_RADIUS)
                     })
                     .unwrap_or(self.default_radius);
                 self.resize_symmetric(index, state.mirror, radius)
@@ -428,8 +431,19 @@ impl ArmatureViewModel {
     /// both, so an agent does not have to counterfeit a gesture.
     ///
     /// Mirrored where the armature's symmetry is on, exactly as the drag is.
+    ///
+    /// A radius that is not a positive number is refused rather than placed:
+    /// the engine skins whatever it is handed, and a negative one drew an
+    /// inverted fan of triangles. A positive one is floored where `resize`
+    /// floors it.
     pub fn add(&mut self, parent: NodeIndex, at: [f32; 3], radius: Option<f32>) {
         let radius = radius.unwrap_or(self.default_radius);
+        if !(radius.is_finite() && radius > 0.0) {
+            self.notice
+                .set(Some(format!("o raio precisa ser positivo, não {radius}")));
+            return;
+        }
+        let radius = radius.max(Self::MIN_RADIUS);
         let mirrored = *self.symmetric.get();
         match self.model.add_zsphere(parent, at, radius, mirrored) {
             Ok(child) => {
@@ -442,8 +456,12 @@ impl ArmatureViewModel {
     }
 
     /// Puts a sphere on the link between one and its parent.
+    ///
+    /// Mirrored where the armature's symmetry is on, exactly as the pointer's
+    /// insert is: the link's reflection gets its own sphere.
     pub fn insert(&mut self, child: NodeIndex) {
-        match self.model.insert_zsphere(child) {
+        let mirror = self.mirrored_node(child);
+        match self.insert_symmetric(child, mirror) {
             Ok(inserted) => {
                 self.notice.set_if_changed(None);
                 self.refresh();
@@ -480,7 +498,7 @@ impl ArmatureViewModel {
     /// How thick a sphere is.
     pub fn resize(&mut self, index: NodeIndex, radius: f32) {
         let mirror = self.mirrored_node(index);
-        match self.resize_symmetric(index, mirror, radius.max(0.01)) {
+        match self.resize_symmetric(index, mirror, radius.max(Self::MIN_RADIUS)) {
             Ok(()) => {
                 self.notice.set_if_changed(None);
                 self.refresh();

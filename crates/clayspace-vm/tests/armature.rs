@@ -694,3 +694,57 @@ fn reparent_of_a_missing_sphere_is_refused() {
         "a refused reparent still moved the tree"
     );
 }
+
+#[test]
+fn add_refuses_a_negative_radius() {
+    // The engine skins whatever radius it is handed, and a negative one drew
+    // an inverted fan of triangles. `resize` already floored its radius; the
+    // route an agent uses to grow a sphere did not look at it at all.
+    let mut vm = rigged();
+    let before = vm.tree().get().clone().expect("a tree");
+
+    for radius in [-0.2, 0.0, f32::NAN] {
+        vm.add(0, [0.0, 1.0, 0.0], Some(radius));
+        assert!(
+            vm.notice().get().is_some(),
+            "a radius of {radius} was accepted without a word"
+        );
+        assert_eq!(
+            vm.tree().get().clone().expect("a tree"),
+            before,
+            "a radius of {radius} still grew a sphere"
+        );
+    }
+
+    // And a positive one below the floor is floored, where `resize` floors it.
+    vm.add(0, [0.0, 1.0, 0.0], Some(0.001));
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes.len(), before.nodes.len() + 1);
+    assert_eq!(tree.nodes.last().expect("the new sphere").radius, 0.01);
+}
+
+#[test]
+fn insert_is_mirrored() {
+    // The pointer's insert mirrored itself and the named one did not, so an
+    // agent adding a joint to one arm of a symmetric rig left the other arm a
+    // joint short.
+    let mut vm = ArmatureViewModel::new(FakeRig::default().boxed());
+    vm.begin([0.0, 0.0, 0.0]);
+    assert!(*vm.symmetric().get(), "a rig mirrors by default");
+    vm.add(0, [1.0, 0.0, 0.0], None);
+    let before = vm.tree().get().clone().expect("a tree");
+    assert_eq!(before.nodes.len(), 3, "the arm and its reflection");
+
+    vm.insert(1);
+
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes.len(), 5, "only one side got the joint");
+    let joints: Vec<[f32; 3]> = tree.nodes[3..].iter().map(|n| n.position).collect();
+    assert!(joints.contains(&[0.5, 0.0, 0.0]), "{joints:?}");
+    assert!(joints.contains(&[-0.5, 0.0, 0.0]), "{joints:?}");
+
+    // And with the mirror off, one side only.
+    vm.set_symmetric(false);
+    vm.insert(1);
+    assert_eq!(vm.tree().get().clone().expect("a tree").nodes.len(), 6);
+}
