@@ -18,6 +18,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod build_cache;
+
 const REQUIRED_CMAKE: (u32, u32) = (3, 24);
 
 fn main() {
@@ -30,11 +32,27 @@ fn main() {
     check_submodule(&engine);
     check_submodule_revision(&engine, &manifest.join("../.."));
     check_cmake();
+    check_cmake_cache(&engine);
 
     let build = build_engine(&engine);
     emit_link_flags(&build);
     generate_bindings(&engine);
     emit_rerun_directives(&engine);
+}
+
+fn check_cmake_cache(engine: &Path) {
+    let cache =
+        PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("build/CMakeCache.txt");
+    let Ok(contents) = std::fs::read_to_string(&cache) else {
+        return;
+    };
+    if let Some(reason) = build_cache::stale_cache_reason(&contents, engine) {
+        panic!(
+            "\n\nCyberRemesher has a stale CMake cache at {}: {reason}\n\n\
+             Run `cargo clean -p cyberremesh-sys` and retry.\n",
+            cache.display()
+        );
+    }
 }
 
 fn check_submodule(engine: &Path) {

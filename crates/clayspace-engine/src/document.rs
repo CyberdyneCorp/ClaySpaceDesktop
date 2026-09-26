@@ -2212,14 +2212,29 @@ impl ClayDocument {
         let index = self.index_of(key)?;
         let id = self.layers[index].id;
         let first = self.first_visible_field_layer();
-        self.document
-            .set_layer_visible(id, visible)
-            .map_err(ModelError::engine)?;
+        let was_visible = self.layers[index].visible;
+        let field_layer = self.layers[index].is_in_the_field();
+        // The engine no longer reports the hidden layer's old field extent.
+        // Mark it while the layer still contributes, then mark it again after
+        // showing so both sides of the transition are covered.
+        if was_visible && !visible && !self.visibility_is_borrowed && field_layer {
+            self.mark_for_refill(id, &[])?;
+        }
+        if let Err(error) = self.document.set_layer_visible(id, visible) {
+            // A failed write leaves the old field in place, but the mark made
+            // above still needs to be drained before the next viewport read.
+            if was_visible && !visible && !self.visibility_is_borrowed && field_layer {
+                self.drain_dirty()?;
+            }
+            return Err(ModelError::engine(error));
+        }
         self.layers[index].visible = visible;
-        if self.visibility_is_borrowed || !self.layers[index].is_in_the_field() {
+        if self.visibility_is_borrowed || !field_layer {
             return Ok(());
         }
-        self.mark_for_refill(id, &[])?;
+        if visible {
+            self.mark_for_refill(id, &[])?;
+        }
         self.mark_first_visible_flip(first)
     }
 
@@ -2368,6 +2383,9 @@ impl ClayDocument {
         // Where the source stands, so the result can take its place, and its
         // key, so it can be removed once the result is filled from it.
         let (replacing, at) = (source.key, self.active);
+        if in_place {
+            self.remember_objects_before();
+        }
         // Bracketed, because a crossing is several engine edits — the layer,
         // then whatever fills it — and a sculptor asked for one thing. Without
         // the group, undo took back the filling and left the empty layer
@@ -2403,6 +2421,10 @@ impl ClayDocument {
         let made = made?;
         closed?;
         replaced?;
+        if in_place {
+            self.reconcile_live_objects();
+            self.remember_objects_after();
+        }
         // Recorded so undo takes the whole crossing back rather than emptying
         // the layer it just made. See `crossing_undo`.
         if let Ok(row) = self.index_of(made) {
@@ -2470,6 +2492,7 @@ impl ClayDocument {
     fn after_crossing_history(&mut self) -> Result<bool, ModelError> {
         let rigged = self.rigged_layers();
         self.reconcile_layers();
+        self.resync_objects();
         let layer = self.active_layer().id;
         self.refill(layer, &[])?;
         self.resync_armature(&rigged);
@@ -10152,23 +10175,19 @@ impl SceneModel for ClayDocument {
         if name.is_empty() {
             return Err(ModelError::engine("uma camada precisa de um nome"));
         }
-
-        // A voxel layer's grid is reachable only by name — the ABI has no
-        // id-addressed accessor — and the lookup answers with the first layer
-        // in stack order carrying it. So two voxel layers sharing a name would
-        // shadow one another's grid, and a stroke would land on the wrong one.
-        // Nothing upstream enforces this, which is why it is enforced here and
-        // only where it can actually go wrong.
-        if self.layers[index].representation == Representation::Voxel
-            && self.layers.iter().enumerate().any(|(other, layer)| {
-                other != index
-                    && layer.representation == Representation::Voxel
-                    && layer.engine_name == name
-            })
-        {
+        if name.chars().count() > 128 {
             return Err(ModelError::engine(
-                "já existe uma camada de voxels com esse nome",
+                "o nome de uma camada tem no máximo 128 caracteres",
             ));
+        }
+
+        // Names identify rows for users and tools. The engine does not enforce
+        // uniqueness, and a voxel grid is also looked up by name, so reject
+        // collisions across the whole stack before changing the document.
+        if self.layers.iter().enumerate().any(|(other, layer)| {
+            other != index && (layer.name == name || layer.engine_name == name)
+        }) {
+            return Err(ModelError::engine("já existe uma camada com esse nome"));
         }
 
         // Since ClayCore 0.30.0 the rename reaches the document, so it is
@@ -10475,6 +10494,12 @@ impl SceneModel for ClayDocument {
         // Kept, because a removal is undoable and everything this side knows
         // about the layer is not — see `retired`.
         self.retired.insert(id, retired);
+        if self
+            .selected_object
+            .is_some_and(|selected| selected.layer == key)
+        {
+            self.selected_object = None;
+        }
         // The sculpt target follows the layer it pointed at rather than the
         // *index* it sat on. Every row above the one removed shifts down by
         // one, and clamping alone left `active` where it was: removing the
@@ -10678,9 +10703,12 @@ impl SceneModel for ClayDocument {
                  inteira deixaria o traço mais lento em vez de mais rápido",
             ));
         }
+        self.remember_objects_before();
         self.document
             .consolidate(id, self.consolidation_params(), None)
             .map_err(ModelError::engine)?;
+        self.reconcile_live_objects();
+        self.remember_objects_after();
         self.refill(id, &[])?;
         Ok(())
     }
@@ -14175,6 +14203,31 @@ impl ClayDocument {
         self.objects.iter().position(|object| object.id() == id)
     }
 
+    /// Drops records for nodes an engine edit folded away. The document's
+    /// node enumeration includes descendants, so grouped objects survive.
+    fn reconcile_live_objects(&mut self) {
+        let live: std::collections::HashMap<LayerKey, std::collections::HashSet<NodeId>> = self
+            .layers
+            .iter()
+            .filter_map(|layer| {
+                self.document
+                    .layer_nodes(layer.id)
+                    .ok()
+                    .map(|nodes| (layer.key, nodes.into_iter().collect()))
+            })
+            .collect();
+        self.objects.retain(|object| {
+            live.get(&object.id().layer)
+                .is_some_and(|nodes| nodes.contains(&object.node))
+        });
+        if self
+            .selected_object
+            .is_some_and(|id| self.object_index(id).is_none())
+        {
+            self.selected_object = None;
+        }
+    }
+
     /// Records the table on both sides of an edit, so history can find it.
     ///
     /// Before and after, because undoing across an object edit lands on the
@@ -14679,14 +14732,17 @@ impl ClayDocument {
         } else {
             base.trim()
         };
-        if !self.layer_name_taken(base) {
-            return base.to_string();
+        let base: String = base.chars().take(128).collect();
+        if !self.layer_name_taken(&base) {
+            return base;
         }
         // From two, because the first one carries the bare name: "Esfera",
         // "Esfera 2", "Esfera 3" is how a sculptor counts them.
         let mut ordinal = 2_u32;
         loop {
-            let candidate = format!("{base} {ordinal}");
+            let suffix = format!(" {ordinal}");
+            let stem: String = base.chars().take(128 - suffix.chars().count()).collect();
+            let candidate = format!("{stem}{suffix}");
             if !self.layer_name_taken(&candidate) {
                 return candidate;
             }
@@ -15412,7 +15468,9 @@ impl ObjectModel for ClayDocument {
     }
 
     fn select_object(&mut self, id: Option<ObjectId>) {
-        self.selected_object = id;
+        if id.is_none_or(|id| self.object_index(id).is_some()) {
+            self.selected_object = id;
+        }
     }
 
     fn place_object(
@@ -16074,6 +16132,26 @@ mod first_visible_refill_tests {
 
         doc.set_layer_visible(base, true).expect("show base");
         assert_eq!(surface_at_cutter(&doc), None);
+    }
+
+    #[test]
+    fn hide_then_show_is_identical() {
+        let (mut doc, base, _) = composed_layers();
+        let before = doc
+            .cache
+            .raycast([0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+            .expect("original raycast")
+            .map(|hit| hit.position);
+
+        doc.set_layer_visible(base, false).expect("hide");
+        doc.set_layer_visible(base, true).expect("show");
+
+        let after = doc
+            .cache
+            .raycast([0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+            .expect("restored raycast")
+            .map(|hit| hit.position);
+        assert_eq!(after, before);
     }
 
     #[test]

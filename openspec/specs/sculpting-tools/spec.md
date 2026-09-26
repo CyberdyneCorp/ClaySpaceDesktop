@@ -88,6 +88,20 @@ call rather than falling through to a neighbouring one.
 - **THEN** only the part under the brush moves, where the Euclidean Mover at the
   same radius moves both
 
+#### Scenario: Field Move carries a smooth union
+- **WHEN** Mover crosses the blend between two smooth-unioned SDF items
+- **THEN** both contributors move with the assembled surface
+
+### Requirement: Brushes preserve their layer's representation
+A brush stroke SHALL leave the active layer in the same representation. Any
+conversion SHALL require an explicit conversion command with its own cost and
+loss report.
+
+#### Scenario: Every offered brush stays on its representation
+- **WHEN** each offered stroke tool is used on an SDF, voxel, fixed mesh or
+  multires layer
+- **THEN** that layer retains its original representation
+
 ### Requirement: Brush strength, size and flow are directly controllable
 The interface SHALL expose brush intensity, size and flow as always-visible controls whenever a sculpting tool is active. Each SHALL show its current value numerically and SHALL be adjustable both by dragging and by entering a value.
 

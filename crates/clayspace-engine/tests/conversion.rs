@@ -11,8 +11,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, Direction, GestureSample, Refusal, Representation, SceneModel, SculptModel,
-    ToolKind,
+    BrushSettings, Direction, GestureSample, ObjectModel, Refusal, Representation, SceneModel,
+    SculptModel, ToolKind,
 };
 
 fn document() -> ClayDocument {
@@ -25,6 +25,25 @@ fn document() -> ClayDocument {
 /// The cell size the tests convert at. Coarse enough to be quick, fine enough
 /// that the starting form survives it recognisably.
 const CELL: f32 = 0.04;
+
+#[test]
+fn a_crossing_clears_a_stale_selection() {
+    let mut doc = document();
+    let selected = doc.objects()[0].id;
+    doc.select_object(Some(selected));
+
+    doc.convert_layer_in_place(Direction::SdfToVoxel, CELL, 1)
+        .expect("in-place crossing");
+
+    assert_eq!(doc.selected_object(), None);
+    assert!(doc
+        .objects()
+        .iter()
+        .all(|object| object.id.layer != selected.layer));
+
+    doc.undo().expect("undo crossing");
+    assert!(doc.objects().iter().any(|object| object.id == selected));
+}
 
 #[test]
 fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {

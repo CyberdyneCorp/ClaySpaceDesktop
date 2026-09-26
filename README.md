@@ -98,7 +98,7 @@ report says which part of a document a byte belongs to.
 
 | | |
 |---|---|
-| Tests | About 2,700 `#[test]` functions, all headless — five ignored: three release-only timing aids, one known long-session defect, one measuring aid. `cargo test --workspace` prints the exact count |
+| Tests | About 2,700 `#[test]` functions, all headless — four ignored timing or measuring aids. A macOS visual tripwire keeps the known long-session speck defect visible. `cargo test --workspace` prints the exact count |
 | Visual captures | Some 640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
@@ -1430,6 +1430,12 @@ formatting, the layering rules, clippy, the suite, the specification and the
 packaging scripts. Knowing to run all seven should not depend on having read
 this file recently.
 
+If a local CyberRemesher build reports a stale CMake cache after an Xcode SDK,
+CMake installation or worktree change, run `cargo clean -p cyberremesh-sys` and
+retry. The build now names a missing cached SDK, CMake executable or previous
+source directory before CMake starts. A clean macOS checkout runs
+`cargo clippy --workspace -- -D warnings` with the CMake available on `PATH`.
+
 ### Trying an engine fix before it ships
 
 The engine is pinned to a release tag, because a release stays still and their
@@ -1456,6 +1462,10 @@ just test-one visual_brushes      # one target, with output
 Visual tests render real frames into `target/visual/`, and `just visual`
 renders them all and opens the directory. The captures there — some 640 — are how the
 screenshots above were checked against what the tests assert.
+
+`long_mixed_session_render_defect_tripwire` runs in the macOS visual suite and
+currently expects the known pinholes or dark specks. When it stops finding
+them, the test fails so its assertion can be changed to require a clean frame.
 
 These are meant to be looked at. Several real bugs were invisible to the
 assertions and obvious in the picture — see

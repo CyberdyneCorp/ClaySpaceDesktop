@@ -117,12 +117,15 @@ impl CallResult {
 pub trait ToolSurface: Send + Sync {
     fn tools(&self) -> Vec<ToolDescriptor>;
     fn call(&self, name: &str, arguments: &Value) -> Result<CallResult, Refusal>;
-    /// The client name belongs to this request, not to the shared surface.
-    fn call_for(
+    /// The MCP session making a call, for state that belongs to one caller,
+    /// and the client name that session gave, which belongs to this request
+    /// rather than to the shared surface.
+    fn call_scoped(
         &self,
+        _caller: &str,
+        _client: Option<&str>,
         name: &str,
         arguments: &Value,
-        _client: Option<&str>,
     ) -> Result<CallResult, Refusal> {
         self.call(name, arguments)
     }
@@ -155,6 +158,7 @@ fn refusal_to_result(refusal: &Refusal) -> Value {
 /// Handles one message against a tool surface.
 pub struct Protocol<'a> {
     pub surface: &'a dyn ToolSurface,
+    caller: Option<&'a str>,
     client: Option<&'a str>,
 }
 
@@ -162,12 +166,21 @@ impl<'a> Protocol<'a> {
     pub fn new(surface: &'a dyn ToolSurface) -> Self {
         Self {
             surface,
+            caller: None,
             client: None,
         }
     }
 
-    pub fn with_client(surface: &'a dyn ToolSurface, client: Option<&'a str>) -> Self {
-        Self { surface, client }
+    pub fn for_caller(
+        surface: &'a dyn ToolSurface,
+        caller: &'a str,
+        client: Option<&'a str>,
+    ) -> Self {
+        Self {
+            surface,
+            caller: Some(caller),
+            client,
+        }
     }
 
     /// The answer to one message, or none where the message was a
@@ -231,7 +244,13 @@ impl<'a> Protocol<'a> {
         };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        match self.surface.call_for(name, &arguments, self.client) {
+        let result = match self.caller {
+            Some(caller) => self
+                .surface
+                .call_scoped(caller, self.client, name, &arguments),
+            None => self.surface.call(name, &arguments),
+        };
+        match result {
             Ok(result) => jsonrpc::result(id, result.to_json()),
             // An unknown *tool* is the client's mistake and belongs in the
             // transport; an unknown action within a tool is the model's, and
