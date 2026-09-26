@@ -47,6 +47,20 @@ struct KeyGeometry {
     indices: Vec<u32>,
 }
 
+/// The keys in the order a fresh layout places them, which is the order the
+/// GPU draws them.
+///
+/// Sorted rather than the map's own order, which is seeded per process and
+/// per map. Where two bricks' triangles meet at equal depth the one drawn
+/// first wins the pixel, so laying out the same surface twice used to draw it
+/// differently: a request for coarse detail that fell back to full resolution
+/// re-meshed the identical surface and still moved a handful of pixels.
+fn in_draw_order(keys: &HashMap<BrickKey, KeyGeometry>) -> Vec<BrickKey> {
+    let mut order: Vec<BrickKey> = keys.keys().copied().collect();
+    order.sort_unstable();
+    order
+}
+
 /// Borrowed geometry and its destination in a fresh layout. Keeping only
 /// spans avoids allocating and copying full CPU-side upload arrays.
 struct LayoutUpload<'a> {
@@ -64,7 +78,8 @@ impl<'a> LayoutUpload<'a> {
             index_count: 0,
             bounds: None,
         };
-        for (&key, geometry) in keys {
+        for key in in_draw_order(keys) {
+            let geometry = &keys[&key];
             if geometry.indices.is_empty() {
                 continue;
             }
@@ -1025,8 +1040,7 @@ impl SurfaceGeometry {
         }
         self.layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
         self.bounds = None;
-        let keys: Vec<_> = self.keys.keys().copied().collect();
-        for key in keys {
+        for key in in_draw_order(&self.keys) {
             let placed = self.patch(gpu, key);
             debug_assert!(placed, "a fresh layout ran out of room");
         }
@@ -1815,6 +1829,36 @@ mod tests {
         keys
     }
 
+    /// Draw order decides which of two bricks wins a pixel at equal depth,
+    /// so a fresh layout must not inherit the map's seeded iteration order.
+    /// Laying out the same surface twice moved pixels before it was sorted.
+    #[test]
+    fn a_fresh_layout_places_bricks_in_key_order() {
+        let mut keys = HashMap::new();
+        for x in (0..64).rev() {
+            keys.insert(
+                [x % 4, x / 16, (x / 4) % 4],
+                KeyGeometry {
+                    vertices: vec![vertex([x as f32; 3], [0.0, 1.0, 0.0]); 3],
+                    indices: vec![0, 1, 2],
+                },
+            );
+        }
+        let mut layout = crate::slots::SlotMap::new(1 << 16, 1 << 16);
+        super::LayoutUpload::new(&keys, &mut layout).unwrap();
+        let mut sorted: Vec<_> = keys.keys().copied().collect();
+        sorted.sort_unstable();
+        let bases: Vec<u32> = sorted
+            .iter()
+            .map(|&key| layout.get(key).expect("placed").index_base)
+            .collect();
+        assert!(
+            bases.windows(2).all(|pair| pair[0] < pair[1]),
+            "bricks were laid out in map order: {bases:?}"
+        );
+        assert_eq!(super::in_draw_order(&keys), sorted);
+    }
+
     #[test]
     fn fresh_layout_upload_preserves_brick_bits_slots_and_degenerate_tails() {
         let keys = layout_fixture();
@@ -1822,7 +1866,8 @@ mod tests {
         let upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
         let (vertices, indices) = layout_buffers(&upload);
         let mut reference = crate::slots::SlotMap::new(4096, 4096);
-        for (&key, geometry) in &keys {
+        for key in super::in_draw_order(&keys) {
+            let geometry = &keys[&key];
             if geometry.indices.is_empty() {
                 assert_eq!(layout.get(key), None);
                 continue;
@@ -1916,7 +1961,8 @@ mod tests {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         let mut bounds = None;
-        for (&key, geometry) in keys {
+        for key in super::in_draw_order(keys) {
+            let geometry = &keys[&key];
             if geometry.indices.is_empty() {
                 continue;
             }
