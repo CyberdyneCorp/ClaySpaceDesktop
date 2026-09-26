@@ -317,6 +317,18 @@ pub struct Strings {
     pub multires_compact: &'static str,
     /// Why the composition controls are refusing right now.
     pub multires_stroke_open: &'static str,
+    /// Gives back a hierarchy's rebuildable caches.
+    pub multires_release_caches: &'static str,
+    /// Beside the figure the last release gave back.
+    pub multires_freed: &'static str,
+    /// Said when a release moved the detail checksum, which means it released
+    /// work rather than caches. Should never be read; is there if it is.
+    pub multires_release_touched_detail: &'static str,
+    /// What a bake into a mesh takes and what it drops, before it is run:
+    /// "a bake takes level N · K finer levels lost · P passes lost".
+    pub multires_bake_takes: &'static str,
+    pub multires_bake_finer_lost: &'static str,
+    pub multires_bake_passes_lost: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
     /// How a stroke varies between the press and the release.
@@ -990,6 +1002,12 @@ libera em vez de congelar.",
     multires_vertices: "vértices",
     multires_compact: "Compactar",
     multires_stroke_open: "solte o pincel para mexer na composição",
+    multires_release_caches: "Liberar caches",
+    multires_freed: "liberados",
+    multires_release_touched_detail: "o detalhe mudou ao liberar: foi perdido trabalho, não só cache",
+    multires_bake_takes: "Assar em malha leva o nível",
+    multires_bake_finer_lost: "níveis acima perdidos",
+    multires_bake_passes_lost: "passes sem efeito perdidos",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_dynamics: "DINÂMICA",
@@ -1568,6 +1586,12 @@ instead.",
     multires_vertices: "vertices",
     multires_compact: "Compact",
     multires_stroke_open: "let go of the brush to change the composition",
+    multires_release_caches: "Release caches",
+    multires_freed: "freed",
+    multires_release_touched_detail: "the detail changed on release: work was lost, not only cache",
+    multires_bake_takes: "A bake to mesh takes level",
+    multires_bake_finer_lost: "finer levels lost",
+    multires_bake_passes_lost: "passes with no effect lost",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
     section_dynamics: "DYNAMICS",
@@ -2144,6 +2168,12 @@ lados. Con Ctrl, libera en vez de congelar.",
     multires_vertices: "vértices",
     multires_compact: "Compactar",
     multires_stroke_open: "suelta el pincel para cambiar la composición",
+    multires_release_caches: "Liberar cachés",
+    multires_freed: "liberados",
+    multires_release_touched_detail: "el detalle cambió al liberar: se perdió trabajo, no solo caché",
+    multires_bake_takes: "Hornear a malla toma el nivel",
+    multires_bake_finer_lost: "niveles superiores perdidos",
+    multires_bake_passes_lost: "pases sin efecto perdidos",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_dynamics: "DINÁMICA",
@@ -2777,7 +2807,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 264] {
+    pub fn all(&self) -> [&'static str; 270] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2826,6 +2856,12 @@ impl Strings {
             self.multires_vertices,
             self.multires_compact,
             self.multires_stroke_open,
+            self.multires_release_caches,
+            self.multires_freed,
+            self.multires_release_touched_detail,
+            self.multires_bake_takes,
+            self.multires_bake_finer_lost,
+            self.multires_bake_passes_lost,
             self.section_representation,
             self.hint_representation_active,
             self.hint_representation_other,

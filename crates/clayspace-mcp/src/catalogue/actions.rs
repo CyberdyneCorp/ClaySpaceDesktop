@@ -1088,12 +1088,14 @@ fn level_op(args: &Args<'_>) -> Result<MultiresLevelOp, Refusal> {
         ("set_display_level", 1),
         ("subdivide", 2),
         ("remove_highest", 3),
+        ("release_caches", 4),
     ];
     Ok(match args.choice("op", OPS)? {
         0 => MultiresLevelOp::SetSculptLevel(args.whole("level")?),
         1 => MultiresLevelOp::SetDisplayLevel(args.whole("level")?),
         2 => MultiresLevelOp::AddLevel,
-        _ => MultiresLevelOp::RemoveHighestLevel,
+        3 => MultiresLevelOp::RemoveHighestLevel,
+        _ => MultiresLevelOp::ReleaseCaches,
     })
 }
 

@@ -566,6 +566,53 @@ pub struct HierarchyState {
     pub active_pass: Option<u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub passes: Vec<HierarchyPassState>,
+    /// What each level holds, cage first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub level_sizes: Vec<LevelSizeState>,
+    /// A hash of every level's authoritative detail, as sixteen hex digits.
+    ///
+    /// A string rather than a number because it is sixty-four bits and a
+    /// client parsing JSON into doubles would round it into a different hash.
+    /// Compare it, never do arithmetic on it: unchanged across a coarse edit
+    /// is the property the representation exists for, and unchanged across a
+    /// cache release is what says only caches went.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_checksum: Option<String>,
+    /// What baking this hierarchy into a mesh would carry and drop.
+    pub bake: HierarchyBakeState,
+    /// What the last cache release gave back, if one ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_release: Option<CacheReleaseState>,
+}
+
+/// One level's size.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LevelSizeState {
+    pub vertices: u64,
+    pub faces: u64,
+}
+
+/// What a bake into a mesh takes, and what goes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HierarchyBakeState {
+    /// The level whose vertices become the mesh: the displayed one.
+    pub level: u32,
+    /// Levels above it, whose detail the mesh does not carry.
+    pub finer_levels_dropped: u32,
+    /// Passes baked into the vertices, and no longer adjustable.
+    pub passes_carried: usize,
+    /// Hidden or zero-strength passes, which are not in the mesh at all.
+    pub passes_dropped: usize,
+}
+
+/// What a cache release gave back.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CacheReleaseState {
+    pub freed_bytes: u64,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    /// Whether the detail checksum was the same either side.
+    pub detail_kept: bool,
 }
 
 /// One pass on a hierarchy, named by the id that outlives a reorder.

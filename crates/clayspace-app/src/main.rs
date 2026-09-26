@@ -1672,6 +1672,10 @@ impl App {
     fn run_multires_level_op(&mut self, op: clayspace_model::MultiresLevelOp) {
         let redraws = op.changes_what_is_drawn();
         let outcome = self.scene.apply_level_op(op);
+        // Banked here, beside the operation, because a level operation does
+        // not pass through `dispatch_to_models`. Only the removal of the
+        // highest level leaves anything to bank; the others count nothing.
+        self.bank_edits(op.label());
         // Through `stated` rather than dropped by an `.is_ok()`. The scene
         // ViewModel announces the refusal on its own channel, which both
         // readers already have, so this is the same sentence twice — and that
@@ -6439,6 +6443,9 @@ impl App {
                 selected,
                 |key| self.objects.layer_placement(key),
                 |key| placed.iter().filter(|form| form.id.layer == key).count(),
+                // Asked here, per hierarchy, rather than carried on every
+                // layer summary: the hash walks every coefficient.
+                |key| self.scene.hierarchy_checksum(key),
             ));
         }
         if query.objects {

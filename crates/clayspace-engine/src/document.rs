@@ -10370,7 +10370,27 @@ impl SceneModel for ClayDocument {
                 hierarchy.set_display_level(level)?;
                 hierarchy.set_sculpt_level(level)?;
             }
-            Op::RemoveHighestLevel => hierarchy.remove_highest_level()?,
+            Op::RemoveHighestLevel => {
+                // The one level operation that destroys detail, so the one
+                // that is banked: the hierarchy's bytes as they stood before
+                // it, which is exactly what a hierarchy gesture records and
+                // exactly what the undo path already knows how to put back.
+                // Taken before the removal, because afterwards there is
+                // nothing left to take them from.
+                let before = hierarchy.bytes(0)?;
+                hierarchy.remove_highest_level()?;
+                let stamp = self.stamp_history();
+                self.mesh_undo.push(MeshGesture {
+                    layer: key,
+                    what: GestureRecord::Hierarchy(before),
+                    stamp,
+                });
+                self.mesh_redo.clear();
+                self.trim_gesture_history();
+            }
+            Op::ReleaseCaches => {
+                hierarchy.release_caches()?;
+            }
         }
         // The drawn level changed, or the surface under it did.
         self.refresh_multires_bounds(key);
@@ -10447,6 +10467,11 @@ impl SceneModel for ClayDocument {
 
     fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
         self.active_layer().multires.as_ref()?.subdivision_cost()
+    }
+
+    fn hierarchy_checksum(&self, key: LayerKey) -> Option<u64> {
+        let index = self.index_of(key).ok()?;
+        self.layers[index].multires.as_ref()?.detail_checksum()
     }
 
     fn remove_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {

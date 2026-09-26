@@ -1716,3 +1716,228 @@ fn a_hierarchy_smooth_at_geometry_removes_detail() {
          {after} after"
     );
 }
+
+// -- from a fixed mesh to a hierarchy and back out (#214) -------------------
+//
+// The production flow around the representation: a fixed mesh taken as a
+// cage, sculpted at two levels, and baked back out — with the detail checksum
+// read at each step, because "the fine detail survived the coarse edit" is a
+// claim this application should be able to verify rather than repeat.
+
+fn checksum(document: &ClayDocument, key: LayerKey) -> u64 {
+    document
+        .hierarchy_checksum(key)
+        .expect("a hierarchy answers with its detail checksum")
+}
+
+fn hierarchy_state(document: &ClayDocument, key: LayerKey) -> clayspace_model::MultiresState {
+    document
+        .scene()
+        .layer(key)
+        .and_then(|layer| layer.multires.clone())
+        .expect("the row is a hierarchy")
+}
+
+/// The property the representation exists for, read off the checksum: a
+/// coarse edit moves the form and leaves every level's detail exactly as it
+/// was, while a fine edit is what moves it.
+#[test]
+fn a_coarse_edit_preserves_detail() {
+    let (mut document, key) = with_a_hierarchy("coarse-keeps", 3);
+    let pristine = checksum(&document, key);
+
+    assert!(dab(&mut document, [0.8, 0.0, 0.0], 0.6), "the wrinkle");
+    let wrinkled = checksum(&document, key);
+    assert_ne!(
+        wrinkled, pristine,
+        "a stroke at the finest level writes that level's detail"
+    );
+
+    document
+        .apply_multires_level_op(MultiresLevelOp::SetSculptLevel(0))
+        .expect("drop to the cage");
+    let before = drawn(&mut document);
+    for _ in 0..3 {
+        assert!(dab(&mut document, [-1.0, 0.0, 0.0], 3.0), "move the form");
+    }
+    assert_ne!(drawn(&mut document), before, "the form moved");
+    assert_eq!(
+        checksum(&document, key),
+        wrinkled,
+        "and the detail above it did not"
+    );
+    assert_eq!(
+        levels(&document, key).display,
+        3,
+        "while the display level stayed where the sculptor left it"
+    );
+}
+
+/// Removing the highest level destroys the detail on it, so it is banked: one
+/// entry in the history, and one undo brings both the level and its detail
+/// back exactly.
+#[test]
+fn removing_the_highest_level_is_one_undo() {
+    let (mut document, key) = with_a_hierarchy("remove-undo", 3);
+    assert!(
+        dab(&mut document, [0.2, 0.0, 0.2], 0.6),
+        "detail at the top"
+    );
+    let detailed = checksum(&document, key);
+    let surface = drawn(&mut document);
+    let depth = document.history().depth;
+    assert_eq!(levels(&document, key).count, 4);
+
+    document
+        .apply_multires_level_op(MultiresLevelOp::RemoveHighestLevel)
+        .expect("the top level comes off");
+    assert_eq!(levels(&document, key).count, 3);
+    assert_eq!(
+        document.history().depth,
+        depth + 1,
+        "one removal is one entry, not zero and not two"
+    );
+
+    assert!(document.undo().expect("undo"), "there is something to undo");
+    assert_eq!(levels(&document, key).count, 4, "the level is back");
+    assert_eq!(
+        checksum(&document, key),
+        detailed,
+        "and so is every coefficient on it"
+    );
+    assert_eq!(drawn(&mut document), surface, "vertex for vertex");
+
+    assert!(
+        document.redo().expect("redo"),
+        "and it can be removed again"
+    );
+    assert_eq!(levels(&document, key).count, 3);
+}
+
+/// A cache release says what it gave back and gives back nothing that was
+/// work: the checksum is the same either side.
+#[test]
+fn a_cache_release_reports_what_it_freed_and_keeps_the_detail() {
+    let (mut document, key) = with_a_hierarchy("release", 3);
+    assert!(
+        dab(&mut document, [0.0, 0.0, 0.0], 0.8),
+        "detail at the top"
+    );
+    let detailed = checksum(&document, key);
+    // Look at the cage, so the finer levels' evaluated caches are ones
+    // nothing is using any more.
+    for op in [
+        MultiresLevelOp::SetDisplayLevel(0),
+        MultiresLevelOp::SetSculptLevel(0),
+    ] {
+        document
+            .apply_multires_level_op(op)
+            .expect("move the levels");
+    }
+    let _ = drawn(&mut document);
+    let depth = document.history().depth;
+
+    document
+        .apply_multires_level_op(MultiresLevelOp::ReleaseCaches)
+        .expect("a release");
+    let release = hierarchy_state(&document, key)
+        .last_release
+        .expect("the release is reported");
+    assert!(release.detail_kept, "only caches went: {release:?}");
+    assert!(
+        release.freed_bytes() > 0,
+        "the finer levels' caches were there to give back: {release:?}"
+    );
+    assert_eq!(
+        release.freed_bytes(),
+        release.before_bytes - release.after_bytes
+    );
+    assert_eq!(checksum(&document, key), detailed);
+    assert_eq!(
+        document.history().depth,
+        depth,
+        "a release changes nothing a sculptor would want back"
+    );
+}
+
+/// `state` reports each level's size, and the sizes follow the rule: every
+/// step after the cage's first makes four faces of one.
+#[test]
+fn the_state_reports_what_each_level_holds() {
+    let (document, key) = with_a_hierarchy("sizes", 3);
+    let state = hierarchy_state(&document, key);
+    assert_eq!(state.level_sizes.len(), state.levels.count as usize);
+    for pair in state.level_sizes.windows(2).skip(1) {
+        assert_eq!(pair[1].faces, pair[0].faces * 4, "{:?}", state.level_sizes);
+    }
+    assert!(state
+        .level_sizes
+        .windows(2)
+        .all(|pair| pair[1].vertices > pair[0].vertices));
+}
+
+/// Fixed mesh → hierarchy → sculpt at two levels → bake, with the checksum
+/// read at each step and the bake's report held against what it produced.
+#[test]
+fn baking_reports_what_it_drops() {
+    let (mut document, key) = with_a_hierarchy("bake-report", 3);
+
+    // Fine, then coarse.
+    assert!(dab(&mut document, [0.5, 0.0, 0.5], 0.5), "fine detail");
+    let fine = checksum(&document, key);
+    document
+        .apply_multires_level_op(MultiresLevelOp::SetSculptLevel(1))
+        .expect("a coarser level");
+    assert!(dab(&mut document, [-0.5, 0.0, -0.5], 2.0), "coarse form");
+    assert_ne!(
+        checksum(&document, key),
+        fine,
+        "a stroke at level 1 writes level 1's own detail"
+    );
+    let coarse = checksum(&document, key);
+
+    // A pass that contributes nothing, and a display level below the top.
+    let pass = add_pass(&mut document, key, "escondido");
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetVisible {
+            id: pass,
+            visible: false,
+        })
+        .expect("hide it");
+    document
+        .apply_multires_level_op(MultiresLevelOp::SetDisplayLevel(1))
+        .expect("draw level 1");
+    assert_eq!(
+        checksum(&document, key),
+        coarse,
+        "moving levels and hiding a pass move no detail"
+    );
+
+    let bake = hierarchy_state(&document, key).bake();
+    assert_eq!(bake.level, 1);
+    assert_eq!(
+        bake.finer_levels_dropped, 2,
+        "levels 2 and 3 are not in level 1"
+    );
+    assert_eq!(
+        bake.passes_dropped, 1,
+        "the hidden pass contributes nothing"
+    );
+    assert_eq!(bake.passes_carried, 0);
+    assert!(bake.loses_detail());
+
+    let drawn_before = drawn(&mut document);
+    let settings = ConversionSettings::default();
+    let baked = document
+        .convert_layer_in_place(Direction::MultiresToMesh, settings.cell_size, settings.blur)
+        .expect("a level is a mesh");
+    assert_eq!(
+        drawn(&mut document),
+        drawn_before,
+        "the mesh is the displayed level, as the report said"
+    );
+    assert!(
+        document.hierarchy_checksum(baked).is_none(),
+        "and it is a mesh now: nothing under it to checksum"
+    );
+}

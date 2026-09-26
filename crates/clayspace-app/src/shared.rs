@@ -334,6 +334,10 @@ impl SceneModel for SharedDocument {
         self.document.borrow().subdivision_cost()
     }
 
+    fn hierarchy_checksum(&self, key: LayerKey) -> Option<u64> {
+        self.document.borrow().hierarchy_checksum(key)
+    }
+
     fn set_layer_protection(
         &mut self,
         key: LayerKey,

@@ -327,6 +327,7 @@ fn level_ops() -> Vec<&'static str> {
         "set_display_level",
         "subdivide",
         "remove_highest",
+        "release_caches",
     ]
 }
 fn smooth_modes() -> Vec<&'static str> {
@@ -1228,7 +1229,7 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "hierarchy",
         name: "level",
-        summary: "The levels of a subdivision hierarchy.",
+        summary: "The levels of a subdivision hierarchy. remove_highest is one undo entry; release_caches reports what it freed in state.",
         arguments: &[
             r("op", Kind::Choice(level_ops), "which operation"),
             o("level", Kind::Integer, "which level, for the two setters"),
