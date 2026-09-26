@@ -43,8 +43,8 @@ const PULL: f32 = 0.4;
 ///
 /// | tool | ratio |
 /// |------|------:|
-/// | Relaxar, Suavizar | 1.01 |
-/// | Planar, Polir | 1.02 |
+/// | Suavizar | 1.01 |
+/// | Planar | 1.02 |
 /// | Pinçar | 1.07 |
 /// | Mover | 1.12 |
 /// | Camada | 1.13 |
@@ -53,6 +53,9 @@ const PULL: f32 = 0.4;
 /// | Mover Topológico | 1.20 |
 /// | Padrão | 1.30 |
 /// | Argila | 1.31 |
+///
+/// Relaxar and Polir read 1.01 and 1.02 beside these two, being the same bakes,
+/// and are off the field's shelf since #203.
 ///
 /// Pinçar is on this table for the first time: #201 gave it a field verb — the
 /// engine's radial scale at a negative strength — so a field has one more mark

@@ -306,7 +306,7 @@ fn long_mixed_session_render_defect_tripwire() {
         let (sin, cos) = angle.sin_cos();
         document
             .apply_stroke(
-                ToolKind::Polir,
+                ToolKind::Planar,
                 strong,
                 &[GestureSample {
                     position: [cos * 0.6, sin * 0.6, 1.05],
