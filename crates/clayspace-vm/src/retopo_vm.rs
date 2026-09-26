@@ -16,7 +16,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use clayspace_model::{RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, Retopologiser};
+use clayspace_model::{
+    RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoUv, Retopologiser,
+};
 
 use crate::command::Command;
 use crate::jobs::{Completion, JobRunner};
@@ -195,8 +197,16 @@ impl RetopoViewModel {
         }
         match self.model.place_retopology(&result, settings) {
             Ok(()) => {
+                // A layout that was asked for and refused is said out loud:
+                // the quads were placed, and without it.
+                let notice = match &result.outcome.uv {
+                    RetopoUv::Failed(why) => {
+                        Some(format!("os quads foram colocados sem UVs: {why}"))
+                    }
+                    _ => None,
+                };
                 self.last.set(Some(result.outcome));
-                self.notice.set(None);
+                self.notice.set(notice);
             }
             Err(e) => self.notice.set(Some(e.to_string())),
         }

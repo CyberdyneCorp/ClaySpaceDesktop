@@ -222,6 +222,90 @@ impl Mesh {
         };
         render == self.vertex_count() * 3
     }
+
+    /// The authored polygons as a CSR table: `faces + 1` offsets into the
+    /// corner list, and the vertex of each corner.
+    ///
+    /// In [`Mesh::positions`]' order, and **not triangulated** — a quad is
+    /// four corners here. This is the order the corner attributes, a UV
+    /// layout among them, are indexed in.
+    pub fn polygons(&self) -> (Vec<usize>, Vec<u32>) {
+        // SAFETY: both first calls are size queries with a null destination,
+        // which the engine documents as the way to ask for the count; the
+        // second calls are handed buffers of exactly that length.
+        let offsets = unsafe {
+            let count =
+                sys::cyber_mesh_copy_face_offsets(self.raw.as_ptr(), std::ptr::null_mut(), 0);
+            let mut offsets = vec![0usize; count];
+            let written =
+                sys::cyber_mesh_copy_face_offsets(self.raw.as_ptr(), offsets.as_mut_ptr(), count);
+            offsets.truncate(written);
+            offsets
+        };
+        // SAFETY: as above.
+        let corners = unsafe {
+            let count =
+                sys::cyber_mesh_copy_polygon_indices(self.raw.as_ptr(), std::ptr::null_mut(), 0);
+            let mut corners = vec![0u32; count];
+            let written = sys::cyber_mesh_copy_polygon_indices(
+                self.raw.as_ptr(),
+                corners.as_mut_ptr(),
+                count,
+            );
+            corners.truncate(written);
+            corners
+        };
+        (offsets, corners)
+    }
+
+    /// The UV layout, one coordinate per polygon corner, or `None` when the
+    /// mesh carries none.
+    ///
+    /// Per *corner* because that is how the engine writes a layout: a vertex
+    /// on a seam has one UV in each chart meeting there. Found as the mesh's
+    /// one two-float corner column rather than by a name restated here, which
+    /// the header does not promise.
+    pub fn corner_uvs(&self) -> Option<Vec<[f32; 2]>> {
+        let info = self.corner_uv_column()?;
+        // SAFETY: a size query with a null destination, then a buffer of
+        // exactly the scalar count it returned; `info` came from the engine
+        // for this mesh.
+        let floats = unsafe {
+            let count =
+                sys::cyber_mesh_copy_attribute(self.raw.as_ptr(), &info, std::ptr::null_mut(), 0);
+            let mut floats = vec![0.0f32; count];
+            let written = sys::cyber_mesh_copy_attribute(
+                self.raw.as_ptr(),
+                &info,
+                floats.as_mut_ptr().cast(),
+                count,
+            );
+            floats.truncate(written);
+            floats
+        };
+        Some(floats.chunks_exact(2).map(|uv| [uv[0], uv[1]]).collect())
+    }
+
+    fn corner_uv_column(&self) -> Option<sys::CyberAttributeInfo> {
+        // SAFETY: a valid handle; the call reads and returns a count.
+        let count = unsafe { sys::cyber_mesh_attribute_count(self.raw.as_ptr()) };
+        (0..count).find_map(|index| {
+            let mut info = sys::CyberAttributeInfo {
+                name: [0; 64],
+                domain: 0,
+                type_: 0,
+                value_count: 0,
+            };
+            // SAFETY: an index below the count just read and a valid
+            // out-parameter the engine writes on success.
+            let status =
+                unsafe { sys::cyber_mesh_attribute_info(self.raw.as_ptr(), index, &mut info) };
+            let is_uv = status == sys::CyberStatus::CYBER_OK
+                && info.domain == sys::CYBER_ATTRIBUTE_CORNER as i32
+                && info.type_ == sys::CYBER_ATTRIBUTE_FLOAT2 as i32;
+            is_uv.then_some(info)
+        })
+    }
 }
 
 impl Drop for Mesh {

@@ -90,10 +90,10 @@ pub use reference::{
     ReferenceSettings, RememberedReference,
 };
 pub use retopo::{
-    BakeMap, BakeModel, BakeResult, BakeSettings, BakedMap, Baker, ConformModel, ConformOutcome,
-    ConformResult, ConformSettings, ConformSource, Conformer, QuadMethod, RetopoModel,
-    RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, Retopologiser, Unwrapper, UvModel,
-    UvOutcome, UvResult, UvSettings, UvSource,
+    split_at_uv_seams, BakeMap, BakeModel, BakeResult, BakeSettings, BakedMap, Baker, ConformModel,
+    ConformOutcome, ConformResult, ConformSettings, ConformSource, Conformer, QuadMethod,
+    RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, RetopoUv,
+    Retopologiser, SeamedMesh, Unwrapper, UvModel, UvOutcome, UvResult, UvSettings, UvSource,
 };
 pub use scene::{
     FieldDegradation, FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, RemeshOutcome,

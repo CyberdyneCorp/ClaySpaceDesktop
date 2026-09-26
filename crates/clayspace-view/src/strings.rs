@@ -95,6 +95,7 @@ pub struct Strings {
     pub export_non_manifold: &'static str,
     pub export_non_manifold_edges: &'static str,
     pub export_open_boundary: &'static str,
+    pub export_dropped_uvs: &'static str,
     pub export_boundary_edges: &'static str,
     pub refusal_wrong_gesture: &'static str,
     pub refusal_tool_unavailable: &'static str,
@@ -545,6 +546,10 @@ pub struct Strings {
     /// Replacing the source rather than adding the result beside it.
     pub retopo_in_place: &'static str,
     pub retopo_in_place_hint: &'static str,
+    pub retopo_uvs: &'static str,
+    pub retopo_uvs_hint: &'static str,
+    /// Said beside a result whose layout was asked for and refused.
+    pub retopo_no_uvs: &'static str,
     pub retopo_sharp: &'static str,
     pub retopo_sharp_hint: &'static str,
     pub retopo_adaptivity: &'static str,
@@ -570,6 +575,7 @@ pub struct Strings {
     pub uv_distortion: &'static str,
     pub uv_flipped: &'static str,
     pub uv_coverage: &'static str,
+    pub uv_fallback: &'static str,
     /// Baking maps from the field.
     pub bake_heading: &'static str,
     pub bake_hint: &'static str,
@@ -1030,6 +1036,7 @@ const PT_BR: Strings = Strings {
     export_non_manifold: "a malha exportada não é manifold",
     export_non_manifold_edges: "arestas com mais de duas faces",
     export_open_boundary: "a malha exportada não é fechada",
+    export_dropped_uvs: "as UVs de uma camada visível foram descartadas porque o resto da exportação não as tem; oculte as outras camadas para as exportar",
     export_boundary_edges: "arestas de borda",
     refusal_wrong_gesture: "este pincel precisa de outro gesto",
     refusal_tool_unavailable: "este pincel não atua nesta camada",
@@ -1358,6 +1365,10 @@ libera em vez de congelar.",
     retopo_in_place_hint: "reconstrói esta subferramenta em vez de acrescentar \
                            o resultado numa nova; a escultura só volta pelo \
                            histórico",
+    retopo_uvs: "Gerar UVs",
+    retopo_uvs_hint: "desdobra o resultado antes de o colocar; desligado, a \
+                      malha fica sem UVs e não se espera por elas",
+    retopo_no_uvs: "sem UVs",
     retopo_sharp: "Arestas vivas",
     retopo_sharp_hint: "ângulo diedro abaixo do qual uma aresta conta como \
                         característica",
@@ -1388,6 +1399,7 @@ libera em vez de congelar.",
     uv_distortion: "distorção",
     uv_flipped: "ilhas invertidas",
     uv_coverage: "cobertura",
+    uv_fallback: "ilhas projectadas",
     bake_heading: "Cozer mapas",
     bake_hint: "amostra o campo directamente em vez de uma malha de alta \
                 densidade: o raio da gaiola é traçado pela superfície real e \
@@ -1774,6 +1786,7 @@ const EN_US: Strings = Strings {
     export_non_manifold: "the exported mesh is not manifold",
     export_non_manifold_edges: "edges have more than two faces",
     export_open_boundary: "the exported mesh is not watertight",
+    export_dropped_uvs: "a visible layer's UVs were dropped because the rest of the export carries none; hide the other layers to export them",
     export_boundary_edges: "boundary edges",
     refusal_wrong_gesture: "this brush needs a different gesture",
     refusal_tool_unavailable: "this brush cannot act on this layer",
@@ -2100,6 +2113,10 @@ instead.",
     retopo_in_place_hint: "rebuilds this subtool instead of adding the result \
                            as a new one; the sculpt comes back only through \
                            the history",
+    retopo_uvs: "Generate UVs",
+    retopo_uvs_hint: "lays out the result's UVs before placing it; off, the \
+                      mesh carries none and nothing waits for them",
+    retopo_no_uvs: "no UVs",
     retopo_sharp: "Sharp edges",
     retopo_sharp_hint: "the dihedral angle below which an edge counts as a \
                         feature",
@@ -2129,6 +2146,7 @@ instead.",
     uv_distortion: "distortion",
     uv_flipped: "flipped charts",
     uv_coverage: "coverage",
+    uv_fallback: "projected charts",
     bake_heading: "Bake maps",
     bake_hint: "samples the field directly instead of a high-poly mesh: the \
                 cage ray is traced through the actual surface and normals come \
@@ -2513,6 +2531,7 @@ const ES_419: Strings = Strings {
     export_non_manifold: "la malla exportada no es manifold",
     export_non_manifold_edges: "aristas con más de dos caras",
     export_open_boundary: "la malla exportada no está cerrada",
+    export_dropped_uvs: "se descartaron las UV de una capa visible porque el resto de la exportación no las tiene; oculta las otras capas para exportarlas",
     export_boundary_edges: "aristas de borde",
     refusal_wrong_gesture: "este pincel necesita otro gesto",
     refusal_tool_unavailable: "este pincel no funciona en esta capa",
@@ -2846,6 +2865,10 @@ lados. Con Ctrl, libera en vez de congelar.",
     retopo_in_place_hint: "reconstruye esta subherramienta en lugar de añadir \
                            el resultado como una nueva; la escultura solo \
                            vuelve por el historial",
+    retopo_uvs: "Generar UV",
+    retopo_uvs_hint: "despliega el resultado antes de colocarlo; apagado, la \
+                      malla queda sin UV y no se espera por ellas",
+    retopo_no_uvs: "sin UV",
     retopo_sharp: "Aristas vivas",
     retopo_sharp_hint: "ángulo diedro por debajo del cual una arista cuenta \
                         como característica",
@@ -2876,6 +2899,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     uv_distortion: "distorsión",
     uv_flipped: "islas invertidas",
     uv_coverage: "cobertura",
+    uv_fallback: "islas proyectadas",
     bake_heading: "Cocer mapas",
     bake_hint: "muestrea el campo directamente en vez de una malla de alta \
                 densidad: el rayo de la jaula se traza por la superficie real \
@@ -3471,6 +3495,7 @@ impl Strings {
                 "{}: {} {}",
                 self.export_open_boundary, edges, self.export_boundary_edges
             ),
+            Kind::DroppedUvs => self.export_dropped_uvs.to_string(),
         }
     }
 
@@ -3830,6 +3855,7 @@ impl Strings {
             self.export_non_manifold_edges,
             self.export_open_boundary,
             self.export_boundary_edges,
+            self.export_dropped_uvs,
             self.refusal_wrong_gesture,
             self.refusal_tool_unavailable,
             self.refusal_layer_protected,
@@ -4028,6 +4054,7 @@ mod tests {
                 manifold: true,
                 boundary_edges: 7,
                 non_manifold_edges: 0,
+                dropped_uvs: false,
             });
         let en = Strings::for_locale(Locale::EnUs).export_warning(&warning[0]);
         let es = Strings::for_locale(Locale::Es419).export_warning(&warning[0]);

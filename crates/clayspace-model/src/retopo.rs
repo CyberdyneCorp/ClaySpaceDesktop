@@ -87,6 +87,13 @@ pub struct RetopoSettings {
     /// Offered, the way a conversion's `in_place` is, for a sculptor who wants
     /// the subtool in front of them rebuilt the way Rebuild does it.
     pub in_place: bool,
+    /// Lay out UVs on the result before it is placed, with these settings.
+    ///
+    /// `None` by default: a sculptor who wants a production mesh without UVs
+    /// should not wait for, or be handed, a layout they did not ask for. A
+    /// layout that fails does not fail the retopology — the quads are placed
+    /// without UVs and the outcome says why, see [`RetopoUv`].
+    pub uv: Option<UvSettings>,
 }
 
 impl Default for RetopoSettings {
@@ -103,6 +110,7 @@ impl Default for RetopoSettings {
             pure_quads: true,
             adaptivity: 0.0,
             in_place: false,
+            uv: None,
         }
     }
 }
@@ -123,13 +131,35 @@ impl RetopoSettings {
                 .clamp(*Self::TARGET_QUADS.start(), *Self::TARGET_QUADS.end()),
             sharp_edge_degrees: self.sharp_edge_degrees.clamp(0.0, 180.0),
             adaptivity: self.adaptivity.clamp(0.0, 1.0),
+            uv: self.uv.map(UvSettings::sanitized),
             ..self
         }
     }
 }
 
+/// What became of the optional UV step of a retopology.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum RetopoUv {
+    /// The run was not asked for UVs, and the result carries none.
+    #[default]
+    NotRequested,
+    /// The result carries the layout this report describes.
+    Laid(UvOutcome),
+    /// A layout was asked for and refused. The quads were still placed —
+    /// without UVs — so the reason is what distinguishes this from a result
+    /// that carries them.
+    Failed(String),
+}
+
+impl RetopoUv {
+    /// Whether the placed mesh carries UV coordinates.
+    pub fn carries_uvs(&self) -> bool {
+        matches!(self, Self::Laid(_))
+    }
+}
+
 /// What a retopology came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RetopoOutcome {
     pub triangles_before: usize,
     /// Faces the engine made: quads where it made quads.
@@ -141,6 +171,8 @@ pub struct RetopoOutcome {
     /// what says quads were produced at all.
     pub triangles: usize,
     pub vertices: usize,
+    /// The optional UV layout, and why there is none when one was asked for.
+    pub uv: RetopoUv,
 }
 
 impl RetopoOutcome {
@@ -210,6 +242,20 @@ pub struct RetopoResult {
     /// derives edges from the triangulation — correct for a mesh whose faces
     /// really are triangles.
     pub edges: Vec<u32>,
+    /// One UV per vertex, or empty when the result carries no layout.
+    ///
+    /// Per vertex because that is how a mesh layer stores them: a seam is a
+    /// position duplicated into two vertices with different UVs, which is
+    /// why a result with UVs has more vertices than the same quads without.
+    pub uvs: Vec<[f32; 2]>,
+    /// One normal per vertex, or empty to have them derived from the
+    /// triangles.
+    ///
+    /// Given where the vertices were split along UV seams: normals derived
+    /// from a split mesh differ on either side of every seam, which shades
+    /// the cut into the surface. These are the welded mesh's, copied to each
+    /// copy of a vertex.
+    pub normals: Vec<[f32; 3]>,
     pub outcome: RetopoOutcome,
     pub name: String,
 }
@@ -341,6 +387,10 @@ pub struct UvOutcome {
     /// in the layout**, not a quality figure, which is why it is reported
     /// separately from the distortion.
     pub flipped_charts: u32,
+    /// Charts the unwrap could not flatten and projected onto a plane
+    /// instead. A fallback chart is stretched; reported so it is not
+    /// mistaken for a chart the solver laid out.
+    pub fallback_charts: u32,
     pub dropped_charts: u32,
     /// The fraction of the UV square the chart *geometry* covers.
     pub packed_area: f32,
@@ -388,13 +438,103 @@ pub trait UvModel {
 
     /// Records what the layout came to.
     ///
-    /// **The UVs themselves stay in the retopology engine.** ClayCore's mesh
-    /// layers carry no UV attribute, so writing them back would mean inventing
-    /// one — and a layout that lives in two places is a layout that can
-    /// disagree with itself. What crosses back is the report a sculptor judges
-    /// the layout by; the atlas is written out at export, from the engine that
-    /// holds it.
+    /// **The UVs themselves are not written onto the subtool.** A standalone
+    /// layout is of a mesh the sculptor may still be shaping, and the next
+    /// stroke would invalidate it; what crosses back is the report a sculptor
+    /// judges the layout by. A retopology that asks for UVs
+    /// ([`RetopoSettings::uv`]) is where a layout is kept: its result is a new
+    /// mesh, and the layer carries the UVs it was laid out with.
     fn record_uv(&mut self, result: &UvResult) -> Result<(), crate::ModelError>;
+}
+
+/// A polygon mesh whose UVs were per face corner, re-expressed with one UV per
+/// vertex.
+///
+/// The retopology engine writes a layout as a *corner* attribute: a vertex on
+/// a seam has one UV in each chart that meets there. A mesh layer holds one UV
+/// per vertex, so a seam there is a position duplicated into as many vertices
+/// as it has distinct UVs. This is that duplication, and nothing else: no
+/// corner is moved and no face is added.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SeamedMesh {
+    pub positions: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    /// Each face fanned around its first corner — the triangulation the
+    /// engine itself draws, so the surface is the one it retopologised.
+    pub indices: Vec<u32>,
+    /// The authored face edges, two vertex indices each. An edge on a seam
+    /// appears once per side, on its own copies of the two vertices.
+    pub edges: Vec<u32>,
+    /// For each vertex, the input vertex it is a copy of — what carries a
+    /// welded quantity, a normal, across onto every copy.
+    pub welded: Vec<u32>,
+    /// How many faces the polygons were.
+    pub faces: usize,
+}
+
+/// Splits `positions` along the seams `corner_uvs` implies.
+///
+/// `offsets` is the CSR face table (`faces + 1` entries, from 0 to
+/// `corners.len()`), `corners` the vertex of each face corner and
+/// `corner_uvs` one UV per corner. Two corners of one vertex share a vertex in
+/// the result exactly when their UVs are bit-identical, which is how the
+/// engine writes corners within one chart.
+///
+/// `None` when the table does not describe a mesh — a face under three
+/// corners, an offset out of order, a corner naming no vertex, or a UV count
+/// that is not one per corner. A layout that cannot be read is refused rather
+/// than guessed at, and the caller places the quads without it.
+pub fn split_at_uv_seams(
+    positions: &[[f32; 3]],
+    offsets: &[usize],
+    corners: &[u32],
+    corner_uvs: &[[f32; 2]],
+) -> Option<SeamedMesh> {
+    if !corner_table_is_valid(positions.len(), offsets, corners, corner_uvs.len()) {
+        return None;
+    }
+    let mut mesh = SeamedMesh {
+        faces: offsets.len() - 1,
+        ..SeamedMesh::default()
+    };
+    let mut copies = std::collections::HashMap::<(u32, [u32; 2]), u32>::new();
+    let corner_vertex: Vec<u32> = corners
+        .iter()
+        .zip(corner_uvs)
+        .map(|(&vertex, uv)| {
+            let key = (vertex, [uv[0].to_bits(), uv[1].to_bits()]);
+            *copies.entry(key).or_insert_with(|| {
+                mesh.positions.push(positions[vertex as usize]);
+                mesh.uvs.push(*uv);
+                mesh.welded.push(vertex);
+                (mesh.positions.len() - 1) as u32
+            })
+        })
+        .collect();
+
+    let mut seen = std::collections::HashSet::<(u32, u32)>::new();
+    for face in offsets.windows(2) {
+        let ring = &corner_vertex[face[0]..face[1]];
+        for i in 1..ring.len() - 1 {
+            mesh.indices.extend([ring[0], ring[i], ring[i + 1]]);
+        }
+        for (i, &a) in ring.iter().enumerate() {
+            let b = ring[(i + 1) % ring.len()];
+            if seen.insert((a.min(b), a.max(b))) {
+                mesh.edges.extend([a, b]);
+            }
+        }
+    }
+    Some(mesh)
+}
+
+fn corner_table_is_valid(vertices: usize, offsets: &[usize], corners: &[u32], uvs: usize) -> bool {
+    offsets.len() >= 2
+        && offsets[0] == 0
+        && offsets.last() == Some(&corners.len())
+        && offsets.windows(2).all(|face| face[1] >= face[0] + 3)
+        && uvs == corners.len()
+        && corners.iter().all(|&v| (v as usize) < vertices)
 }
 
 // -- baking -----------------------------------------------------------------
@@ -618,4 +758,86 @@ pub trait ConformModel {
     /// retopology does, and deliberately: a conform is a correction to a mesh
     /// the sculptor already accepted, not a new candidate to compare.
     fn apply_conform(&mut self, result: &ConformResult) -> Result<(), crate::ModelError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two quads sharing the edge 1–2, as one strip.
+    const STRIP: [[f32; 3]; 6] = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [2.0, 1.0, 0.0],
+    ];
+    const OFFSETS: [usize; 3] = [0, 4, 8];
+    const CORNERS: [u32; 8] = [0, 1, 2, 3, 1, 4, 5, 2];
+
+    #[test]
+    fn one_chart_keeps_every_vertex_shared() {
+        let uvs: Vec<[f32; 2]> = CORNERS
+            .iter()
+            .map(|&v| [STRIP[v as usize][0] / 2.0, STRIP[v as usize][1]])
+            .collect();
+        let mesh = split_at_uv_seams(&STRIP, &OFFSETS, &CORNERS, &uvs).expect("a valid table");
+        assert_eq!(mesh.positions.len(), 6, "a seamless layout split a vertex");
+        assert_eq!(mesh.faces, 2);
+        assert_eq!(mesh.indices.len(), 12, "two quads fan into four triangles");
+        // Seven authored edges: four per quad, one shared, no diagonal.
+        assert_eq!(mesh.edges.len(), 14);
+        assert_eq!(mesh.uvs.len(), mesh.positions.len());
+    }
+
+    #[test]
+    fn a_seam_duplicates_the_vertices_on_it_and_nothing_else() {
+        // The second quad is its own chart: its copy of the shared edge has
+        // different UVs, so vertices 1 and 2 each exist twice.
+        let uvs: Vec<[f32; 2]> = CORNERS
+            .iter()
+            .enumerate()
+            .map(|(corner, &v)| {
+                let offset = if corner >= 4 { 0.5 } else { 0.0 };
+                [STRIP[v as usize][0] * 0.2 + offset, STRIP[v as usize][1]]
+            })
+            .collect();
+        let mesh = split_at_uv_seams(&STRIP, &OFFSETS, &CORNERS, &uvs).expect("a valid table");
+        assert_eq!(mesh.positions.len(), 8);
+        let copies_of = |v: u32| mesh.welded.iter().filter(|&&w| w == v).count();
+        assert_eq!(copies_of(1), 2);
+        assert_eq!(copies_of(2), 2);
+        assert_eq!(copies_of(0), 1);
+        // Every copy stands where its original does.
+        for (vertex, &origin) in mesh.welded.iter().enumerate() {
+            assert_eq!(mesh.positions[vertex], STRIP[origin as usize]);
+        }
+        // The seam edge is drawn once per side.
+        assert_eq!(mesh.edges.len(), 16);
+    }
+
+    #[test]
+    fn a_table_that_describes_no_mesh_is_refused() {
+        let uvs = [[0.0; 2]; 8];
+        assert!(split_at_uv_seams(&STRIP, &OFFSETS, &CORNERS, &uvs[..7]).is_none());
+        assert!(split_at_uv_seams(&STRIP, &[0, 2, 8], &CORNERS, &uvs).is_none());
+        assert!(split_at_uv_seams(&STRIP, &[0, 4], &CORNERS, &uvs).is_none());
+        let past = [0, 1, 2, 3, 1, 4, 9, 2];
+        assert!(split_at_uv_seams(&STRIP, &OFFSETS, &past, &uvs).is_none());
+    }
+
+    #[test]
+    fn uv_generation_is_off_unless_asked_for() {
+        assert_eq!(RetopoSettings::default().uv, None);
+        let asked = RetopoSettings {
+            uv: Some(UvSettings {
+                pack_margin: 5.0,
+                ..UvSettings::default()
+            }),
+            ..RetopoSettings::default()
+        }
+        .sanitized();
+        assert_eq!(asked.uv.map(|uv| uv.pack_margin), Some(0.1));
+    }
 }

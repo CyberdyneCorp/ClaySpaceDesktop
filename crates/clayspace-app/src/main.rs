@@ -5424,7 +5424,7 @@ impl App {
             remesh_outcome: self.remesh_outcome,
             repair_outcome: self.repair_outcome,
             retopo: *self.retopo.settings().get(),
-            retopo_outcome: *self.retopo.last().get(),
+            retopo_outcome: self.retopo.last().get().clone(),
             retopo_unavailable: localized_vm_text(
                 self.strings,
                 self.retopo.unavailable().get().as_deref(),

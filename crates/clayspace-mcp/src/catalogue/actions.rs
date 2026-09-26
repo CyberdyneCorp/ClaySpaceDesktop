@@ -725,6 +725,11 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
                 "in_place",
                 clayspace_model::RetopoSettings::default().in_place,
             )?,
+            // Off unless asked for, as in the panel: a production mesh
+            // without UVs costs no layout.
+            uv: args
+                .boolean_or("uvs", false)?
+                .then(clayspace_model::UvSettings::default),
         }),
         ("retopo", "run") => C::RunRetopology,
         ("uv", "set") => C::SetUvSettings(clayspace_model::UvSettings {

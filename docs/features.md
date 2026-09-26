@@ -2961,10 +2961,33 @@ reports is what a sculptor judges it by: charts, angle distortion, coverage, and
 the **flipped-chart count** — which is a *defect* rather than a figure on a
 scale, so it is stated as a sentence only when there is one.
 
-**The atlas stays in the retopology engine.** ClayCore's mesh layers carry no UV
-attribute, so writing it back would mean inventing one, and a layout living in
-two places is a layout that can disagree with itself. The report crosses back;
-the atlas is written at export from the engine that holds it.
+**The standalone layout is a report.** Run from the UV panel on an existing
+subtool, the atlas stays in the retopology engine and only its figures cross
+back: writing it onto a layer the sculptor is still shaping would be a layout
+the next stroke invalidates.
+
+**UVs on a retopology are kept.** *Gerar UVs* in the retopology panel (the
+agent's `retopo set` `uvs`) is **off by default** — a production mesh without
+UVs costs no layout. Asked for, the job lays the quads out after
+retopologising them, in the same cancellable run, and the accepted layer
+carries the UVs through a save and an open, an undo and a redo, and an export.
+The retopology engine writes a layout per face *corner*; a mesh layer stores
+one UV per *vertex*, so the vertices on a seam are duplicated, one copy per
+distinct UV and nothing else, each carrying the welded mesh's normal so the cut
+is not shaded into the surface. The report sits under the result — charts,
+distortion, coverage, and flipped or projected charts named as defects when
+there are any. A layout the engine refuses does **not** cost the retopology:
+the quads are placed without UVs, and the panel, the notice and the agent's
+`outcomes.retopology.uv` (`not_requested` / `laid` / `failed` with its reason)
+all say so.
+
+**Exporting a layout.** The engine's combined export concatenates the meshed
+field and every visible mesh layer, and an attribute any input lacks is dropped
+from all of them — the field never carries UVs. So export the result on its
+own: hide the other layers, and a document whose visible geometry is mesh
+layers alone is written from those layers. An export that did drop a visible
+layer's UVs says so rather than writing the file quietly. The checker preview
+and a seam display are not drawn yet; the viewport has no UV attribute.
 
 **Cozer mapas** bakes normal, ambient occlusion, curvature and cavity **from the
 field**, with no high-poly mesh at all. This is the half of the pipeline nothing

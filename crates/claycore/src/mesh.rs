@@ -222,6 +222,64 @@ impl Mesh {
         Self::from_raw(raw, "clay_mesh_from_triangles")
     }
 
+    /// Builds a mesh from positions, normals, one UV per vertex and a
+    /// triangulation.
+    ///
+    /// **Through the OBJ reader, in memory.** `clay_mesh_from_triangles`
+    /// takes positions and indices and nothing else, and the ABI has no other
+    /// constructor that accepts UVs; the in-memory OBJ reader is the one entry
+    /// point that attaches them, and it attaches them vertex-aligned, which is
+    /// what a mesh layer stores. Floats are written in their shortest
+    /// round-tripping form, so every coordinate comes back bit-identical.
+    /// ClayCore#661 asks for a constructor that takes the arrays directly.
+    ///
+    /// Refused when the arrays disagree on the vertex count or an index names
+    /// no vertex, and when what came back does not carry the UVs it was given
+    /// — a mesh that silently lost its layout is the failure this exists to
+    /// prevent.
+    pub fn from_triangles_with_uvs(
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        uvs: &[[f32; 2]],
+        indices: &[u32],
+    ) -> Result<Self> {
+        const OP: &str = "clay_mesh_load_memory";
+        let aligned = normals.len() == positions.len() && uvs.len() == positions.len();
+        let indexed =
+            indices.len() % 3 == 0 && indices.iter().all(|&i| (i as usize) < positions.len());
+        if positions.is_empty() || !aligned || !indexed {
+            return Err(raw_failure(OP, ErrorKind::InvalidArgument));
+        }
+        let text = obj_text(positions, normals, uvs, indices);
+        let budget = ImportBudget {
+            max_vertices: positions.len() as u64,
+            max_triangles: (indices.len() / 3) as u64,
+        }
+        .to_raw();
+        let format = crate::cstring("obj", OP)?;
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: `text` outlives the call and its length is passed beside
+        // it; the format is NUL-terminated; the budget is a versioned
+        // descriptor; the out-parameter is written only on success.
+        check(
+            unsafe {
+                sys::clay_mesh_load_memory(
+                    text.as_ptr(),
+                    text.len(),
+                    format.as_ptr(),
+                    &budget,
+                    &mut raw,
+                )
+            },
+            OP,
+        )?;
+        let mesh = Self::from_raw(raw, OP)?;
+        if mesh.vertex_count() != positions.len() || mesh.uvs().is_none() {
+            return Err(raw_failure(OP, ErrorKind::Backend));
+        }
+        Ok(mesh)
+    }
+
     /// Reads a mesh from a file. Format follows the extension.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         Self::load_within(path, ImportBudget::default())
@@ -457,6 +515,20 @@ impl Mesh {
         (!ptr.is_null()).then(|| unsafe { slice_of(ptr, self.vertex_count()) })
     }
 
+    /// One UV per vertex, when the mesh carries a layout.
+    ///
+    /// Per vertex, so a seam is a position duplicated into two vertices with
+    /// different UVs — which is what makes one representable at all.
+    pub fn uvs(&self) -> Option<&[[f32; 2]]> {
+        // SAFETY: the engine returns `vertex_count * 2` floats owned by this
+        // mesh and valid until it is destroyed, or NULL when absent. `[f32; 2]`
+        // has the layout of two consecutive floats.
+        let ptr = unsafe { sys::clay_mesh_uvs(self.raw.as_ptr()) };
+        let count = self.vertex_count();
+        (!ptr.is_null() && count > 0)
+            .then(|| unsafe { std::slice::from_raw_parts(ptr as *const [f32; 2], count) })
+    }
+
     /// Triangle indices, borrowed from the mesh.
     pub fn indices(&self) -> &[u32] {
         // SAFETY: the engine returns `index_count` u32 owned by this mesh.
@@ -476,6 +548,57 @@ impl Mesh {
             "clay_mesh_bounds",
         )?;
         Ok((min, max))
+    }
+
+    /// A copy of this mesh under a per-axis scale, then a rotation and a
+    /// position — how a layer transform places a mesh layer.
+    ///
+    /// Normals go through the inverse transpose rather than the rotation
+    /// alone, which is the difference from [`Mesh::transformed`] under a
+    /// squash. UVs and indices are untouched.
+    pub fn transformed_nonuniform(
+        &self,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: [f32; 3],
+    ) -> Result<Self> {
+        let mut out = std::ptr::null_mut();
+        // SAFETY: a valid mesh, three three-float inputs and an out-parameter
+        // the engine fills with a mesh this takes ownership of.
+        check(
+            unsafe {
+                sys::clay_mesh_transform_nonuniform(
+                    self.raw.as_ptr(),
+                    position.as_ptr(),
+                    rotation_axis.as_ptr(),
+                    rotation_angle,
+                    scale.as_ptr(),
+                    &mut out,
+                )
+            },
+            "clay_mesh_transform_nonuniform",
+        )?;
+        Self::from_raw(out, "clay_mesh_transform_nonuniform")
+    }
+
+    /// One mesh from many, indices rebased.
+    ///
+    /// The engine's attribute rule applies: normals, colours and UVs survive
+    /// only when every input carries them.
+    pub fn concat(meshes: &[&Mesh]) -> Result<Self> {
+        let raw: Vec<*const sys::clay_mesh> = meshes
+            .iter()
+            .map(|mesh| mesh.raw.as_ptr().cast_const())
+            .collect();
+        let mut out = std::ptr::null_mut();
+        // SAFETY: `raw` is `meshes.len()` valid mesh pointers, none null,
+        // borrowed for the call; the out-parameter is written on success.
+        check(
+            unsafe { sys::clay_mesh_concat(raw.as_ptr(), raw.len(), &mut out) },
+            "clay_mesh_concat",
+        )?;
+        Self::from_raw(out, "clay_mesh_concat")
     }
 
     /// A copy of this mesh, moved.
@@ -667,6 +790,33 @@ impl std::fmt::Debug for Mesh {
 ///
 /// `ptr` must be null or point to `count * 3` floats valid for the returned
 /// lifetime.
+/// Vertex-aligned OBJ text: `v`, `vn` and `vt` one per vertex, faces naming
+/// the vertex index alone, which the reader resolves for all three.
+fn obj_text(
+    positions: &[[f32; 3]],
+    normals: &[[f32; 3]],
+    uvs: &[[f32; 2]],
+    indices: &[u32],
+) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(positions.len() * 96 + indices.len() * 8);
+    // `{}` on a float is its shortest round-tripping decimal, so the reader
+    // parses back the exact value written.
+    for p in positions {
+        let _ = writeln!(text, "v {} {} {}", p[0], p[1], p[2]);
+    }
+    for n in normals {
+        let _ = writeln!(text, "vn {} {} {}", n[0], n[1], n[2]);
+    }
+    for uv in uvs {
+        let _ = writeln!(text, "vt {} {}", uv[0], uv[1]);
+    }
+    for t in indices.chunks_exact(3) {
+        let _ = writeln!(text, "f {} {} {}", t[0] + 1, t[1] + 1, t[2] + 1);
+    }
+    text
+}
+
 unsafe fn slice_of<'a>(ptr: *const f32, count: usize) -> &'a [[f32; 3]] {
     if ptr.is_null() || count == 0 {
         return &[];

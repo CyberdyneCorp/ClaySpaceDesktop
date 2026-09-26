@@ -1200,3 +1200,64 @@ fn a_retopology_is_a_job_with_a_new_layer_and_one_undo() {
         "undoing the retopology took back more than the retopology"
     );
 }
+
+/// Retopo → UV → a fixed mesh, driven the way an agent drives it: UVs are
+/// asked for, the layout's report reaches `state`, and a run that did not ask
+/// says so rather than reporting nothing.
+#[test]
+fn a_retopology_asked_for_uvs_reports_its_layout() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    call(
+        &running,
+        &session,
+        "convert",
+        json!({ "action": "set", "direction": "field-to-mesh", "cell_size": 0.05 }),
+    );
+    call(&running, &session, "convert", json!({ "action": "run" }));
+    settle(&running, &session);
+    let layers = layer_count(&running, &session);
+
+    let uv_of = |running: &Running| {
+        let state = call(
+            running,
+            &session,
+            "state",
+            json!({ "sections": ["outcomes"] }),
+        );
+        state["structuredContent"]["outcomes"]["retopology"]["uv"].clone()
+    };
+
+    call(
+        &running,
+        &session,
+        "retopo",
+        json!({ "action": "set", "target_quads": 600 }),
+    );
+    call(&running, &session, "retopo", json!({ "action": "run" }));
+    settle(&running, &session);
+    assert_eq!(uv_of(&running)["status"], "not_requested");
+
+    call(
+        &running,
+        &session,
+        "retopo",
+        json!({ "action": "set", "target_quads": 600, "uvs": true }),
+    );
+    call(&running, &session, "retopo", json!({ "action": "run" }));
+    settle(&running, &session);
+    let uv = uv_of(&running);
+    assert_eq!(uv["status"], "laid", "the layout did not land: {uv}");
+    assert!(
+        uv["report"]["charts"].as_u64().unwrap_or(0) > 0,
+        "a laid layout with no charts: {uv}"
+    );
+    assert_eq!(
+        layer_count(&running, &session),
+        layers + 2,
+        "each retopology should arrive as a new layer"
+    );
+}
