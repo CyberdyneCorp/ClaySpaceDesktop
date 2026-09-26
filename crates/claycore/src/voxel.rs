@@ -1109,6 +1109,85 @@ impl VoxelField {
     }
 }
 
+/// A grid's active level as plain data, detached from the document it was
+/// read from.
+///
+/// What lets a conversion leave the interface thread. A grid borrowed from a
+/// document cannot cross threads, since the document is the host's to
+/// serialize, but the cells, the palette and the cell size can, and
+/// [`Self::to_grid`] rebuilds an owned grid from them wherever the work runs.
+/// The engine converts the active level's occupancy and palette, so that is
+/// what this keeps; the other levels, the sculpt-pass records and the undo
+/// journal stay with the document.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridSnapshot {
+    voxel_size: f32,
+    /// Entry 1 onwards; index 0 is the engine's empty slot.
+    palette: Vec<[f32; 3]>,
+    cells: Vec<(Cell, i32)>,
+}
+
+impl GridSnapshot {
+    /// How many occupied cells it holds.
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// An owned grid with the same cells, colours and cell size.
+    ///
+    /// Indices are re-issued by the new grid's palette rather than assumed to
+    /// line up: `palette_add` folds a colour it already holds into the entry
+    /// it has, so the source's index is a key into the map, not a promise.
+    pub fn to_grid(&self) -> Result<VoxelGrid> {
+        let mut grid = VoxelGrid::new(self.voxel_size)?;
+        let slots = self
+            .palette
+            .iter()
+            .map(|rgb| grid.palette_add(*rgb))
+            .collect::<Result<Vec<_>>>()?;
+        for &(cell, index) in &self.cells {
+            let slot = usize::try_from(index - 1)
+                .ok()
+                .and_then(|entry| slots.get(entry))
+                .copied()
+                .ok_or_else(|| raw_failure("clay_voxel_set", ErrorKind::InvalidArgument))?;
+            grid.set(cell, slot)?;
+        }
+        Ok(grid)
+    }
+}
+
+impl VoxelField {
+    /// Reads the active level out as a [`GridSnapshot`].
+    ///
+    /// One read per cell of the occupied box, which is the only way the ABI
+    /// offers to enumerate a grid. Cheap next to what it moves off the
+    /// thread: the conversion redistances a volume over the same box and a
+    /// band around it.
+    pub fn snapshot(&self) -> Result<GridSnapshot> {
+        let palette = (1..self.palette_size()?)
+            .map(|index| self.palette_color(index as i32))
+            .collect::<Result<Vec<_>>>()?;
+        let mut cells = Vec::new();
+        if let Some((min, max)) = self.bounds()? {
+            for z in min[2]..=max[2] {
+                for y in min[1]..=max[1] {
+                    for x in min[0]..=max[0] {
+                        if let Some(index) = self.get([x, y, z])? {
+                            cells.push(([x, y, z], index));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(GridSnapshot {
+            voxel_size: self.voxel_size()?,
+            palette,
+            cells,
+        })
+    }
+}
+
 impl std::fmt::Debug for VoxelField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VoxelField")

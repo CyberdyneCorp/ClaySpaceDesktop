@@ -507,6 +507,12 @@ impl Item {
     }
 }
 
+// SAFETY: an item is host memory the engine reaches only through this handle,
+// a builder no document refers to, since placing one copies it. Moving it to
+// another thread moves the only way to reach it; nothing about it is tied to
+// the thread that built it.
+unsafe impl Send for Item {}
+
 impl std::fmt::Debug for Item {
     /// Opaque: an item builder holds engine state with no cheap summary, and
     /// formatting one must not compile anything.

@@ -3432,6 +3432,25 @@ crossing produces a field layer or replaces one in place; every other crossing
 leaves the surface to the incremental sync, and the source grid's chunks and
 smooth surface are not meshed again (`a_crossing_leaves_the_source_alone`).
 
+**Grid to field converts off the interface thread.** The conversion samples
+occupancy over the grid's box and a band around it and then redistances it —
+a few hundred milliseconds whatever the grid's size, and it used to hold the
+window for all of it (issue #185 measured 6.8 s for 23k cells on an older
+engine). The crossing is now split where the document stops being needed: the
+active grid's cells and palette are read out on the interface thread, an owned
+copy is converted on a worker, and the field is placed back as one crossing
+and one undo step. While it runs the window stays live, the crossing is
+reported as outstanding work to an agent (so `wait` waits for it), and a
+second grid-to-field crossing is refused until the first lands. If the grid
+was edited, undone or removed while it converted, the result is dropped with
+a sentence rather than placed over the newer grid; opening or starting a
+document drops it too. The refill of the new field layer's bricks then runs at
+the ordinary per-frame budget. Budgets, measured by `just bench-only
+convert.grid_to_field` at 5k, 23k and 100k cells: at most 50 ms of interface
+thread (reading plus placing) and 1 s of worker time. On an M-series machine
+the interface share measured 17–46 ms and the worker 0.2–0.45 s at all three
+sizes.
+
 **The panel states what the crossing costs before it runs**, computed from the
 cell size rather than written down, so the figures move as you move the slider:
 how far the surface can travel (half a cell), what thickness of feature

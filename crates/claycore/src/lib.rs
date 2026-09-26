@@ -154,8 +154,8 @@ pub use surface_view::{
     SurfaceView,
 };
 pub use voxel::{
-    Cell, ChunkRange, MaskedGrid, RepairReport, VoxelField, VoxelGrid, VoxelGridRef, VoxelHit,
-    VoxelReader,
+    Cell, ChunkRange, GridSnapshot, MaskedGrid, RepairReport, VoxelField, VoxelGrid, VoxelGridRef,
+    VoxelHit, VoxelReader,
 };
 
 use claycore_sys as sys;

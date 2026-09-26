@@ -15,14 +15,14 @@ use clayspace_app::{
     chord_for, profile_file, ray_at, DocumentShape, SessionStore, SharedDocument, SurfaceGeometry,
     ViewportInput,
 };
-use clayspace_engine::{BackendPolicy, ClayDocument, RefillBudget};
+use clayspace_engine::{BackendPolicy, ClayDocument, FieldFromGrid, RefillBudget};
 use clayspace_mcp::{
     report, Applied, CaptureCamera, CaptureRequest, CaptureWhat, Catalogue, Consent,
     ConsentOutcome, Frame, JobQueue, Measured, Outstanding, Refusal, RefusalCode, Server,
     ServerHandle, Session, Settled, StateQuery, StateReport,
 };
 use clayspace_model::{
-    AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
+    AutosavePolicy, Detail, DetailPolicy, Diagnostics, Direction, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, GizmoMode, ImportSettings, LayerKey, LayerOperation,
     ModelError, RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel,
     SculptModel, SkinSettings, StrokeDiagnostics, StrokeModifiers, Units, ViewPresetKind,
@@ -39,6 +39,7 @@ use clayspace_vm::{
     MaskViewModel, ObjectViewModel, Observable, ReferenceViewModel, SceneViewModel,
     SculptViewModel, UNTITLED,
 };
+use clayspace_vm::{Completion, JobRunner};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -601,6 +602,13 @@ struct App {
     /// its own. Replaced by the next crossing, so it always describes the most
     /// recent one.
     crossing_outcome: Option<(clayspace_model::Direction, clayspace_model::LayerKey)>,
+    /// A grid-to-field crossing converting off the interface thread.
+    ///
+    /// The one crossing that runs as a job. Its conversion samples and
+    /// redistances a volume over the grid's box, which held the window for
+    /// hundreds of milliseconds to seconds; reading the grid and placing the
+    /// field are what stay here. See `clayspace_engine::grid_to_field`.
+    grid_to_field: JobRunner<FieldFromGrid>,
     import: ImportSettings,
     export: ExportSettings,
     /// What a dragging verb took hold of, and where the pointer was then.
@@ -905,6 +913,7 @@ impl App {
             remesh: clayspace_model::RemeshSettings::default(),
             remesh_outcome: None,
             crossing_outcome: None,
+            grid_to_field: JobRunner::new(),
             import: ImportSettings::default(),
             export: ExportSettings::default(),
             renaming: None,
@@ -1138,6 +1147,10 @@ impl App {
             ("UV layout", self.uv.jobs().progress().get()),
             ("conform", self.conform.jobs().progress().get()),
             ("bake", self.bake.jobs().progress().get()),
+            (
+                "grid-to-field crossing",
+                self.grid_to_field.progress().get(),
+            ),
         ]
         .into_iter()
         .filter_map(|(what, progress)| {
@@ -1165,6 +1178,7 @@ impl App {
         // retopology engine and a bake writes files.
         self.uv.poll();
         self.bake.poll();
+        self.poll_grid_to_field();
     }
 
     /// What a job that just published into the document owes the rest of
@@ -1978,6 +1992,10 @@ impl App {
 
     /// Everything that has to catch up when the document underneath changes.
     fn after_document_replaced(&mut self) {
+        // A crossing still converting belongs to the document that went. Its
+        // layer key could name a row of the new one, so the result is dropped
+        // with the runner rather than checked when it lands.
+        self.grid_to_field = JobRunner::new();
         self.scene.refresh();
         self.mask.refresh();
         self.armature.refresh();
@@ -4704,6 +4722,9 @@ impl App {
     /// refusal does.
     fn run_conversion(&mut self) {
         let settings = self.conversion;
+        if settings.direction == Direction::VoxelToSdf {
+            return self.start_grid_to_field(settings);
+        }
         let before = self.engine_undo_depth();
         let outcome = self.busy(|app| {
             app.timed("converter", |app| {
@@ -4718,38 +4739,106 @@ impl App {
                 })
             })
         });
+        self.after_crossing(settings.direction, settings.in_place, before, outcome);
+    }
+
+    /// Reads the active grid and hands its conversion to a worker.
+    ///
+    /// Refusals are stated here, before anything starts: a source that is not
+    /// a grid, a grid with nothing in it, a crossing already running. The
+    /// panel closes as it does for a crossing that finished, and the job is
+    /// reported as outstanding until the field is placed.
+    fn start_grid_to_field(&mut self, settings: clayspace_model::ConversionSettings) {
+        if self.grid_to_field.is_running() {
+            self.stated::<()>(Err(ModelError::engine(
+                "a grid-to-field crossing is already running",
+            )));
+            return;
+        }
+        let begun = self.timed("converter", |app| {
+            app.document.with(|document| {
+                document.begin_grid_to_field(settings.cell_size, settings.blur, settings.in_place)
+            })
+        });
+        let Some(crossing) = self.stated(begun) else {
+            return;
+        };
+        self.show_convert = false;
+        self.grid_to_field.start("conversão para campo", move |_| {
+            crossing.convert().map_err(|error| error.to_string())
+        });
+        self.request_redraw();
+    }
+
+    /// Places a converted field once its worker is done.
+    ///
+    /// Not while a gesture is open: placing a layer under a stroke would put
+    /// the crossing's undo entry in the middle of it. The result waits in the
+    /// runner until the gesture ends.
+    fn poll_grid_to_field(&mut self) {
+        if self.a_gesture_is_open() {
+            return;
+        }
+        match self.grid_to_field.poll() {
+            Some(Completion::Finished(made)) => {
+                let in_place = made.in_place();
+                let before = self.engine_undo_depth();
+                let outcome = self.timed("converter", |app| {
+                    app.document
+                        .with(|document| document.finish_grid_to_field(made))
+                });
+                self.after_crossing(Direction::VoxelToSdf, in_place, before, outcome);
+            }
+            Some(Completion::Failed(why)) => {
+                self.stated::<()>(Err(ModelError::engine(why)));
+            }
+            Some(Completion::Superseded) | None => {}
+        }
+    }
+
+    /// What a crossing owes the rest of the application once it has landed,
+    /// wherever it ran.
+    fn after_crossing(
+        &mut self,
+        direction: Direction,
+        in_place: bool,
+        before: usize,
+        outcome: Result<LayerKey, ModelError>,
+    ) {
         // A crossing is priced before it is attempted and refused over the
         // budget — "needs 1 658 880 000 cells, past the 512 MB budget" — which
         // is a sentence a caller acts on by choosing a coarser cell. Printed
         // alone, the panel stayed open with nothing said and the agent that
         // asked was told the crossing had happened.
-        if let Some(crossed) = self.stated(outcome) {
-            // One undo for the whole crossing. The reported depth folds a
-            // crossing's removal and reorder entries into one step, and one
-            // `undo()` takes a whole crossing back, so this banks exactly one.
-            // Measured before the fix: depth 1 after a stroke, still 1 after
-            // the crossing, 0 after one Cmd+Z — which took the crossing and
-            // most of the stroke with it.
-            self.sculpt.record_external_action(
-                Command::RunConversion.label(),
-                self.engine_undo_depth().saturating_sub(before),
-            );
-            self.crossing_outcome = Some((settings.direction, crossed));
-            self.show_convert = false;
-            self.scene.refresh();
-            self.sculpt.refresh_for_active_layer();
-            self.document_vm.touched();
-            // The whole-surface settle only where the field moved. Every other
-            // crossing leaves the brick surface as it was — its source stays,
-            // and a grid or a mesh is drawn through the carried path — so a
-            // settle re-meshed an unchanged layer, 160 to 240 ms of nothing.
-            // The incremental sync still picks up anything that is dirty.
-            if settings.direction.changes_the_field(settings.in_place) {
-                self.settle_geometry();
-            } else {
-                self.sync_geometry();
-            }
+        let Some(crossed) = self.stated(outcome) else {
+            return;
+        };
+        // One undo for the whole crossing. The reported depth folds a
+        // crossing's removal and reorder entries into one step, and one
+        // `undo()` takes a whole crossing back, so this banks exactly one.
+        // Measured before the fix: depth 1 after a stroke, still 1 after
+        // the crossing, 0 after one Cmd+Z — which took the crossing and
+        // most of the stroke with it.
+        self.sculpt.record_external_action(
+            Command::RunConversion.label(),
+            self.engine_undo_depth().saturating_sub(before),
+        );
+        self.crossing_outcome = Some((direction, crossed));
+        self.show_convert = false;
+        self.scene.refresh();
+        self.sculpt.refresh_for_active_layer();
+        self.document_vm.touched();
+        // The whole-surface settle only where the field moved. Every other
+        // crossing leaves the brick surface as it was — its source stays,
+        // and a grid or a mesh is drawn through the carried path — so a
+        // settle re-meshed an unchanged layer, 160 to 240 ms of nothing.
+        // The incremental sync still picks up anything that is dirty.
+        if direction.changes_the_field(in_place) {
+            self.settle_geometry();
+        } else {
+            self.sync_geometry();
         }
+        self.request_redraw();
     }
 
     /// Carries out a shortcut's action.

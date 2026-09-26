@@ -23,6 +23,7 @@ use clayspace_model::{
 };
 
 use crate::backend::{BackendPolicy, Operation};
+use crate::grid_to_field::{FieldFromGrid, GridToField, GridToken};
 use crate::objects::{extent_of, kind_of, primitive_of, union, PlacedObject};
 
 /// The engine's op for a combine operation.
@@ -2416,6 +2417,15 @@ impl ClayDocument {
         blur: i32,
         in_place: bool,
     ) -> Result<LayerKey, ModelError> {
+        self.check_crossing(direction, cell_size)?;
+        self.cross_with(direction, in_place, |document, name| {
+            document.fill_crossing(direction, name, cell_size, blur)
+        })
+    }
+
+    /// Whether the active layer can take this crossing at this resolution:
+    /// the right source, and a result that fits the memory budget.
+    fn check_crossing(&self, direction: Direction, cell_size: f32) -> Result<(), ModelError> {
         let source = self.active_layer();
         if source.representation != direction.from() {
             // Not a tool refusal — there is no tool here — so it is stated as
@@ -2436,8 +2446,22 @@ impl ClayDocument {
                 .unwrap_or(u64::MAX),
             Self::BYTES_PER_CELL,
         )
-        .map_err(ModelError::Conversion)?;
+        .map_err(ModelError::Conversion)
+    }
 
+    /// Runs a crossing of the active layer whose new layer `fill` makes.
+    ///
+    /// Everything a crossing owes whatever it produces: the derived name, the
+    /// undo group around the edits, the source's row when it is replaced, and
+    /// the record that makes the whole of it one undo step. `fill` is handed
+    /// the name and returns the layer it made.
+    fn cross_with(
+        &mut self,
+        direction: Direction,
+        in_place: bool,
+        fill: impl FnOnce(&mut Self, &str) -> Result<LayerKey, ModelError>,
+    ) -> Result<LayerKey, ModelError> {
+        let source = self.active_layer();
         // Made unique here as well, and this is the path that most needs it:
         // the crossing is what actually creates voxel layers, and a grid is
         // reachable only by name (ClayCore #365). Crossing one source twice
@@ -2468,18 +2492,7 @@ impl ClayDocument {
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;
-        let made = match direction {
-            Direction::SdfToVoxel => self.rasterize_to_voxels(&name, cell_size),
-            Direction::VoxelToSdf => self.voxels_to_sdf(&name, blur),
-            Direction::MeshToVoxel => self.mesh_to_voxels(&name, cell_size),
-            Direction::MeshToSdf => self.mesh_to_sdf(&name, cell_size),
-            Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
-            Direction::VoxelToMesh => self.voxels_to_mesh(&name),
-            Direction::MeshToMultires => self.mesh_to_multires(&name),
-            Direction::MultiresToMesh => self.multires_to_mesh(&name),
-            Direction::MeshToDynamic => self.mesh_to_dynamic(&name),
-            Direction::DynamicToMesh => self.dynamic_to_mesh(&name),
-        };
+        let made = fill(self, &name);
         // The source leaves and the result takes its row here rather than
         // after the group: it keeps the entries adjacent, which is what lets
         // them be taken back together.
@@ -2504,6 +2517,120 @@ impl ClayDocument {
         // the layer it just made. See `crossing_undo`.
         self.record_crossing(made, depth_before);
         Ok(made)
+    }
+
+    /// Makes the new layer for one direction, named `name`.
+    fn fill_crossing(
+        &mut self,
+        direction: Direction,
+        name: &str,
+        cell_size: f32,
+        blur: i32,
+    ) -> Result<LayerKey, ModelError> {
+        match direction {
+            Direction::SdfToVoxel => self.rasterize_to_voxels(name, cell_size),
+            Direction::VoxelToSdf => self.voxels_to_sdf(name, blur),
+            Direction::MeshToVoxel => self.mesh_to_voxels(name, cell_size),
+            Direction::MeshToSdf => self.mesh_to_sdf(name, cell_size),
+            Direction::SdfToMesh => self.sdf_to_mesh(name, cell_size),
+            Direction::VoxelToMesh => self.voxels_to_mesh(name),
+            Direction::MeshToMultires => self.mesh_to_multires(name),
+            Direction::MultiresToMesh => self.multires_to_mesh(name),
+            Direction::MeshToDynamic => self.mesh_to_dynamic(name),
+            Direction::DynamicToMesh => self.dynamic_to_mesh(name),
+        }
+    }
+
+    /// Reads the active grid out for a grid-to-field crossing that runs off
+    /// the interface thread.
+    ///
+    /// The first of three parts; see [`crate::grid_to_field`]. Refused here,
+    /// before anything leaves the thread, for the same reasons the whole
+    /// crossing is refused: a source that is not a grid, a result past the
+    /// budget, a grid with nothing in it.
+    pub fn begin_grid_to_field(
+        &mut self,
+        cell_size: f32,
+        blur: i32,
+        in_place: bool,
+    ) -> Result<GridToField, ModelError> {
+        self.check_crossing(Direction::VoxelToSdf, cell_size)?;
+        self.read_active_grid(blur, in_place)
+    }
+
+    /// Places a field converted off the interface thread, as the crossing of
+    /// the grid it was read from.
+    ///
+    /// The third part; see [`crate::grid_to_field`]. One crossing and one undo
+    /// step, the same as [`Self::convert_layer`] makes. Refused with
+    /// [`Refusal::SourceMoved`] when the grid went or changed while the
+    /// conversion ran: the field describes the grid as it was, and placing it
+    /// would bring back what the sculptor has since changed.
+    pub fn finish_grid_to_field(&mut self, made: FieldFromGrid) -> Result<LayerKey, ModelError> {
+        let moved = || ModelError::Conversion(Refusal::SourceMoved);
+        let row = self.index_of(made.source).map_err(|_| moved())?;
+        if self.layers[row].representation != Representation::Voxel {
+            return Err(moved());
+        }
+        let engine_name = self.layers[row].engine_name.clone();
+        let token = {
+            let (_, grid) = self
+                .document
+                .voxel_reader(&engine_name)
+                .map_err(ModelError::engine)?;
+            GridToken::of(&grid)?
+        };
+        if token != made.token {
+            return Err(moved());
+        }
+        // The crossing works on the active row, and the sculptor may have
+        // moved to another while this ran.
+        self.set_active_layer(made.source)?;
+        self.cross_with(Direction::VoxelToSdf, made.in_place, |document, name| {
+            document.place_field(name, &made.item)
+        })
+    }
+
+    /// The active grid as a crossing ready to convert.
+    fn read_active_grid(&mut self, blur: i32, in_place: bool) -> Result<GridToField, ModelError> {
+        let source = self.active_layer().key;
+        let engine_name = self.active_layer().engine_name.clone();
+        // Scoped rather than dropped: the grid carries an exclusive borrow of
+        // the document.
+        let (token, snapshot) = {
+            let (_, grid) = self
+                .document
+                .voxel_reader(&engine_name)
+                .map_err(ModelError::engine)?;
+            (
+                GridToken::of(&grid)?,
+                grid.snapshot().map_err(ModelError::engine)?,
+            )
+        };
+        if snapshot.cell_count() == 0 {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        Ok(GridToField {
+            source,
+            token,
+            in_place,
+            blur,
+            snapshot,
+        })
+    }
+
+    /// A converted field as a new layer: one volume item, carrying the grid's
+    /// palette per sample.
+    fn place_field(&mut self, name: &str, item: &Item) -> Result<LayerKey, ModelError> {
+        let layer = self
+            .document
+            .add_sdf_layer(name)
+            .map_err(ModelError::engine)?;
+        self.document
+            .add_item(layer, item)
+            .map_err(ModelError::engine)?;
+        let key = self.adopt_engine_layer(layer, name, Representation::Sdf)?;
+        self.after_conversion(key)
     }
 
     /// Records a layer an operation added as a crossing, so one undo takes
@@ -3056,28 +3183,12 @@ impl ClayDocument {
         self.after_conversion(key)
     }
 
+    /// The grid-to-field crossing on this thread: the same three parts
+    /// [`Self::begin_grid_to_field`] spreads across two, run back to back, so
+    /// both schedules convert the same way.
     fn voxels_to_sdf(&mut self, name: &str, blur: i32) -> Result<LayerKey, ModelError> {
-        let engine_name = self.active_layer().engine_name.clone();
-        // Scoped rather than dropped: the grid carries an exclusive borrow of
-        // the document, and the conversion below needs the document back.
-        let occupied = {
-            let (_, grid) = self
-                .document
-                .voxel_layer(&engine_name)
-                .map_err(ModelError::engine)?;
-            grid.occupied_count().map_err(ModelError::engine)?
-        };
-        if occupied == 0 {
-            return Err(ModelError::Conversion(Refusal::SourceEmpty));
-        }
-        // One volume item per palette entry, which is what carries the colour
-        // across: a distance field has none in it.
-        let layer = self
-            .document
-            .voxel_layer_to_sdf_layer(&engine_name, name, blur)
-            .map_err(ModelError::engine)?;
-        let key = self.adopt_engine_layer(layer, name, Representation::Sdf)?;
-        self.after_conversion(key)
+        let made = self.read_active_grid(blur, false)?.convert()?;
+        self.place_field(name, &made.item)
     }
 
     fn mesh_to_voxels(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {

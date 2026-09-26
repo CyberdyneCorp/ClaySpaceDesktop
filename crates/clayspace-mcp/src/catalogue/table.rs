@@ -1404,7 +1404,9 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "convert",
         name: "run",
-        summary: "Runs the conversion the panel is set to, as one undo step.",
+        summary: "Runs the conversion the panel is set to, as one undo step. Grid-to-field \
+                  converts in the background: the reply comes at once, and the crossing is \
+                  outstanding work until its field layer lands.",
         arguments: &[],
         example: "{}",
     },
