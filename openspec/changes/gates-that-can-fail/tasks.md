@@ -19,7 +19,7 @@
 ## 3. What this change does not do
 
 - [ ] 3.1 Wire `NoticeBoard`, `HistoryViewModel`, `JobRunner`, `UnitsModel` and `DiagnosticsModel` — five complete, tested ViewModels nothing constructs, which is why engine failures reach stderr instead of the sculptor
-- [ ] 3.2 Work off the twenty-six domain labels the shell still draws untranslated, held from growing by a ratchet (#40)
+- [x] 3.2 Audit the five remaining domain label calls: SI symbols, shortcut chords, axis letters, locale autonyms, and user-supplied object names need no translation; the ratchet prevents new calls (#40, #195)
 - [ ] 3.3 Split `App` (58 fields, 78 methods) and `ClayDocument` (40 fields, nine traits). Both are real and neither is a line-count argument — `document.rs` is 6,792 lines and its functions never appear in a complexity ranking
 
 ## 4. Local gate reproducibility (#190)
@@ -28,3 +28,10 @@
 - [x] 4.2 Verify `cargo clippy --workspace -- -D warnings` on a clean macOS checkout.
 - [x] 4.3 Account for the four Linux failures in the archived `upgrade-engine-0-113-0` change and the later pin in archived `upgrade-engine-0-116-0` and `upgrade-engine-0-120-0` changes.
 - [x] 4.4 Run the long-session visual fixture and keep its reproduced rendering defect as an enabled macOS tripwire until a clean-frame fix replaces it.
+
+## 5. Localized interface and agent identity (#195)
+
+- [x] 5.1 Store each MCP client's `clientInfo.name` with its session and show that name in consent prompts.
+- [x] 5.2 Route visible refusals, diagnostics, export warnings and remaining labels through the locale table.
+- [x] 5.3 Use Hierarchy consistently in visible wording and prevent raw ABI identifiers from reaching the interface.
+- [x] 5.4 Add completeness and source lint tests, then exercise en-US and es-419 refusal paths.

@@ -908,7 +908,7 @@ impl App {
     fn open_the_door(&mut self, proxy: winit::event_loop::EventLoopProxy<AgentWake>) {
         self.agent_proxy = Some(proxy.clone());
         let Some(root) = self.store.as_ref().map(|store| store.root().to_path_buf()) else {
-            eprintln!("sem diretório de sessão: a porta do agente fica fechada");
+            eprintln!("{}", self.strings.log_door_no_session);
             return;
         };
         if clayspace_mcp::access::door_was_shut(&root) {
@@ -925,7 +925,7 @@ impl App {
             Ok(server) => {
                 let access = server.access().clone();
                 if let Err(e) = access.publish(&root) {
-                    eprintln!("o endereço do agente não pôde ser publicado: {e}");
+                    eprintln!("{}: {e}", self.strings.log_door_publish);
                 }
                 let handle = server.serve();
                 println!("agent: {}", handle.url());
@@ -937,7 +937,7 @@ impl App {
                 });
                 self.agent_door = Some(handle);
             }
-            Err(e) => eprintln!("a porta do agente não pôde ser aberta: {e}"),
+            Err(e) => eprintln!("{}: {e}", self.strings.log_door_open),
         }
     }
 
@@ -1187,11 +1187,27 @@ impl App {
         let remarks = self.remark_channels();
         let substitution = self.sculpt.substitution().map(|s| s.describe());
         notices_written(
-            std::array::from_fn(|channel| (written(channel), refusals[channel].get().as_deref())),
+            std::array::from_fn(|channel| {
+                (
+                    written(channel),
+                    localized_agent_refusal(
+                        self.strings,
+                        channel,
+                        refusals[channel].get().as_deref(),
+                    ),
+                )
+            }),
             std::array::from_fn(|remark| {
                 (
                     written(NOTICE_REFUSAL_CHANNELS + remark),
-                    remark_for_an_agent(remarks[remark].get().as_deref(), substitution.as_deref()),
+                    localized_agent_remark(
+                        self.strings,
+                        remark,
+                        remark_for_an_agent(
+                            remarks[remark].get().as_deref(),
+                            substitution.as_deref(),
+                        ),
+                    ),
                 )
             }),
         )
@@ -1221,7 +1237,8 @@ impl App {
                 Some(value)
             }
             Err(refusal) => {
-                self.operation_refusal.announce(Some(refusal.to_string()));
+                self.operation_refusal
+                    .announce(Some(self.strings.model_refusal(&refusal).to_string()));
                 None
             }
         }
@@ -1374,7 +1391,7 @@ impl App {
                 .geometry
                 .set_detail(&gpu, document, Detail::Reduced)
         }) {
-            eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+            eprintln!("{}: {e}", self.strings.log_detail_switch);
         }
     }
 
@@ -1384,7 +1401,7 @@ impl App {
         let path = match (known, ask_for_path) {
             (Some(path), false) => Some(path),
             _ => rfd::FileDialog::new()
-                .set_title("Salvar escultura")
+                .set_title(self.strings.dialog_save_sculpt)
                 .add_filter("ClaySpace", &["clayspace"])
                 .set_file_name(format!("{}.clayspace", self.document_display_name()))
                 .save_file(),
@@ -1415,8 +1432,8 @@ impl App {
     /// that opened one could not be exercised without a desktop.
     fn choose_bake_destination(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Onde gravar os mapas")
-            .set_file_name("cozido")
+            .set_title(self.strings.dialog_bake_destination)
+            .set_file_name(self.strings.dialog_bake_stem)
             .save_file()
         else {
             return;
@@ -1430,7 +1447,7 @@ impl App {
             return;
         }
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Abrir escultura")
+            .set_title(self.strings.dialog_open_sculpt)
             .add_filter("ClaySpace", &["clayspace"])
             .pick_file()
         else {
@@ -1487,11 +1504,8 @@ impl App {
 
         let wanted = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
-            .set_title("Trabalho recuperado")
-            .set_description(
-                "A sessão anterior terminou inesperadamente. Recuperar o que \
-                 estava aberto?",
-            )
+            .set_title(self.strings.dialog_recovered_title)
+            .set_description(self.strings.dialog_recovered_question)
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
             == rfd::MessageDialogResult::Yes;
@@ -1535,7 +1549,7 @@ impl App {
             || self.document_vm.autosave_to(&path),
         );
         if let Some(Err(e)) = written {
-            eprintln!("a recuperação automática falhou: {e}");
+            eprintln!("{}: {e}", self.strings.log_recovery);
         }
     }
 
@@ -1602,8 +1616,8 @@ impl App {
             .map(|format| format.extension())
             .collect();
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Importar malha")
-            .add_filter("Malhas", &readable)
+            .set_title(self.strings.dialog_import_mesh)
+            .add_filter(self.strings.dialog_mesh_filter, &readable)
             .pick_file()
         else {
             return;
@@ -1615,7 +1629,7 @@ impl App {
                 self.document_vm.touched();
                 self.after_document_replaced();
             }
-            Err(e) => eprintln!("não foi possível importar: {e}"),
+            Err(e) => eprintln!("{}: {e}", self.strings.log_import),
         }
         self.request_redraw();
     }
@@ -1732,8 +1746,8 @@ impl App {
     /// avoids.
     fn load_alpha(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Carregar alfa")
-            .add_filter("Alfas", &["png"])
+            .set_title(self.strings.dialog_load_alpha)
+            .add_filter(self.strings.dialog_alpha_filter, &["png"])
             .pick_file()
         else {
             return;
@@ -1745,7 +1759,7 @@ impl App {
             }
             // The refusal is a sentence naming what is wrong with *this* file,
             // built in the domain so that the same reason reaches a test.
-            Err(refusal) => eprintln!("não foi possível carregar o alfa: {refusal}"),
+            Err(refusal) => eprintln!("{}: {refusal}", self.strings.log_alpha),
         }
         self.request_redraw();
     }
@@ -1780,8 +1794,8 @@ impl App {
             .map(|format| format.extension())
             .collect();
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Exportar malha")
-            .add_filter("Malhas", &writable)
+            .set_title(self.strings.dialog_export_mesh)
+            .add_filter(self.strings.dialog_mesh_filter, &writable)
             .set_file_name(format!("{}.obj", self.document_display_name()))
             .save_file()
         else {
@@ -1799,7 +1813,7 @@ impl App {
             }
             Err(e) => {
                 self.export_findings.clear();
-                eprintln!("não foi possível exportar: {e}");
+                eprintln!("{}: {e}", self.strings.log_export);
             }
         }
         self.request_redraw();
@@ -1813,8 +1827,8 @@ impl App {
     fn confirm_discarding_work(&self) -> bool {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
-            .set_title("Alterações não salvas")
-            .set_description("A escultura tem alterações que não foram salvas. Descartar?")
+            .set_title(self.strings.dialog_unsaved_title)
+            .set_description(self.strings.dialog_unsaved_question)
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
             == rfd::MessageDialogResult::Yes
@@ -2018,7 +2032,7 @@ impl App {
             return;
         }
         if let Err(e) = self.document.with(ClayDocument::pump_refill) {
-            eprintln!("a superfície não pôde ser recomposta: {e}");
+            eprintln!("{}: {e}", self.strings.log_surface_rebuild);
             // And no frame is asked for. A refusal that repeats would spin the
             // loop at frame rate printing the same sentence — an idle
             // application that redraws forever is the failure `Observable`
@@ -2097,14 +2111,20 @@ impl App {
             .saturating_sub(cost.read_time)
             .saturating_sub(cost.upload_time);
         eprintln!(
-            "  re-malha final [{:?}] {:.0} ms = motor {:.0} + leitura {:.0} + envio {:.0} + resto {:.0}; {} triângulos",
+            "  {} [{:?}] {:.0} ms = {} {:.0} + {} {:.0} + {} {:.0} + {} {:.0}; {} {}",
+            self.strings.log_final_remesh,
             cost.route,
             ms(cost.total_time),
+            self.strings.log_engine,
             ms(cost.engine_mesh_time),
+            self.strings.log_read,
             ms(cost.read_time),
+            self.strings.log_upload,
             ms(cost.upload_time),
+            self.strings.log_other,
             ms(ours),
             cost.triangles,
+            self.strings.diag_triangles,
         );
     }
 
@@ -2120,7 +2140,7 @@ impl App {
     fn build_mips(&mut self) {
         self.timed("níveis de detalhe", |app| {
             if let Err(e) = app.document.with(|document| document.build_mips()) {
-                eprintln!("os níveis de detalhe não puderam ser construídos: {e}");
+                eprintln!("{}: {e}", app.strings.log_mip_build);
             }
         });
         // A request for the coarse surface made while the mips were still
@@ -2197,7 +2217,7 @@ impl App {
                     .document
                     .with(|document| graphics.geometry.set_detail(&gpu, document, wanted))
                 {
-                    eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+                    eprintln!("{}: {e}", app.strings.log_detail_switch);
                 }
             });
         };
@@ -2218,7 +2238,7 @@ impl App {
             .document
             .with(|document| graphics.geometry.reapply_detail(&gpu, document))
         {
-            eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+            eprintln!("{}: {e}", self.strings.log_detail_switch);
         }
     }
 
@@ -2240,7 +2260,7 @@ impl App {
         // waited for the pointer to come up would lag a whole gesture behind
         // the brush.
         if let Err(e) = self.document.with(ClayDocument::resmooth_voxels) {
-            eprintln!("a malha suave não pôde ser reconstruída: {e}");
+            eprintln!("{}: {e}", self.strings.log_smooth_mesh);
         }
         let revision = self.document.with(|document| document.mesh_revision());
         if self.mesh_revision == Some(revision) {
@@ -3460,6 +3480,14 @@ impl App {
     /// moment it exists for.
     fn diagnostics(&self, stroke: StrokeSection) -> Diagnostics {
         let mut report = self.policy.diagnostics();
+        report.selection = match self.policy.reason() {
+            clayspace_engine::SelectionReason::Automatic => self.strings.backend_automatic,
+            clayspace_engine::SelectionReason::Override => self.strings.backend_override,
+            clayspace_engine::SelectionReason::OverrideUnavailable => {
+                self.strings.backend_override_unavailable
+            }
+        }
+        .to_string();
         report.renderer = self
             .graphics
             .as_ref()
@@ -3558,7 +3586,7 @@ impl App {
         // to an issue and nobody can read.
         match profile_file::write(&path, &text) {
             Ok(()) => println!("perfil escrito em {}", path.display()),
-            Err(e) => eprintln!("o perfil não pôde ser escrito: {e}"),
+            Err(e) => eprintln!("{}: {e}", self.strings.log_profile),
         }
         self.request_redraw();
     }
@@ -3654,8 +3682,11 @@ impl App {
         let outcome = work(self);
         let took = started.elapsed();
         if self.stalls.record(operation, took) {
+            let description =
+                agent_operation_label(self.strings, operation, self.strings.diag_stall_recorded);
             eprintln!(
-                "a interface travou: {operation} {:.0} ms",
+                "{}: {description} {:.0} ms",
+                self.strings.log_stall,
                 took.as_secs_f64() * 1000.0
             );
         }
@@ -4528,7 +4559,7 @@ impl App {
                 self.renaming = None;
                 self.document_vm.touched();
             }
-            Err(e) => eprintln!("a camada não pôde ser renomeada: {e}"),
+            Err(e) => eprintln!("{}: {e}", self.strings.log_rename),
         }
     }
 
@@ -5045,11 +5076,14 @@ impl App {
             .clone();
 
         let scene = self.scene.scene().get().clone();
-        let materials: Vec<&str> = MatCap::ALL.iter().map(|m| m.label()).collect();
+        let materials: Vec<&str> = MatCap::ALL
+            .iter()
+            .map(|m| self.strings.matcap_name(*m))
+            .collect();
         let material = self
             .graphics
             .as_ref()
-            .map(|g| g.renderer.matcap().label())
+            .map(|g| self.strings.matcap_name(g.renderer.matcap()))
             .unwrap_or("");
         let backend = self.policy.active().to_string();
         let memory = self.memory_figures(frame_started);
@@ -5084,6 +5118,19 @@ impl App {
         let mut queue = CommandQueue::new();
         let mut viewport = None;
         let mut input = ViewportInput::default();
+        let status_sources = ToolStatusSources {
+            document: self.document_vm.notice().get().as_deref(),
+            operation: self.operation_refusal.get().as_deref(),
+            reference: self.references.notice().get().as_deref(),
+            mask: self.mask.notice().get().as_deref(),
+            object: self.objects.notice().get().as_deref(),
+            lattice: self.lattice.notice().get().as_deref(),
+            curve: self.curve.notice().get().as_deref(),
+            armature: self.armature.notice().get().as_deref(),
+            scene: self.scene.refusal().get().as_deref(),
+            sculpt: self.sculpt.tool_status().get().as_deref(),
+        };
+        let localized_status = localized_tool_status(self.strings, status_sources);
         let state = ShellState {
             door: self.agent.door().clone(),
             agent_ask: self.agent.ask(),
@@ -5112,7 +5159,13 @@ impl App {
             boolean: *self.boolean.settings().get(),
             boolean_operands: self.boolean.operands().get(),
             boolean_cost: *self.boolean.cost().get(),
-            boolean_notice: self.boolean.notice().get().as_deref(),
+            boolean_notice: self.boolean.notice().get().as_deref().map(|raw| {
+                if self.strings.locale == clayspace_model::Locale::PtBr && !raw.contains("clay_") {
+                    raw
+                } else {
+                    self.strings.status_boolean
+                }
+            }),
             shape: *self.objects.shape().get(),
             shape_parameters: self.objects.parameters().get(),
             object_combine: *self.objects.combine().get(),
@@ -5143,7 +5196,11 @@ impl App {
             remesh_outcome: self.remesh_outcome,
             retopo: *self.retopo.settings().get(),
             retopo_outcome: *self.retopo.last().get(),
-            retopo_unavailable: self.retopo.unavailable().get().clone(),
+            retopo_unavailable: localized_vm_text(
+                self.strings,
+                self.retopo.unavailable().get().as_deref(),
+                self.strings.status_retopo,
+            ),
             retopo_progress: self
                 .retopo
                 .jobs()
@@ -5153,7 +5210,11 @@ impl App {
                 .map(|progress| (progress.label.clone(), progress.fraction)),
             uv: *self.uv.settings().get(),
             uv_outcome: *self.uv.last().get(),
-            uv_unavailable: self.uv.unavailable().get().clone(),
+            uv_unavailable: localized_vm_text(
+                self.strings,
+                self.uv.unavailable().get().as_deref(),
+                self.strings.status_uv,
+            ),
             uv_progress: self
                 .uv
                 .jobs()
@@ -5163,7 +5224,11 @@ impl App {
                 .map(|progress| (progress.label.clone(), progress.fraction)),
             conform: *self.conform.settings().get(),
             conform_outcome: self.conform.last().get().clone(),
-            conform_unavailable: self.conform.unavailable().get().clone(),
+            conform_unavailable: localized_vm_text(
+                self.strings,
+                self.conform.unavailable().get().as_deref(),
+                self.strings.status_conform,
+            ),
             conform_progress: self
                 .conform
                 .jobs()
@@ -5173,7 +5238,11 @@ impl App {
                 .map(|progress| (progress.label.clone(), progress.fraction)),
             bake: self.bake.settings().get().clone(),
             bake_result: self.bake.last().get().clone(),
-            bake_unavailable: self.bake.unavailable().get().clone(),
+            bake_unavailable: localized_vm_text(
+                self.strings,
+                self.bake.unavailable().get().as_deref(),
+                self.strings.status_bake,
+            ),
             bake_progress: self
                 .bake
                 .jobs()
@@ -5245,18 +5314,7 @@ impl App {
             // The operations the composition root runs itself were worse than
             // an Observable nobody read: they had none at all, and printed to
             // stderr instead.
-            tool_status: tool_status(ToolStatusSources {
-                document: self.document_vm.notice().get().as_deref(),
-                operation: self.operation_refusal.get().as_deref(),
-                reference: self.references.notice().get().as_deref(),
-                mask: self.mask.notice().get().as_deref(),
-                object: self.objects.notice().get().as_deref(),
-                lattice: self.lattice.notice().get().as_deref(),
-                curve: self.curve.notice().get().as_deref(),
-                armature: self.armature.notice().get().as_deref(),
-                scene: self.scene.refusal().get().as_deref(),
-                sculpt: self.sculpt.tool_status().get().as_deref(),
-            }),
+            tool_status: localized_status,
             symmetry: self.active_symmetry(),
             scene: &scene,
             renaming: self
@@ -5715,7 +5773,7 @@ impl App {
                             let proxy = proxy.clone();
                             self.open_the_door(proxy);
                         }
-                        None => eprintln!("a porta do agente não pode ser reaberta nesta sessão"),
+                        None => eprintln!("{}", self.strings.log_door_reopen),
                     }
                 }
                 self.request_redraw();
@@ -5811,7 +5869,7 @@ impl App {
                     .document
                     .with(|document| document.set_voxel_display(display, blur))
                 {
-                    eprintln!("a exibição de voxels não pôde ser alterada: {e}");
+                    eprintln!("{}: {e}", self.strings.log_voxel_display);
                 }
                 self.sync_mesh_layers();
                 self.request_redraw();
@@ -6175,6 +6233,7 @@ impl ApplicationHandler<AgentWake> for App {
 /// these were Observables that nothing read, and each was found the same way —
 /// an action refused, a sentence written, and no sentence on screen. A tuple
 /// of `Option<&str>` would let a reorder pass review unnoticed.
+#[derive(Clone, Copy)]
 struct ToolStatusSources<'a> {
     /// A save or an open that failed. First because it is the most recent
     /// explicit action there is, and the one whose silence costs work rather
@@ -6228,6 +6287,108 @@ fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
         .or(from.armature)
         .or(from.scene)
         .or(from.sculpt)
+}
+
+/// VM channels still carry domain prose. Until each channel carries a typed
+/// reason, the screen uses a translated category for those channels. The
+/// composition root's own operation is already worded by `model_refusal`.
+fn localized_tool_status<'a>(
+    strings: &'a clayspace_view::Strings,
+    from: ToolStatusSources<'a>,
+) -> Option<&'a str> {
+    let first = tool_status(from);
+    if first == Some(clayspace_vm::TOOL_SUBSTITUTED) {
+        return Some(strings.notice_adjustment);
+    }
+    if first == Some(clayspace_vm::ITEM_NOT_TRANSFORMABLE) {
+        return Some(strings.item_not_transformable);
+    }
+    if strings.locale == clayspace_model::Locale::PtBr
+        && !first.is_some_and(|raw| raw.contains("clay_"))
+    {
+        return first;
+    }
+    if from.document.is_some() {
+        Some(strings.status_document)
+    } else if let Some(operation) = from.operation {
+        Some(operation)
+    } else if from.reference.is_some() {
+        Some(strings.status_reference)
+    } else if from.mask.is_some() {
+        Some(strings.status_mask)
+    } else if from.object.is_some() {
+        Some(strings.status_object)
+    } else if from.lattice.is_some() {
+        Some(strings.status_lattice)
+    } else if from.curve.is_some() {
+        Some(strings.status_curve)
+    } else if from.armature.is_some() {
+        Some(strings.status_armature)
+    } else if from.scene.is_some() {
+        Some(strings.status_scene)
+    } else if from.sculpt.is_some() {
+        Some(strings.status_sculpt)
+    } else {
+        None
+    }
+}
+
+fn localized_vm_text(
+    strings: &clayspace_view::Strings,
+    raw: Option<&str>,
+    translated: &str,
+) -> Option<String> {
+    raw.map(|raw| {
+        if strings.locale == clayspace_model::Locale::PtBr && !raw.contains("clay_") {
+            raw.to_string()
+        } else {
+            translated.to_string()
+        }
+    })
+}
+
+fn localized_agent_refusal<'a>(
+    strings: &'a clayspace_view::Strings,
+    channel: usize,
+    raw: Option<&'a str>,
+) -> Option<&'a str> {
+    let raw = raw?;
+    if (strings.locale == clayspace_model::Locale::PtBr || channel == 0) && !raw.contains("clay_") {
+        return Some(raw);
+    }
+    Some(match channel {
+        1 => strings.status_scene,
+        2 => strings.status_object,
+        3 => strings.status_mask,
+        4 => strings.status_document,
+        5 => strings.status_lattice,
+        6 => strings.status_curve,
+        7 => strings.status_boolean,
+        8 => strings.status_armature,
+        9 => strings.status_cut,
+        10 => strings.status_reference,
+        11 => strings.status_retopo,
+        12 => strings.status_uv,
+        13 => strings.status_conform,
+        14 => strings.status_bake,
+        _ => strings.refusal_engine,
+    })
+}
+
+fn localized_agent_remark<'a>(
+    strings: &'a clayspace_view::Strings,
+    _channel: usize,
+    raw: Option<&'a str>,
+) -> Option<&'a str> {
+    let raw = raw?;
+    if raw == clayspace_vm::TOOL_SUBSTITUTED {
+        return Some(strings.notice_adjustment);
+    }
+    if strings.locale == clayspace_model::Locale::PtBr && !raw.contains("clay_") {
+        Some(raw)
+    } else {
+        Some(strings.notice_adjustment)
+    }
 }
 
 /// How many channels carry a refusal — a reason the command did not happen.
@@ -6392,12 +6553,40 @@ fn stroke_needs_a_gesture(command: &Command, open: bool) -> Option<&'static str>
 /// The code is the part an agent branches on, so an unavailable tool is not
 /// folded in with an engine failure: one is answered by choosing another tool
 /// or another layer, and the other is not answerable at all.
-fn refusal_for(refused: &ModelError) -> Refusal {
+fn refusal_for(strings: &clayspace_view::Strings, refused: &ModelError) -> Refusal {
     let code = match refused {
         ModelError::Unavailable(_) => RefusalCode::Unavailable,
         _ => RefusalCode::ModelRefused,
     };
-    Refusal::new(code, refused.to_string())
+    Refusal::new(code, strings.model_refusal(refused))
+}
+
+fn agent_history_label(strings: &clayspace_view::Strings, label: &str) -> String {
+    if strings.locale == clayspace_model::Locale::PtBr && !label.contains("clay_") {
+        label.to_string()
+    } else {
+        strings.agent_history_edit.to_string()
+    }
+}
+
+fn agent_command_label(strings: &clayspace_view::Strings, command: &Command) -> String {
+    if strings.locale == clayspace_model::Locale::PtBr {
+        command.label().to_string()
+    } else {
+        strings.agent_command.to_string()
+    }
+}
+
+fn agent_operation_label(
+    strings: &clayspace_view::Strings,
+    operation: &str,
+    fallback: &str,
+) -> String {
+    if strings.locale == clayspace_model::Locale::PtBr && !operation.contains("clay_") {
+        operation.to_string()
+    } else {
+        fallback.to_string()
+    }
 }
 
 /// What the agent-facing door can ask of the running application.
@@ -6453,8 +6642,12 @@ impl App {
                 // What the next step would take back, in each direction — not
                 // the last thing that happened, which is what this used to
                 // send and which after an undo is the undo.
-                self.sculpt.next_undo().map(str::to_string),
-                self.sculpt.next_redo().map(str::to_string),
+                self.sculpt
+                    .next_undo()
+                    .map(|label| agent_history_label(self.strings, label)),
+                self.sculpt
+                    .next_redo()
+                    .map(|label| agent_history_label(self.strings, label)),
                 self.agent.from_agent() as usize,
             ));
         }
@@ -6600,10 +6793,29 @@ impl App {
                 .filter(|render| render.gpu_timing)
                 .map(|render| render.gpu_passes.iter().map(|(_, ms)| ms).sum())
                 .unwrap_or(0.0);
-            state.timing = Some(report::timing_state(&self.stalls, frame));
+            let mut timing = report::timing_state(&self.stalls, frame);
+            for stall in &mut timing.stalls {
+                stall.operation = agent_operation_label(
+                    self.strings,
+                    &stall.operation,
+                    self.strings.diag_stall_recorded,
+                );
+            }
+            state.timing = Some(timing);
         }
         if query.backends {
-            state.backends = Some(report::backend_state(&diagnostics));
+            let mut backends = report::backend_state(&diagnostics);
+            for fallback in &mut backends.fallbacks {
+                fallback.operation = agent_operation_label(
+                    self.strings,
+                    &fallback.operation,
+                    self.strings.diag_fallback_recorded,
+                );
+                if fallback.declined_by.contains("clay_") {
+                    fallback.declined_by = self.strings.diag_fallback_recorded.to_string();
+                }
+            }
+            state.backends = Some(backends);
         }
         if query.strokes {
             // Where the last strokes spent their milliseconds, split across
@@ -6622,7 +6834,7 @@ impl Session for App {
     /// makes an agent's edit and a person's edit the same edit — one history
     /// entry, undone by the same undo, refused for the same reasons.
     fn apply(&mut self, command: Command) -> Result<Applied, Refusal> {
-        let label = command.label().to_string();
+        let label = agent_command_label(self.strings, &command);
         let touched = command.touches_document();
         let before = self.notice_occurrences();
 
@@ -6648,7 +6860,7 @@ impl Session for App {
         // it in the options bar and the door has to answer with an error — a
         // stroke reported as applied is one an agent goes on building on.
         if let Some(refused) = self.sculpt_refusal.take() {
-            return Err(refusal_for(&refused));
+            return Err(refusal_for(self.strings, &refused));
         }
 
         let (refused, notices) = self.notices_since(before);
@@ -6670,7 +6882,11 @@ impl Session for App {
             // this used to answer with.
             undoes: history
                 .can_undo
-                .then(|| self.sculpt.next_undo().map(str::to_string))
+                .then(|| {
+                    self.sculpt
+                        .next_undo()
+                        .map(|label| agent_history_label(self.strings, label))
+                })
                 .flatten(),
             notices,
         })
@@ -6828,7 +7044,7 @@ impl Session for App {
     }
 
     fn measure(&mut self, command: Command) -> Result<Measured, Refusal> {
-        let label = command.label().to_string();
+        let label = agent_command_label(self.strings, &command);
         let started = Instant::now();
         let uploaded = self.uploaded_bytes();
         Session::apply(self, command)?;
@@ -6871,7 +7087,11 @@ impl Session for App {
             id: ask.id,
             gate,
             operation: ask.operation.clone(),
-            client: ask.client.clone(),
+            client: if ask.client.is_empty() {
+                self.strings.agent_generic_client.to_string()
+            } else {
+                ask.client.clone()
+            },
             path: ask.path.as_ref().map(|path| path.display().to_string()),
         }) {
             self.request_redraw();
@@ -7317,13 +7537,69 @@ mod double_press {
 #[cfg(test)]
 mod tests {
     use super::{
-        gizmo_geometry_update, notices_written, refusal_for, remark_for_an_agent,
-        stroke_needs_a_gesture, tool_status, AgentGesture, GizmoGeometryUpdate, ToolStatusSources,
-        NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
+        agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
+        localized_agent_refusal, localized_agent_remark, localized_tool_status, notices_written,
+        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status, AgentGesture,
+        GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_mcp::RefusalCode;
     use clayspace_model::{ModelError, Representation, Unavailable};
     use clayspace_vm::Command;
+
+    #[test]
+    fn agent_labels_do_not_expose_portuguese_history_in_other_locales() {
+        let en = clayspace_view::Strings::for_locale(clayspace_model::Locale::EnUs);
+        let es = clayspace_view::Strings::for_locale(clayspace_model::Locale::Es419);
+        let pt = clayspace_view::Strings::for_locale(clayspace_model::Locale::PtBr);
+        assert_eq!(agent_command_label(en, &Command::Undo), "Command");
+        assert_eq!(agent_history_label(en, "Refazer malha"), "Previous edit");
+        assert_eq!(agent_history_label(es, "Refazer malha"), "Edición anterior");
+        assert_eq!(agent_history_label(pt, "Refazer malha"), "Refazer malha");
+        assert_eq!(
+            agent_history_label(pt, "clay_multires_rebuild"),
+            "Edição anterior"
+        );
+        assert_eq!(
+            agent_operation_label(en, "re-malha", en.diag_stall_recorded),
+            en.diag_stall_recorded
+        );
+        assert_eq!(
+            agent_operation_label(es, "clay_multires_rebuild", es.diag_stall_recorded),
+            es.diag_stall_recorded
+        );
+    }
+
+    #[test]
+    fn new_stderr_messages_use_the_string_table() {
+        let source = include_str!("main.rs");
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let allowed = [
+            "the engine's backends could not be discovered: {e}",
+            "the starting document could not be built: {e}",
+            "could not start rendering: {e}",
+            "the surface could not be re-meshed: {e}",
+            "the surface could not be meshed: {e}",
+            "the graphics device was lost; rebuilding rendering",
+            "{}",
+            "{}: {e}",
+            "{}: {refusal}",
+            "{e}",
+            "{line}",
+            "  {} [{:?}] {:.0} ms = {} {:.0} + {} {:.0} + {} {:.0} + {} {:.0}; {} {}",
+            "{}: {description} {:.0} ms",
+        ];
+        for call in production.split("eprintln!(").skip(1) {
+            let format = call
+                .trim_start()
+                .strip_prefix('"')
+                .and_then(|body| body.split('"').next())
+                .expect("stderr format literal");
+            assert!(
+                allowed.contains(&format),
+                "new stderr wording belongs in Strings: {format}"
+            );
+        }
+    }
 
     fn begin() -> Command {
         Command::BeginStroke {
@@ -7442,18 +7718,20 @@ mod tests {
     fn a_tool_with_no_verb_here_is_refused_as_unavailable() {
         // Raspar rather than Pinçar, which used to stand here: #201 gave Pinçar
         // a field verb — `clay_layer_magnify_surface` at a negative strength —
-        // so it is no longer a tool a field has none of. Raspar is: its verbs
-        // are the grid's, the mesh's and the hierarchy's, and it names them in
-        // the refusal, which is what makes it an answerable one.
-        let refusal = refusal_for(&ModelError::Unavailable(Unavailable::NoVerbHere {
-            active: Representation::Sdf,
-            verbs: clayspace_model::ToolKind::Raspar.verbs(),
-            note: None,
-        }));
+        // so it is no longer a tool a field has none of. Raspar is.
+        let strings = clayspace_view::Strings::for_locale(clayspace_model::Locale::EnUs);
+        let refusal = refusal_for(
+            strings,
+            &ModelError::Unavailable(Unavailable::NoVerbHere {
+                active: Representation::Sdf,
+                verbs: clayspace_model::ToolKind::Raspar.verbs(),
+                note: None,
+            }),
+        );
         assert_eq!(refusal.code, RefusalCode::Unavailable);
-        assert!(!refusal.message.is_empty(), "{refusal:?}");
+        assert_eq!(refusal.message, strings.refusal_tool_unavailable);
         assert_eq!(
-            refusal_for(&ModelError::engine("the engine said no")).code,
+            refusal_for(strings, &ModelError::engine("clay_multires_add_level")).code,
             RefusalCode::ModelRefused
         );
     }
@@ -7521,6 +7799,62 @@ mod tests {
                 ..quiet()
             }),
             Some("that resolution will not fit")
+        );
+    }
+
+    #[test]
+    fn portuguese_vm_refusals_are_localized_on_english_and_spanish_screens() {
+        let from = ToolStatusSources {
+            scene: Some("a malha não pôde ser refeita: clay_multires_rebuild"),
+            ..quiet()
+        };
+        let en = localized_tool_status(
+            clayspace_view::Strings::for_locale(clayspace_model::Locale::EnUs),
+            from,
+        )
+        .expect("English notice");
+        assert_eq!(en, "the layer action was refused");
+        let es = localized_tool_status(
+            clayspace_view::Strings::for_locale(clayspace_model::Locale::Es419),
+            from,
+        )
+        .expect("Spanish notice");
+        assert_eq!(es, "se rechazó la acción de la capa");
+        assert!(!en.contains("clay_multires"));
+        assert_eq!(
+            localized_tool_status(
+                clayspace_view::Strings::for_locale(clayspace_model::Locale::EnUs),
+                ToolStatusSources {
+                    object: Some(clayspace_vm::ITEM_NOT_TRANSFORMABLE),
+                    ..quiet()
+                }
+            ),
+            Some(
+                clayspace_view::Strings::for_locale(clayspace_model::Locale::EnUs)
+                    .item_not_transformable
+            )
+        );
+    }
+
+    #[test]
+    fn an_agent_gets_the_localized_refusal_for_its_session() {
+        let en = clayspace_view::Strings::for_locale(clayspace_model::Locale::EnUs);
+        assert_eq!(
+            localized_agent_refusal(en, 6, Some("a curva não pôde ser removida")),
+            Some("the curve action was refused")
+        );
+        assert_eq!(
+            localized_agent_refusal(en, 0, Some("conversion was refused")),
+            Some("conversion was refused")
+        );
+        assert_eq!(
+            localized_agent_remark(en, 1, Some("a máscara não congelou nada")),
+            Some("the setting was adjusted for this document")
+        );
+        let pt = clayspace_view::Strings::for_locale(clayspace_model::Locale::PtBr);
+        assert_eq!(
+            localized_agent_refusal(pt, 1, Some("clay_multires_add_level failed")),
+            Some(pt.status_scene)
         );
     }
 
