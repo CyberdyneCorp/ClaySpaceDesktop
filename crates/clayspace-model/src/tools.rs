@@ -1060,8 +1060,11 @@ impl ToolKind {
     /// blocky patch. Measured, a stroke applied in eight segments left the
     /// surface roughly twice as rough as the same stroke applied once.
     ///
-    /// The cost is that these four do not preview while the pointer moves.
-    /// They land when it comes up.
+    /// The cost is that these four cannot be sent segment by segment. On a
+    /// field the two it offers are previewed instead — Suavizar through the
+    /// engine's smoothing transaction, Planar by laying the gesture-so-far
+    /// down, reading it and taking it back — and a layer that can preview
+    /// neither lands them when the pointer comes up.
     pub fn is_region_based(self) -> bool {
         matches!(
             self,
@@ -1245,10 +1248,22 @@ pub enum ToolNote {
     /// the old ones. Stated, because a missing Layer on a shelf that carries
     /// every other mesh brush reads as an oversight.
     DynamicHasNoLayer,
+    /// A field has one flatten, and it is Planar's.
+    ///
+    /// A note on an absence. The mesh's Polish is a flatten that smooths the
+    /// high points it leaves, and the field's bake has no second pass to do
+    /// that with: the row that used to be here was Planar's call with a
+    /// qualifier nothing sent, and the two measured identical (#179, #203).
+    SdfPolishIsPlanar,
+    /// A field has no vertices to relax, so its Relax was its Smooth.
+    ///
+    /// A note on an absence, for the same reason: the row named Suavizar's
+    /// relax under a second word, and the two gave identical results.
+    SdfRelaxIsSmooth,
 }
 
 impl ToolNote {
-    pub const ALL: [ToolNote; 9] = [
+    pub const ALL: [ToolNote; 11] = [
         Self::VoxelPlanarIsTwoSided,
         Self::MultiresSmoothChoosesAFrequency,
         Self::MultiresStoresNoColour,
@@ -1258,6 +1273,8 @@ impl ToolNote {
         Self::VoxelSmearHasNoColourVerb,
         Self::VoxelClayHasNoBuildup,
         Self::DynamicHasNoLayer,
+        Self::SdfPolishIsPlanar,
+        Self::SdfRelaxIsSmooth,
     ];
 }
 
@@ -1562,9 +1579,11 @@ impl ToolKind {
             // what `ToolNote::SdfStandardIsAnInflate` tells a sculptor and
             // what the two fidelities now say in the table itself: this row is
             // `Native` and Padrão's is an `Approximation` of a Standard the
-            // engine can spell and does not ship. The mark the two leave still
-            // differs only in the footprint, which is the last thing left for
-            // one call under two labels to differ in.
+            // engine can spell and does not ship. The mark the two leave
+            // differs in its profile — wider and lower than Padrão's under
+            // either Acumular setting — which is the last thing left for one
+            // call under two labels to differ in, and what
+            // `inflate_is_broader_and_lower_than_standard` measures.
             Self::Inflar => Verbs {
                 sdf: field_op(
                     "clay_layer_apply_stroke (CLAY_OP_RELIEF)",
@@ -1669,13 +1688,15 @@ impl ToolKind {
             // `no_two_tools_on_one_representation_share_an_entry_point_without_differing_parameters`
             // rather than passing unremarked as it did before.
             //
-            // The field's column is `Native`: the clamp is what this tool
-            // claims and the engine has it. Where the deposit *lands* is the
-            // question Padrão's caveat answers, and it is asked of the tool
-            // whose whole claim is the shape of the mark.
+            // The field's column is `Native`: a layer of bounded height, which
+            // is the clamp *and* a stamp half as deep as Padrão's. The clamp
+            // alone was not a tool — with Acumular off Padrão clamps too, and
+            // the two were one call to the byte (#179, #203). Where the deposit
+            // *lands* is the question Padrão's caveat answers, and it is asked
+            // of the tool whose whole claim is the shape of the mark.
             Self::Camada => Verbs {
                 sdf: field_op(
-                    "clay_layer_apply_stroke (clamped accumulation)",
+                    "clay_layer_apply_stroke (CLAY_OP_RELIEF, clamped, half lift)",
                     SemanticIntent::SurfaceDisplace,
                     Fidelity::Native,
                 ),
@@ -1827,12 +1848,16 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
             },
+            // No field column, and that is a decision rather than a gap (#203).
+            // The field's only flatten is `clay_item_volume_flatten_from`, and
+            // the row used to name it with `hPolish` beside it — a qualifier
+            // nothing sent. Planar and Polir were the same bake with the same
+            // parameters, and a sculptor measured them identical. The mesh's
+            // POLISH is a flatten that also smooths the high points it leaves;
+            // a field has no second pass to do that with, so it is Planar's
+            // and `ToolNote::SdfPolishIsPlanar` says so.
             Self::Polir => Verbs {
-                sdf: baked_field(
-                    "clay_item_volume_flatten_from (cut-only, hPolish)",
-                    SemanticIntent::SurfaceFlatten,
-                    Fidelity::Native,
-                ),
+                sdf: None,
                 voxel: None,
                 mesh: mesh_verb(
                     "clay_mesh_sculptor_apply_stroke (POLISH)",
@@ -1850,12 +1875,13 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
             },
+            // No field column either (#203). A mesh's RELAX evens out where the
+            // vertices sit and leaves the form alone; a field has no vertices
+            // to redistribute, so the only thing the row could name is
+            // Suavizar's relax — which it did, under a second word. See
+            // `ToolNote::SdfRelaxIsSmooth`.
             Self::Relaxar => Verbs {
-                sdf: baked_field(
-                    "clay_item_volume_relax_from",
-                    SemanticIntent::SurfaceSmooth,
-                    Fidelity::Native,
-                ),
+                sdf: None,
                 voxel: None,
                 mesh: mesh_verb(
                     "clay_mesh_sculptor_apply_stroke (RELAX)",
@@ -2341,6 +2367,8 @@ impl ToolKind {
             (Self::Borrar, Representation::Voxel) => Some(ToolNote::VoxelSmearHasNoColourVerb),
             (Self::Argila, Representation::Voxel) => Some(ToolNote::VoxelClayHasNoBuildup),
             (Self::Camada, Representation::Dynamic) => Some(ToolNote::DynamicHasNoLayer),
+            (Self::Polir, Representation::Sdf) => Some(ToolNote::SdfPolishIsPlanar),
+            (Self::Relaxar, Representation::Sdf) => Some(ToolNote::SdfRelaxIsSmooth),
             _ => None,
         }
     }
@@ -3147,6 +3175,10 @@ mod tests {
             (ToolKind::Puxar, Voxel, ToolKind::Mover),
             (ToolKind::Relaxar, Voxel, ToolKind::Suavizar),
             (ToolKind::Polir, Voxel, ToolKind::Raspar),
+            // A field's single flatten and single smooth, which is what the
+            // two notes on those absences send a sculptor to.
+            (ToolKind::Polir, Sdf, ToolKind::Planar),
+            (ToolKind::Relaxar, Sdf, ToolKind::Suavizar),
             (ToolKind::Nudge, Sdf, ToolKind::Mover),
             (ToolKind::Borrar, Voxel, ToolKind::Pintar),
             // Both remove material, but one is a frame gesture and the other a
@@ -3283,20 +3315,17 @@ mod tests {
             }
         }
         assert_eq!(
-            excused, 2,
+            excused, 1,
             "the number of shelf entries that are one verb under two words \
-             has moved; the list below says which two they are"
+             has moved; the list below says which one it is"
         );
     }
 
     /// The pairs that really are one binding, and why each one still stands.
     ///
-    /// Both are #203: a shelf entry whose only distinguishing feature is its
-    /// label. They are recorded rather than corrected because correcting one
-    /// is taking a tool off a shelf, which is a change a sculptor feels and
-    /// which this change — a refactor of how the table is *written* — is not
-    /// the place for. What is different now is that they are two named rows
-    /// instead of an unremarkable coincidence.
+    /// One left. The field's Suavizar/Relaxar pair was the other, and #203
+    /// took Relaxar off the field's shelf with a note rather than keep a
+    /// second word for one verb.
     fn shared_on_purpose(
         a: ToolKind,
         b: ToolKind,
@@ -3308,12 +3337,6 @@ mod tests {
             // every other representation and only here collapses.
             (ToolKind::Padrao, ToolKind::Camada, Representation::Voxel) => {
                 Some("a grid cannot hold a clamped accumulation; both deposit")
-            }
-            // Both are the field's relax over a re-sampled volume. On a mesh
-            // and on a hierarchy they are the engine's SMOOTH and RELAX, which
-            // are two brushes; the field has one verb for the pair.
-            (ToolKind::Suavizar, ToolKind::Relaxar, Representation::Sdf) => {
-                Some("the field has one relax where the mesh sculptor has two")
             }
             _ => None,
         }
@@ -3711,7 +3734,7 @@ mod tests {
         // And the field, which `docs/features.md` states as a count too.
         let sdf = ToolKind::for_representation(Representation::Sdf).len();
         assert_eq!(
-            sdf, 15,
+            sdf, 13,
             "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
              Update this count and `docs/features.md` together."
         );
@@ -4148,8 +4171,8 @@ mod tests {
         }
     }
 
-    /// Only the deliberate colour, buildup and adaptive-Layer absences carry a
-    /// note.
+    /// Only the deliberate colour, buildup, field-duplicate and
+    /// adaptive-Layer absences carry a note.
     #[test]
     fn an_ordinary_absence_is_refused_without_a_second_sentence() {
         for tool in ToolKind::ALL {
@@ -4166,6 +4189,7 @@ mod tests {
                         Representation::Multires
                     ) | (ToolKind::Borrar | ToolKind::Argila, Representation::Voxel)
                         | (ToolKind::Camada, Representation::Dynamic)
+                        | (ToolKind::Polir | ToolKind::Relaxar, Representation::Sdf)
                 );
                 assert_eq!(
                     note.is_some(),

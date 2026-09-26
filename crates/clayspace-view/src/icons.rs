@@ -615,7 +615,12 @@ fn boolean(
 }
 
 /// Allocates space and draws an icon, returning the response.
-pub fn button(ui: &mut egui::Ui, icon: Icon, active: bool) -> egui::Response {
+pub fn button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    active: bool,
+    strings: &crate::strings::Strings,
+) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(size::ICON, size::ICON), egui::Sense::click());
     // Quiet at rest, brighter on hover: the same rule the rest of the
@@ -626,7 +631,7 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, active: bool) -> egui::Response {
         Tokens::text_dim()
     };
     paint(ui.painter(), rect, icon, tint);
-    response.on_hover_text(icon.description())
+    response.on_hover_text(strings.icon_description(icon))
 }
 
 #[cfg(test)]

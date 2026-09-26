@@ -1375,6 +1375,9 @@ pub struct ClayDocument {
     /// See [`ClayDocument::close_live_gesture`] for why the transaction's own
     /// commit is not used.
     live_gesture: Option<LiveDabs>,
+    /// The Planar gesture in progress, when it is being previewed. See
+    /// [`LiveFlatten`].
+    live_flatten: Option<LiveFlatten>,
     /// Bumped whenever the surface the viewport should mesh from changes
     /// identity — a live gesture opening, committing or being abandoned.
     ///
@@ -1725,6 +1728,7 @@ impl ClayDocument {
             gesture_id: 0,
             live_opening_entries: 0,
             live_gesture: None,
+            live_flatten: None,
             surface_epoch: 0,
             meshed_chunks: 0,
             smoothed_grids: 0,
@@ -2402,7 +2406,14 @@ impl ClayDocument {
         // grid — so a stroke aimed at the second wrote into the first, the
         // chunks were meshed from the wrong grid, and `rename_layer` refused to
         // untangle it because the name it would set was already taken.
-        let name = self.unique_layer_name(&format!("{} · {}", source.name, direction.to().label()));
+        let suffix = match direction.to() {
+            Representation::Sdf => "Campo",
+            Representation::Voxel => "voxel",
+            Representation::Mesh => "Malha",
+            Representation::Multires => "Hierarquia",
+            Representation::Dynamic => "Dinâmica",
+        };
+        let name = self.unique_layer_name(&format!("{} · {suffix}", source.name));
         // Where the source stands, so the result can take its place, and its
         // key, so it can be removed once the result is filled from it.
         let (replacing, at) = (source.key, self.active);
@@ -3855,7 +3866,7 @@ impl ClayDocument {
         self.point_the_mirror(symmetry)?;
         // Unreflected, because the commit reflects it again; one dab per
         // segment, where `live_relax_dab` puts it.
-        if self.live_smooth.is_some() && matches!(tool, ToolKind::Suavizar | ToolKind::Relaxar) {
+        if self.live_smooth.is_some() && tool == ToolKind::Suavizar {
             if let Some(last) = samples.last() {
                 let gesture = self.live_gesture.get_or_insert_with(|| LiveDabs {
                     symmetry,
@@ -3871,6 +3882,11 @@ impl ClayDocument {
         // reflected by hand because the layer mirror cannot reach them.
         if tool == ToolKind::Mover && (self.live_move.is_some() || self.live_move_armed) {
             return self.live_move_drag(brush, samples);
+        }
+        // Reflected inside, because the preview is the whole gesture laid down
+        // under every mirror and taken back as one.
+        if tool == ToolKind::Planar && self.live_flatten.is_some() {
+            return self.live_flatten_segment(brush, samples);
         }
         let mut outcome = EditOutcome::NOTHING;
         for mirror in mirrors(symmetry) {
@@ -3889,10 +3905,10 @@ impl ClayDocument {
                 // material instead of through space.
                 ToolKind::MoverTopologico => self.topological_move_stroke(brush, &reflected)?,
                 // Bake-and-relax over the region the stroke covered.
-                ToolKind::Suavizar | ToolKind::Relaxar if self.live_smooth.is_some() => {
+                ToolKind::Suavizar if self.live_smooth.is_some() => {
                     self.live_relax_dab(brush, &reflected)?
                 }
-                ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, &reflected)?,
+                ToolKind::Suavizar => self.relax_stroke(brush, &reflected)?,
                 // Bake-and-flatten, cut-only.
                 _ => self.flatten_stroke(brush, &reflected)?,
             };
@@ -3917,12 +3933,9 @@ impl ClayDocument {
             // The verbs that rewrite the field rather than adding an item.
             // The layer mirror cannot reach those, so their strokes are
             // reflected instead — see `baked_stroke`.
-            ToolKind::Mover
-            | ToolKind::MoverTopologico
-            | ToolKind::Suavizar
-            | ToolKind::Relaxar
-            | ToolKind::Planar
-            | ToolKind::Polir => self.baked_stroke(tool, brush, samples, symmetry),
+            ToolKind::Mover | ToolKind::MoverTopologico | ToolKind::Suavizar | ToolKind::Planar => {
+                self.baked_stroke(tool, brush, samples, symmetry)
+            }
             // One radial scale per dab, gathering toward the dab's centre.
             //
             // Not reflected here, unlike the baked verbs above. The engine
@@ -4183,8 +4196,25 @@ impl ClayDocument {
     /// The middle row is why this is not 0.8: a wider region under buildup
     /// accumulation lifts each point through more stamps, so the mark came
     /// out wider *and* taller — the same ridge drawn with a bigger brush,
-    /// which is not what Inflate means. At 0.32 the footprint is half again
-    /// as wide as Padrão's at a fifth less slope: a swell rather than a ridge.
+    /// which is not what Inflate means.
+    ///
+    /// 0.32 was not low enough either, and a sculptor caught it rather than a
+    /// test (#179): at the *default* brush — 0.18, intensity 0.65, Acumular
+    /// on — a stroke's stamps overlap far more than the single dab above was
+    /// measured on, and the wider region collected more of them. Across a
+    /// stroke of the default brush over the starting form, as the height
+    /// under the stroke and the distance aside at which it falls to nothing:
+    ///
+    ///   binding                  Acumular   peak     reach
+    ///   Padrão                      on     +0.073    0.10
+    ///   Inflar at 0.32              on     +0.076    0.14
+    ///   Inflar at 0.2               on     +0.059    0.14
+    ///   Padrão                      off    +0.043    0.10
+    ///   Inflar at 0.2               off    +0.014    0.14
+    ///
+    /// At 0.2 the swell is lower than Padrão's ridge and wider than it with
+    /// Acumular in either position, which is the identity the tool claims and
+    /// what `inflate_is_broader_and_lower_than_standard` holds it to.
     ///
     /// The *frame* is not what separates these two, and the profile is all
     /// there is left: relief moves each point of the surface along its own
@@ -4193,7 +4223,27 @@ impl ClayDocument {
     /// three smooth fixtures (#615, #618). It is Padrão that is approximated
     /// by it, and `ToolNote::SdfStandardIsAnInflate` is where a sculptor is
     /// told so.
-    const INFLATE_LIFT: f32 = 0.32;
+    const INFLATE_LIFT: f32 = 0.2;
+
+    /// How much of the standard lift Camada asks for.
+    ///
+    /// Camada is a layer of bounded height: its accumulation is always
+    /// clamped, so overlapping stamps never stack past one stamp's depth, and
+    /// that depth is half of Padrão's. The clamp alone did not make it a tool
+    /// (#179, #203): with Acumular off Padrão clamps as well, and the two were
+    /// the same call to the byte. Measured across a stroke of the default
+    /// brush over the starting form:
+    ///
+    ///   binding             Acumular   peak
+    ///   Padrão                 on     +0.073
+    ///   Padrão                 off    +0.043
+    ///   Camada at 1.0          either +0.043
+    ///   Camada at 0.5          either +0.024
+    ///
+    /// Half, so the layer reads as a shallow course of material laid over the
+    /// form rather than as a ridge, and stays below Padrão whatever Acumular
+    /// says — `layer_is_a_bounded_course_below_standard` holds it there.
+    const LAYER_LIFT: f32 = 0.6;
 
     /// How much wider than the brush Pinçar's region is.
     ///
@@ -5087,10 +5137,13 @@ impl ClayDocument {
         if tool == ToolKind::Mover {
             return self.arm_live_move(symmetry);
         }
-        // Two of the four region tools, because the transaction is a *relax*:
-        // Planar and Polir flatten, which is a different verb with no live
-        // form in this release, and they stay held.
-        if !matches!(tool, ToolKind::Suavizar | ToolKind::Relaxar) {
+        // Planar has no transaction of its own — the engine's is a relax —
+        // so it is previewed the way a drag is: laid down, read, taken back.
+        if tool == ToolKind::Planar {
+            return self.open_live_flatten(symmetry);
+        }
+        // The field's one smooth, whose transaction is a relax.
+        if tool != ToolKind::Suavizar {
             return false;
         }
         if self.live_smooth.is_some() || !self.live_smooth_is_possible() {
@@ -5133,6 +5186,9 @@ impl ClayDocument {
     pub fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
         if self.live_move.is_some() || self.live_move_armed {
             return self.close_live_move();
+        }
+        if self.live_flatten.is_some() {
+            return self.close_live_flatten();
         }
         let Some(live) = self.live_smooth.take() else {
             // Nothing is open. Anything still owed is an abandoned gesture's
@@ -5200,6 +5256,9 @@ impl ClayDocument {
         if self.live_move.is_some() || self.live_move_armed {
             return self.discard_live_move();
         }
+        if self.live_flatten.is_some() {
+            return self.discard_live_flatten();
+        }
         if self.live_smooth.take().is_none() {
             return 0;
         }
@@ -5244,8 +5303,152 @@ impl ClayDocument {
         opening
     }
 
+    /// Opens a previewed Planar gesture. See [`LiveFlatten`].
+    ///
+    /// Refused where a Move could not be previewed either — a layer that is
+    /// not a field, or one that is protected — and the gesture is then held
+    /// whole as it always was.
+    fn open_live_flatten(&mut self, symmetry: [bool; 3]) -> bool {
+        if !self.live_move_is_possible() {
+            return false;
+        }
+        // A press arriving on an open gesture is an orphan: its pointer-up
+        // never came. Its previews are already off the document, so dropping
+        // it costs only putting the surface it showed back on screen.
+        let orphaned = if self.live_flatten.is_some() {
+            self.discard_live_flatten()
+        } else {
+            0
+        };
+        // Before anything is laid down, for the reason the smoothing gesture
+        // gives: pointing the mirror is an edit this gesture caused, and one a
+        // preview's take-back must not spend.
+        let before = self.engine_undo_depth();
+        if self.point_the_mirror(symmetry).is_err() {
+            self.live_opening_entries = orphaned;
+            return false;
+        }
+        self.live_opening_entries = orphaned + self.engine_undo_depth().saturating_sub(before);
+        self.live_flatten = Some(LiveFlatten::new(symmetry));
+        true
+    }
+
+    /// One segment of a previewed Planar: the gesture so far, laid down, read
+    /// into the brick cache and taken back off the document.
+    ///
+    /// The segment leaves the engine's undo depth where it found it, which is
+    /// what the ViewModel counts a live segment's history by — see
+    /// [`crate::live::LiveMove::settle`] for what counting it otherwise costs.
+    fn live_flatten_segment(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let Some(live) = self.live_flatten.as_mut() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        live.samples.extend_from_slice(samples);
+        live.brush = Some(brush);
+        let (gesture, symmetry) = (live.samples.clone(), live.symmetry);
+        let before = self.engine_undo_depth();
+        let drawn = self.flatten_gesture(brush, &gesture, symmetry);
+        // Taken back even when the drawing failed part-way, so a bad segment
+        // cannot leave a preview in the document for the release to stack on.
+        let laid = self.engine_undo_depth().saturating_sub(before);
+        let mut taken_back = Ok(());
+        for _ in 0..laid {
+            match self.document.undo_bound() {
+                Ok(step) => {
+                    if let Some(live) = self.live_flatten.as_mut() {
+                        live.reached(step.reached);
+                    }
+                }
+                Err(error) => {
+                    taken_back = Err(ModelError::engine(error));
+                    break;
+                }
+            }
+        }
+        let outcome = drawn?;
+        taken_back?;
+        Ok(outcome)
+    }
+
+    /// Planar under every mirror the gesture was made under.
+    ///
+    /// What a held gesture does in `baked_stroke`, and what the preview and
+    /// the release both call, so the two cannot come to lay different clay.
+    fn flatten_gesture(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        let mut outcome = EditOutcome::NOTHING;
+        for mirror in mirrors(symmetry) {
+            let reflected: Vec<GestureSample> = samples
+                .iter()
+                .map(|sample| GestureSample {
+                    position: mirror.point(sample.position),
+                    ..*sample
+                })
+                .collect();
+            let one = self.flatten_stroke(brush, &reflected)?;
+            outcome = EditOutcome {
+                changed: outcome.changed || one.changed,
+                dirty_bricks: outcome.dirty_bricks + one.dirty_bricks,
+            };
+        }
+        Ok(outcome)
+    }
+
+    /// Lays the previewed Planar down for good, and reports what it recorded.
+    ///
+    /// The whole gesture once, as a held one is — the brush is the one the
+    /// last segment carried, which is the one the last preview was drawn with.
+    fn close_live_flatten(&mut self) -> Result<usize, ModelError> {
+        let opening = std::mem::take(&mut self.live_opening_entries);
+        let Some(live) = self.live_flatten.take() else {
+            return Ok(opening);
+        };
+        let Some(brush) = live.brush else {
+            // No segment arrived: nothing was previewed and nothing is owed
+            // but the mirror the press pointed.
+            return Ok(opening);
+        };
+        let before = self.engine_undo_depth();
+        self.flatten_gesture(brush, &live.samples, live.symmetry)?;
+        let recorded = self.engine_undo_depth().saturating_sub(before);
+        // The release covers what the last preview did, since both are the
+        // same gesture; an earlier preview a *wider* plane made is the one
+        // this could miss, and re-reading it costs one pass over bricks the
+        // release has mostly just filled.
+        self.refill_previewed(live.previewed)?;
+        self.refresh_stats();
+        Ok(opening + recorded)
+    }
+
+    /// Abandons a previewed Planar. Every preview is already off the document,
+    /// so what is left is taking it off the screen.
+    fn discard_live_flatten(&mut self) -> usize {
+        let opening = std::mem::take(&mut self.live_opening_entries);
+        if let Some(live) = self.live_flatten.take() {
+            // Best-effort, as the drag's is: this is the path an error took.
+            let _ = self.refill_previewed(live.previewed);
+        }
+        opening
+    }
+
+    /// Re-reads the surface where a Planar preview was drawn.
+    fn refill_previewed(&mut self, previewed: Option<Influence>) -> Result<(), ModelError> {
+        match previewed {
+            Some(reached) => self.refill_what_a_step_reached(reached),
+            None => Ok(()),
+        }
+    }
+
     pub fn live_gesture_is_open(&self) -> bool {
-        self.live_smooth.is_some() || self.live_move.is_some()
+        self.live_smooth.is_some() || self.live_move.is_some() || self.live_flatten.is_some()
     }
 
     /// Whether a gesture is open and being previewed rather than banked.
@@ -5429,53 +5632,44 @@ impl ClayDocument {
         Ok(painted)
     }
 
-    /// Pulls the region the stroke covered onto a plane — Planar and Polir.
-    ///
-    /// Both were reaching for `clay_item_volume_flatten`, as
-    /// [`ToolKind::engine_verb`] says. It was not bound, and they fell through
-    /// a `_ => Op::Add` arm that added a sphere instead: a planing tool that
-    /// deposited a blob. The catch-all is gone with them.
+    /// Pulls the ground a stroke swept onto one plane — Planar.
     ///
     /// Cut-only, because a planing tool must remove what stands proud without
     /// filling the hollows it is meant to reveal — two-sided flatten is a
     /// different verb with a different name.
+    ///
+    /// **Held, the invert key sinks the plane rather than turning the verb
+    /// over.** It used to ask for the other half of the flatten — fill the
+    /// hollows below the plane — and on anything convex that is a slab: the
+    /// surface falls away from the plane everywhere past the stroke, so the
+    /// fill rose to meet it until the edge of the sampled box stopped it, in a
+    /// wall as tall as the slab (#179). A sculptor inverting a planing tool
+    /// wants it to cut deeper, and that is what it does now: the plane is set
+    /// into the form by [`Self::PLANAR_SINK`] of the brush and cut to, so a
+    /// facet is carved in rather than skimmed.
+    ///
+    /// **Dabbed along the stroke, with one plane for all of them.** One
+    /// region about the middle of the gesture had to be as wide as the
+    /// gesture was *long* to reach its ends, so across a stroke it reached far
+    /// past where the brush had been — and past the sampled box, which is
+    /// where the ledge came from: the verb's effect ended at a face of the box
+    /// rather than tapering to nothing inside it. A dab the brush's radius
+    /// across, every brush radius along the path, keeps the whole effect
+    /// inside the box by construction. The plane is still the gesture's, so a
+    /// stroke still makes one facet and not a staircase.
     fn flatten_stroke(
         &mut self,
         brush: BrushSettings,
         samples: &[GestureSample],
     ) -> Result<EditOutcome, ModelError> {
         let brush = brush.sanitized();
+        let Some(plan) = FlattenPlan::of(brush, samples) else {
+            return Ok(EditOutcome::NOTHING);
+        };
         let layer = self.active_layer().id;
 
-        let mut min = [f32::INFINITY; 3];
-        let mut max = [f32::NEG_INFINITY; 3];
-        for sample in samples {
-            for axis in 0..3 {
-                min[axis] = min[axis].min(sample.position[axis] - brush.size);
-                max[axis] = max[axis].max(sample.position[axis] + brush.size);
-            }
-        }
-        let centre = [
-            (min[0] + max[0]) * 0.5,
-            (min[1] + max[1]) * 0.5,
-            (min[2] + max[2]) * 0.5,
-        ];
-
-        // The plane the stroke defines: through the middle of what it covered,
-        // facing the way the surface does there. Without a surface normal to
-        // read, the outward direction from the centre of the region is the
-        // best available answer and is right for a convex form.
-        let normal = {
-            let length =
-                (centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]).sqrt();
-            if length < 1e-5 {
-                [0.0, 1.0, 0.0]
-            } else {
-                [centre[0] / length, centre[1] / length, centre[2] / length]
-            }
-        };
-
-        // Sampled and flattened in one step, straight from the document.
+        // Sampled and flattened in one step, straight from the document, for
+        // the first dab; the rest flatten those samples in place.
         //
         // Baking with `volume_from_region` and then flattening the result was
         // the first version, because `clay_item_volume_flatten_from` did not
@@ -5483,52 +5677,48 @@ impl ClayDocument {
         // note on the difference: a volume reports a distance only inside the
         // band it carries and a lower bound outside it, so a facet moving
         // further than the band is placed against the bound and "a wrong shape
-        // [is] returned with CLAY_OK". A document has no band.
+        // [is] returned with CLAY_OK". A document has no band — and the later
+        // dabs move the surface only toward a plane the first already pulled
+        // it to, which is well inside one.
         //
-        // One pass covering everything the gesture touched, for the same
-        // reason relax does. The plane stays put: a planing tool cuts to one
-        // plane, and that is what makes a facet.
-        let reach = (0..3)
-            .map(|axis| (max[axis] - min[axis]) * 0.5)
-            .fold(0.0f32, f32::max);
         // As for relax: the box grows so the crossfade lands outside what the
-        // verb touched, and the verb's own region_radius is unchanged.
+        // verb touched, and each dab's own region_radius is unchanged.
         let cell = Self::bake_cell_size(brush.size);
-        let (mut min, mut max) = (min, max);
+        let (mut min, mut max) = (plan.min, plan.max);
         Self::grown_for_feather(&mut min, &mut max, cell);
         // As in `relax_stroke`: two shared borrows of the document, so the
         // layer's own mask can be read while the layer is sampled.
         let mask = self.active_mask();
+        let params = |centre: [f32; 3]| claycore::FlattenParams {
+            plane_point: plan.plane_point,
+            plane_normal: plan.normal,
+            strength: plan.strength,
+            centre,
+            // Required positive: with no region the engine replaces the shape
+            // with a half-space, and a ball comes back a box.
+            region_radius: brush.size,
+            falloff: plan.falloff,
+            mode: claycore::FlattenMode::CutOnly,
+            mask: mask.as_deref(),
+        };
+        let (first, rest) = plan.dabs.split_first().expect("a plan always has a dab");
         let mut volume = self
             .document
             .flatten_region(
-                &claycore::FlattenParams {
-                    plane_point: centre,
-                    plane_normal: normal,
-                    strength: brush.intensity,
-                    centre,
-                    // Required positive: with no region the engine replaces
-                    // the shape with a half-space, and a ball comes back a box.
-                    region_radius: reach + brush.size,
-                    falloff: brush.size * 0.5,
-                    // Cut-only is what a planing tool wants: it must not fill
-                    // the dents it is meant to reveal. Held, the invert key
-                    // asks for the other half of that — fill the hollows and
-                    // leave the high ground — which is the one thing "negative
-                    // planing" can mean and the one the engine already has a
-                    // mode for.
-                    mode: if brush.invert {
-                        claycore::FlattenMode::FillOnly
-                    } else {
-                        claycore::FlattenMode::CutOnly
-                    },
-                    mask: mask.as_deref(),
+                &params(*first),
+                claycore::VolumeParams {
+                    band: Some(plan.band),
+                    ..Self::bake_volume(cell)
                 },
-                Self::bake_volume(cell),
                 min,
                 max,
             )
             .map_err(ModelError::engine)?;
+        for centre in rest {
+            volume
+                .flatten(&params(*centre))
+                .map_err(ModelError::engine)?;
+        }
 
         volume.set_op(Op::Replace).map_err(ModelError::engine)?;
         let node = self
@@ -5541,6 +5731,15 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// How far below the stroke an inverted Planar sets its plane, as a
+    /// fraction of the brush.
+    ///
+    /// Deep enough that inverting reads as carving rather than as the same
+    /// skim, shallow enough that the cut still tapers out inside the dab —
+    /// the falloff is the whole radius when inverted, so at half the radius
+    /// the wall of the cut is never steeper than one in one.
+    const PLANAR_SINK: f32 = 0.5;
 
     /// Move Topológico: a drag whose reach is measured along the material.
     ///
@@ -10143,6 +10342,164 @@ fn live_relax_params<'a>(
     }
 }
 
+/// A Planar live gesture: the stroke so far, and where its previews reached.
+///
+/// Planar is a bake over the ground the whole gesture swept, and segmenting a
+/// bake stacks one replacement per segment until the result crumbles — which
+/// is why it was held and shown nothing until the pointer came up (#179). This
+/// is how it is shown instead: each segment lays the gesture-so-far down, lets
+/// the brick cache read it, and takes it straight back off the document, the
+/// way [`crate::live::LiveMove`] previews a drag. The release lays the whole
+/// gesture down once, exactly as a held one would, so what lands is what the
+/// last preview showed.
+struct LiveFlatten {
+    symmetry: [bool; 3],
+    /// Every sample the gesture has sent, in the layer's own frame.
+    samples: Vec<GestureSample>,
+    /// The brush the last segment carried, which the release lays down with.
+    /// `None` until a segment arrives.
+    brush: Option<BrushSettings>,
+    /// Where the previews reached, in the world, so an abandoned gesture can
+    /// put the surface back. `None` until a preview is drawn.
+    previewed: Option<Influence>,
+}
+
+impl LiveFlatten {
+    fn new(symmetry: [bool; 3]) -> Self {
+        Self {
+            symmetry,
+            samples: Vec::new(),
+            brush: None,
+            previewed: None,
+        }
+    }
+
+    /// Folds one taken-back preview's reach into what the gesture has touched.
+    fn reached(&mut self, reach: Influence) {
+        self.previewed = Some(match (self.previewed, reach) {
+            (None, reach) | (Some(Influence::Nothing), reach) => reach,
+            (Some(held), Influence::Nothing) => held,
+            (Some(Influence::Everything), _) | (_, Influence::Everything) => Influence::Everything,
+            (
+                Some(Influence::Box { min, max }),
+                Influence::Box {
+                    min: low,
+                    max: high,
+                },
+            ) => Influence::Box {
+                min: std::array::from_fn(|axis| min[axis].min(low[axis])),
+                max: std::array::from_fn(|axis| max[axis].max(high[axis])),
+            },
+        });
+    }
+}
+
+/// Everything a Planar stroke decides before it touches the document.
+///
+/// Separate from the bake so the plane, the dabs and the strength can be
+/// read — and tested — without an engine.
+#[derive(Debug, Clone)]
+struct FlattenPlan {
+    plane_point: [f32; 3],
+    normal: [f32; 3],
+    /// Each dab's strength, so the dabs overlapping a point add up to about
+    /// the brush's Intensidade rather than compounding past it.
+    strength: f32,
+    falloff: f32,
+    /// Where the dabs sit along the path, a brush radius apart.
+    dabs: Vec<[f32; 3]>,
+    /// The box every dab lies inside, before it is grown for the feather.
+    min: [f32; 3],
+    max: [f32; 3],
+    /// How far from the surface the bake keeps true distances.
+    ///
+    /// The later dabs flatten the baked samples in place, and a volume knows a
+    /// distance only inside its band: a surface moved further than that is
+    /// placed against the bound — "a wrong shape returned with CLAY_OK", in
+    /// the engine's words. Measured, an inverted stroke whose plane sat below
+    /// the default three-cell band cut the crown *less* than the upright one.
+    /// So the band covers the furthest any dab can move the surface: to a
+    /// plane at most a dab and its sink away.
+    band: f32,
+}
+
+impl FlattenPlan {
+    /// How many dabs cover a point on the path, at a radius apart: the one
+    /// centred on it and about one either side, weighted down by the falloff.
+    const OVERLAP: f32 = 2.0;
+
+    fn of(brush: BrushSettings, samples: &[GestureSample]) -> Option<Self> {
+        let first = samples.first()?;
+        let falloff = brush.size * 0.5;
+        // The box the plane is read from is the brush's footprint, as it
+        // always was; the box sampled is that grown by the falloff, which the
+        // engine lays *outside* each dab's radius — so the taper ends inside
+        // what is baked rather than against one of its faces.
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for sample in samples {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(sample.position[axis] - brush.size);
+                max[axis] = max[axis].max(sample.position[axis] + brush.size);
+            }
+        }
+        let centre: [f32; 3] = std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5);
+        for axis in 0..3 {
+            min[axis] -= falloff;
+            max[axis] += falloff;
+        }
+
+        // The plane the stroke defines: through the middle of what it covered,
+        // facing the way the surface does there. Without a surface normal to
+        // read, the outward direction from the centre of the region is the
+        // best available answer and is right for a convex form.
+        let length = centre.iter().map(|c| c * c).sum::<f32>().sqrt();
+        let normal = if length < 1e-5 {
+            [0.0, 1.0, 0.0]
+        } else {
+            centre.map(|c| c / length)
+        };
+        let sink = if brush.invert {
+            brush.size * ClayDocument::PLANAR_SINK
+        } else {
+            0.0
+        };
+        let plane_point = std::array::from_fn(|axis| centre[axis] - normal[axis] * sink);
+
+        // A dab every brush radius along the path, and always one on the last
+        // sample, so the stroke is flattened to where the pointer stopped.
+        let spacing = brush.size.max(1e-4);
+        let mut dabs = vec![first.position];
+        let mut since = 0.0f32;
+        for pair in samples.windows(2) {
+            let (from, to) = (pair[0].position, pair[1].position);
+            since += (0..3)
+                .map(|a| (to[a] - from[a]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if since >= spacing {
+                dabs.push(to);
+                since = 0.0;
+            }
+        }
+        let last = samples[samples.len() - 1].position;
+        if dabs.last() != Some(&last) {
+            dabs.push(last);
+        }
+        let overlap = if dabs.len() > 1 { Self::OVERLAP } else { 1.0 };
+        Some(Self {
+            plane_point,
+            normal,
+            strength: 1.0 - (1.0 - brush.intensity.clamp(0.0, 1.0)).powf(1.0 / overlap),
+            falloff,
+            dabs,
+            min,
+            max,
+            band: brush.size + falloff + sink,
+        })
+    }
+}
+
 fn mirrors(symmetry: [bool; 3]) -> Vec<Mirror> {
     let mut out = vec![Mirror([false; 3])];
     for axis in 0..3 {
@@ -10204,8 +10561,18 @@ fn sdf_recipe(tool: ToolKind) -> Option<SdfRecipe> {
         spacing: 1.0,
     };
     Some(match tool {
-        // The general strokes: the panel shapes them.
-        ToolKind::Padrao | ToolKind::Camada => plain,
+        // The general stroke: the panel shapes it.
+        ToolKind::Padrao => plain,
+        // A layer of bounded height: never more than one stamp's depth however
+        // many stamps overlap, and a shallower stamp than Padrão's. Clamped
+        // accumulation alone was the whole of it once, and it was invisible
+        // whenever Acumular was off — Padrão then clamps too, and the two were
+        // the same call. See `LAYER_LIFT`.
+        ToolKind::Camada => SdfRecipe {
+            accumulation: Some(claycore::Accumulation::Clamped),
+            lift: ClayDocument::LAYER_LIFT,
+            ..plain
+        },
         // Same op, different profile. See `INFLATE_REACH`/`INFLATE_LIFT` for
         // the measurements behind the two numbers.
         ToolKind::Inflar => SdfRecipe {
@@ -11965,6 +12332,7 @@ impl ClayDocument {
             gesture_id: 0,
             live_opening_entries: 0,
             live_gesture: None,
+            live_flatten: None,
             surface_epoch: 0,
             meshed_chunks: 0,
             smoothed_grids: 0,

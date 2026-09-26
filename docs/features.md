@@ -18,7 +18,7 @@ implementation. A tool with no engine counterpart is not offered.
 
 All twenty-one are bound and each is covered by a before-and-after capture in
 `target/visual/`. Which of the representations each one reaches is in the
-Layers column: fifteen have an SDF verb, fourteen a voxel one, and seventeen a
+Layers column: thirteen have an SDF verb, fourteen a voxel one, and seventeen a
 mesh one.
 
 A fourth representation — a subdivision hierarchy — is left out of the Layers
@@ -36,19 +36,19 @@ Máscara. See [Sculpting an adaptive surface](#sculpting-an-adaptive-surface).
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal. On a field the tooltip says what the relief op costs it: each point moves along its *own* normal, so a feature narrower than the brush thickens instead of taking the mark |
-| Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges. The engine binds both to relief, and that is the right way round: relief moves **each** point of the surface along its own normal, which is the Inflate frame — it is Padrão that is approximated by it |
-| Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax_from` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
+| Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief with a region and rim 1.35× the brush and 0.2 of the lift, so it swells — broader and lower than Padrão's ridge, whatever Acumular says. The engine binds both to relief, and that is the right way round: relief moves **each** point of the surface along its own normal, which is the Inflate frame — it is Padrão that is approximated by it |
+| Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax_from` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction. The field's only smooth: its Relaxar was this verb under a second word |
 | Mover | `clay_sdf_move_*` (`clay_layer_move_surface_regions` when held) / `clay_voxel_sculpt_grab` / `clay_mesh_sculptor_stamp (GRAB)` | all three | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
 | Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
 | Pinçar | `clay_layer_magnify_surface`, negative / `clay_voxel_sculpt_pinch` | all three | Moves the surface toward the brush centre. On a field it is the engine's radial scale of the assembled surface at a negative strength — no stroke op gathers — with the dab left **on** the surface, which is what makes the scale a gather: the line under the stroke stands proud and the flanks fall away. It resolves against every item of a blended form, which is why it can be a field brush at all — a per-item magnify gathers one contributor of a smooth union and leaves the rest |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
-| Planar | `clay_item_volume_flatten_from`, cut-only / `clay_voxel_sculpt_flatten` | all three | Planes without filling on a field and a mesh, which keeps a facet crisp. **On a grid it is two-sided** — material above the plane goes and hollows below it fill — because that is the verb the grid has; the tooltip says so rather than faking cut-only |
+| Planar | `clay_item_volume_flatten_from`, cut-only / `clay_voxel_sculpt_flatten` | all three | Planes without filling on a field and a mesh, which keeps a facet crisp. On a field it is one plane for the whole gesture, flattened to in dabs a brush radius apart along the path, and it is **previewed while the stroke is made**. Held, the key sinks the plane half a brush into the form and cuts to it — a deeper facet, never a fill. **On a grid it is two-sided** — material above the plane goes and hollows below it fill — because that is the verb the grid has; the tooltip says so rather than faking cut-only |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
-| Camada | `clay_layer_apply_stroke`, clamped | all three | A stroke that does not build up on itself |
+| Camada | `clay_layer_apply_stroke`, clamped | all three | A course of bounded height: it never builds up on itself, whatever Acumular says, and on a field each stamp asks for 0.6 of Padrão's lift — so it stays below Padrão even when Padrão is clamped too |
 | Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
 | Puxar | swept-sphere chain on a Catmull-Rom curve | SDF, mesh | Pulls a tendril out, tapering to its tip |
-| Polir | `clay_item_volume_flatten_from`, cut-only | SDF, mesh | hPolish |
-| Relaxar | `clay_item_volume_relax_from` | SDF, mesh | Relax as a brush |
+| Polir | `clay_mesh_sculptor_apply_stroke` (POLISH) | mesh | A flatten that also smooths the high points it leaves. Not on a field: the field has one flatten, and it is Planar's — the two were one bake and measured identical |
+| Relaxar | `clay_mesh_sculptor_apply_stroke` (RELAX) | mesh | Evens out where the vertices sit and leaves the form alone. Not on a field: a field has no vertices to redistribute, and its Relaxar was Suavizar's relax under a second word |
 | Nudge | `clay_voxel_sculpt_smudge` | voxel, mesh | Drags the surface skin, leaving the interior |
 | Trim | `clay_cut_create` | SDF | A shape drawn on the frame, cutting through |
 | Argila | `clay_layer_apply_stroke` with relief and buildup / `clay_mesh_sculptor_apply_stroke` (CLAY) | SDF, mesh | Builds up in flat-ish planes, the way clay is added by hand. On a field it is relief with **buildup** accumulation and a denser stroke, which is what separates ClayBuildup from Standard in ZBrush too — a second pass adds where Camada's does not. A grid has binary occupancy, so it cannot hold that gradual buildup; Padrão and Inflar deposit cells instead |
@@ -75,9 +75,39 @@ A tool means one thing wherever it is offered — so a column quietly borrowed
 from a neighbouring verb fails. A caveat never hangs off a row that claims to
 do exactly what its label says, which ties every `ToolNote` to the fidelity it
 is the sentence for. Two tools that are the *same binding in every part* on one
-representation are one verb offered under two words, and the two that really
-are — Padrão and Camada on a grid, Suavizar and Relaxar on a field — are named
-with their reason instead of passing unremarked. And the diagnostics report
+representation are one verb offered under two words, and the one pair that
+really is — Padrão and Camada on a grid — is named with its reason instead of
+passing unremarked.
+
+**Every tool on the field's shelf is a different tool, measured**
+([#203](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/203),
+[#179](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/179)). Four
+field tools used to share the relief verb and three more shared two others, so
+the shelf offered distinctions it did not make. Each was decided:
+
+| tool | decision | what separates it |
+|---|---|---|
+| Inflar | recalibrated | 0.2 of the lift over a region 1.35× the brush: lower and broader than Padrão with Acumular on or off |
+| Camada | its own stamp | always clamped, 0.6 of the lift: a shallower course than even a clamped Padrão. The clamp alone was invisible whenever Acumular was off |
+| Argila | kept | buildup and a denser stroke; a second pass adds where the others do not |
+| Polir | off the field's shelf | `ToolNote::SdfPolishIsPlanar`; the field has one flatten |
+| Relaxar | off the field's shelf | `ToolNote::SdfRelaxIsSmooth`; the field has one smooth |
+
+Measured across one stroke of the default brush over the starting form, as the
+height the surface rose under the stroke:
+
+| tool | Acumular on | Acumular off |
+|---|---:|---:|
+| Padrão | +0.073 | +0.043 |
+| Inflar | +0.059 | +0.014 |
+| Camada | +0.028 | +0.028 |
+| Argila | +0.090 | +0.090 |
+| Vinco | −0.050 | −0.050 |
+
+`crates/clayspace-engine/tests/sdf_tool_identities.rs` holds every pair of the
+field's stamping tools — read off the table, so a tool bound into that family
+later is measured from the day it is — at least a hundredth apart at identical
+settings, and holds each identity above to its measurement. And the diagnostics report
 carries the line, so "Padrão did something I did not expect" arrives as
 `tool: Padrão on SDF — clay_layer_apply_stroke (CLAY_OP_RELIEF) (surface
 displace, field combine op, approximation)` rather than as a tool name whose
@@ -144,11 +174,12 @@ per dab, at 76.2 ms against relief's 8.8 ms over a 30-dab stroke.
 So the two brushes differ by **profile** and nothing else, which is also what
 tells them apart in ZBrush: Standard raises a ridge that follows the falloff,
 Inflate swells the whole footprint, broader and lower at the rim. Inflar's
-region and rim are 1.35× the brush and it asks for 0.32 of the lift; Padrão
+region and rim are 1.35× the brush and it asks for 0.2 of the lift; Padrão
 keeps the engine's standard clay mapping, k = rounding = radius.
 
-The 0.32 is measured, not chosen. Raycasting a grid at the mark on the starting
-form with a 0.25 brush, as peak height above the sphere and footprint area:
+The lift is measured, not chosen, and it was measured twice. The first time
+was one dab, raycasting a grid at the mark on the starting form with a 0.25
+brush, as peak height above the sphere and footprint area:
 
 | binding | peak | footprint | height ÷ width |
 |---|---|---|---|
@@ -158,7 +189,12 @@ form with a 0.25 brush, as peak height above the sphere and footprint area:
 
 The middle row is the trap: a wider region under buildup accumulation lifts each
 point through more stamps, so the first attempt came out wider **and taller** —
-the same ridge drawn with a bigger brush, which is not what Inflate means.
+the same ridge drawn with a bigger brush, which is not what Inflate means. And
+0.32 fell into the same trap at the default brush, which a sculptor measured
+([#179](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/179)): across
+a whole stroke the stamps overlap far more than one dab does, and Inflar rose
++0.076 to Padrão's +0.073. At 0.2 it rises +0.059, reaching half again as far
+to the side.
 `visual_sdf_symmetry` asserts the *shape* — half again the footprint at a fifth
 less slope — rather than counting pixels, which a merely bigger mark would pass.
 
@@ -260,8 +296,9 @@ so the same switch always lands on the same tool:
 | Mover Topológico | grid, mesh, hierarchy | Mover |
 | Puxar | grid | Mover |
 | Nudge | field | Mover |
-| Relaxar | grid | Suavizar |
+| Relaxar | grid, field | Suavizar |
 | Polir | grid | Raspar |
+| Polir | field | Planar |
 | Borrar | grid | Pintar |
 | Argila | grid | Padrão |
 | Trim, Apagar, Preencher, Pintar, Borrar | a layer with no tool for that act | Padrão |
@@ -537,8 +574,8 @@ into every image the layer emits and carries the strength across each one
 untouched, so pointing the mirror is the whole of what symmetry means for it
 too.
 
-The five that **rewrite the field** rather than adding an item — Mover,
-Suavizar, Relaxar, Planar and Polir — cannot be reached by the layer's mirror.
+The three that **rewrite the field** rather than adding an item — Mover,
+Suavizar and Planar — cannot be reached by the layer's mirror.
 Measured, a relax with X mirrored took the surface under the stroke from 1.1467
 to 1.1409 and left its reflection at **1.1467 exactly**. Their strokes are
 reflected instead, the way a mesh's and a grid's are.
@@ -1141,13 +1178,19 @@ nothing where it has not. That is a rule rather than a gap:
 |---|---|---|
 | Padrão, Inflar, Camada | takes material away | depositing has an opposite |
 | Pinçar | **spreads** | a gather turned over is a spread, which is the pair the grid's column already names; on a field it is the magnify's strength that changes sign, not a combine operation |
-| Planar, Polir | **fills instead of cutting** | planing is cut-only so it does not fill the dents it reveals; the other half is fill-only, which the engine has had a mode for all along |
-| Suavizar, Relaxar | nothing | an inverted smooth is not a thing either reference offers, and sharpening is a different verb rather than a smooth turned over |
+| Planar | **cuts deeper** | the plane sinks half a brush into the form and the verb cuts to it; planing never fills the dents it reveals, in either direction |
+| Suavizar | nothing | an inverted smooth is not a thing either reference offers, and sharpening is a different verb rather than a smooth turned over |
 | Mover, Puxar | nothing | a drag's direction *is* its sign; inverting it is dragging the other way |
 
-Measured on a sphere with a bump and a dent beside it: upright, planing takes
-the bump from 1.1150 to 1.1145 and leaves the hollow at 0.8923; held, it fills
-the hollow to 0.9004 and leaves the bump exactly where it was.
+Inverted, Planar used to fill — the other half of the engine's flatten — and on
+anything convex that raised a slab: the surface falls away from the plane past
+the stroke, so the fill rose to meet it until the edge of the sampled box
+stopped it, in a wall as tall as the slab
+([#179](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/179)).
+Measured across a stroke of the default brush over the starting form, the
+inverted stroke now lowers the crown by 0.060 against the upright one's 0.015,
+raises nothing anywhere across the stroke, and its cut never rises steeper than
+one in one between probes a cell apart — which the old slab's wall did.
 
 ### Which voxel brushes have a sign
 
@@ -1311,7 +1354,7 @@ recompute happens before the call returns, and the viewport reads the layer's
 triangles after it.
 
 The bake-and-replace verbs are held whole on a field and **not** on a mesh:
-Suavizar, Relaxar, Planar and Polir sample a region into a volume there and
+Suavizar and Planar sample a region into a volume there and
 segmenting that stacks a replacement per segment until the result crumbles,
 while on a mesh they are ordinary stamps over the vertices in reach. Held whole
 on a mesh, Suavizar arrived only when the pointer came up — which was half of
@@ -1319,8 +1362,18 @@ why it read as doing nothing.
 
 **Smoothing is no longer held.** ClayCore 0.60.0's transaction samples the
 layer once when the pointer goes down and relaxes its own retained volume per
-dab, touching nothing in the document. So Suavizar and Relaxar show themselves
-while they are being made, and a stroke is still one action to undo. Measured
+dab, touching nothing in the document. So Suavizar shows itself while it is
+being made, and a stroke is still one action to undo.
+
+**Nor is Planar**
+([#179](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/179)). The
+engine's transaction is a relax and has no flatten, so Planar is previewed the
+way a Move drag is: each segment lays the whole gesture so far down, lets the
+brick cache read it, and takes it straight back off the document, leaving the
+history exactly as deep as it found it. The release lays the gesture down once,
+exactly as a held stroke would — `planar_shows_itself_while_the_stroke_is_made`
+holds the landed surface to the held one and to what the last preview showed —
+and an abandoned gesture re-reads the region its previews reached. Measured
 on the starting form at the application's own 0.02 sampling: **186 ms** to open
 the gesture, **~5 ms** a dab.
 

@@ -25,10 +25,16 @@ verb, as every other tool in the application does.
 The application SHALL NOT create, split or delete a polygon while sculpting a
 mesh layer. A mesh exported after sculpting SHALL carry the same indices, and
 the same quads where it had them, as before.
+The face connectivity SHALL remain identical even if the vertex and triangle
+counts happen to stay equal after an edit.
 
 #### Scenario: Indices survive a stroke
 - **WHEN** a mesh layer is sculpted and then exported
 - **THEN** its face indices are unchanged from before the stroke
+
+#### Scenario: Every offered brush preserves adjacency
+- **WHEN** every offered mesh sculpting brush is applied to a fixed mesh
+- **THEN** the vertex count, triangle count and index connectivity remain unchanged
 
 #### Scenario: Quads survive a stroke
 - **WHEN** a mesh layer imported with quads is sculpted and exported

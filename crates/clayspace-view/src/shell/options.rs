@@ -510,7 +510,7 @@ pub(super) fn combine_controls(
         // so the label follows the operation rather than being fixed.
         if let Some(radius) = slider(
             ui,
-            settings.radius_label(),
+            state.strings.combine_radius_label(settings),
             settings.radius,
             settings.radius_range(),
             3,

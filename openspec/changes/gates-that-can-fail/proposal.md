@@ -39,3 +39,10 @@ established:
 - `visual-verification`: a new capability, stating how a rendered frame may be
   asserted on. There was no spec for this and there are twenty-five test files
   doing it, which is why the same defect appeared in five of them.
+
+## Extension for issue #195
+
+The same audit found untranslated user-visible labels and refusals. This change
+now also specifies that all interface notices use the chosen locale and that
+the consent prompt uses the client name supplied at MCP initialization. Older
+clients that provide no name are identified by a localized generic name.

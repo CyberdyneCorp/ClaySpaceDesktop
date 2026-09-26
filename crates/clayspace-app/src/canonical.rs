@@ -19,7 +19,7 @@
 //!   engine "pins no FP flags for its own translation units and makes no
 //!   cross-build promise" (`docs/05-claycore-library.md`), so an evaluated
 //!   quantity is not the same float on arm64-macOS as on x86_64-Linux.
-//! * **Suavizar, Planar, Polir, Relaxar and the topological drag.** They bake
+//! * **Suavizar, Planar and the topological drag.** They bake
 //!   a resampled volume into the layer, so every sample they write is a
 //!   computed float with the same problem, only more of it.
 //!

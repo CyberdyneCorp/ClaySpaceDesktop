@@ -228,12 +228,9 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
         "tool", "rough before", "rough after", "px moved"
     );
     let mut measured = Vec::new();
-    for tool in [
-        ToolKind::Suavizar,
-        ToolKind::Relaxar,
-        ToolKind::Planar,
-        ToolKind::Polir,
-    ] {
+    // The two a field offers: its Relaxar and Polir were these two under other
+    // names, and are off its shelf (#203).
+    for tool in [ToolKind::Suavizar, ToolKind::Planar] {
         let name = format!("{tool:?}").to_lowercase();
         let Some(applied) = stroke_with(&mut harness, tool, &name) else {
             return;
