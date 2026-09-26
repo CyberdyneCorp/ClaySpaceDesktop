@@ -430,6 +430,23 @@ impl Item {
         )
     }
 
+    /// Whether the chain closes on itself, and how finely its typed points are
+    /// tessellated: the largest distance a span's midpoint may sit from its
+    /// chord, in world units, which must be positive.
+    ///
+    /// A property of the document rather than of the viewer. An item that
+    /// never has this called tessellates at the engine's default, which is
+    /// not the tolerance `Document::set_layer_stroke_points` is then given —
+    /// so a curve authored one way and regrown the other re-tessellates every
+    /// span it already had.
+    pub fn set_curve(&mut self, closed: bool, tolerance: f32) -> Result<()> {
+        // SAFETY: valid handle; both arguments are plain values.
+        check(
+            unsafe { sys::clay_item_set_curve(self.as_ptr(), i32::from(closed), tolerance) },
+            "clay_item_set_curve",
+        )
+    }
+
     pub fn set_stroke_points(&mut self, points_xyzr: &[f32]) -> Result<()> {
         if points_xyzr.len() % 4 != 0 {
             return Err(crate::raw_failure(

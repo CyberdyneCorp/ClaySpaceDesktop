@@ -1102,8 +1102,18 @@ impl ToolKind {
     /// write is `L += dE` and the only exact restore is the recorded `before`
     /// values, so the record exists from the first stamp. So a drag on a
     /// hierarchy previews as it moves, as it does on a mesh.
+    ///
+    /// Mover Topológico on a **field** is held for the grid's reason in a
+    /// different form: it bakes, and a baked drag does not decompose either.
+    /// Each segment was anchored at the pointer rather than at the material
+    /// the last one had carried, so the drag ended as a shelf with a cliff at
+    /// its far edge — the torn surface the verb was reported for. Applied
+    /// once from its anchor, in steps short enough not to fold, it lands
+    /// whole when the pointer comes up.
     pub fn holds_the_whole_gesture(self, representation: Representation) -> bool {
-        self.is_region_based() || (self == Self::Mover && representation == Representation::Voxel)
+        self.is_region_based()
+            || (self == Self::Mover && representation == Representation::Voxel)
+            || (self == Self::MoverTopologico && representation == Representation::Sdf)
     }
 
     /// When an adaptive surface remeshes around this tool's deformation.
@@ -4253,6 +4263,20 @@ mod tests {
                 ToolKind::Mover.holds_the_whole_gesture(representation),
                 representation == Representation::Voxel,
                 "Mover on {}",
+                representation.label()
+            );
+        }
+    }
+
+    /// A topological drag bakes, so on a field it lands once from its anchor
+    /// rather than segment by segment. It exists on no other representation.
+    #[test]
+    fn a_topological_drag_is_held_whole_on_a_field() {
+        for representation in Representation::ALL {
+            assert_eq!(
+                ToolKind::MoverTopologico.holds_the_whole_gesture(representation),
+                representation == Representation::Sdf,
+                "Mover Topológico on {}",
                 representation.label()
             );
         }

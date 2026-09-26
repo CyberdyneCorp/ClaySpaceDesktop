@@ -4871,66 +4871,16 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
-        if samples.len() < 2 {
-            return Ok(EditOutcome::NOTHING);
-        }
         let brush = brush.sanitized();
         let layer = self.active_layer().id;
 
-        // The mask, honoured here rather than by the engine.
-        //
-        // A mask reaches an SDF edit inside the stroke engine, where a stamp
-        // in a frozen region emits nothing. This verb does not go through the
-        // stroke engine — it authors a curve item and adds it — so
-        // `clay_layer_add_item` has nowhere to take a mask and the frozen
-        // region would be pulled like any other. Sampling the mask along the
-        // path and dropping the frozen samples is the same rule applied where
-        // this verb can apply it.
-        let live: Vec<&GestureSample> = match self.active_mask() {
-            Some(mask) => {
-                let positions: Vec<[f32; 3]> = samples.iter().map(|s| s.position).collect();
-                let frozen = mask.sample_many(&positions).map_err(ModelError::engine)?;
-                samples
-                    .iter()
-                    .zip(frozen)
-                    .filter(|(_, value)| *value < 0.5)
-                    .map(|(sample, _)| sample)
-                    .collect()
-            }
-            None => samples.iter().collect(),
-        };
-        if live.len() < 2 {
-            // All of it, or all but a point, was frozen.
+        // The path as control points, each carrying the radius at that point,
+        // and trimmed so the rounded tip ends where the pointer did.
+        let points = Self::tendril_points(samples, brush.size);
+        let count = points.len() / 4;
+        if count < 2 {
+            // A single point: a pull with no direction yet.
             return Ok(EditOutcome::NOTHING);
-        }
-
-        // The path as control points, each carrying the radius at that point.
-        // Tapering toward the tip is what makes it read as a pulled tendril
-        // rather than a tube.
-        //
-        // Measured along the path rather than across the point *index*, and
-        // that is the whole of the second fix here. `index / (len - 1)`
-        // renumbers every point each time the pull is extended, so a control
-        // point already laid down changed radius on every segment — measured,
-        // the point at index 5 thickened by 82% over one forty-sample pull.
-        // The tendril behind the cursor kept fattening as the sculptor drew,
-        // which is wrong on its own, and it also made the *whole* node's field
-        // change every segment, which is what made the refill below quadratic.
-        //
-        // Arc length from the anchor never changes for a point already placed,
-        // so a point's radius is fixed the moment it is put down.
-        let mut points = Vec::with_capacity(live.len() * 4);
-        let mut travelled = 0.0f32;
-        let mut previous: Option<[f32; 3]> = None;
-        for sample in &live {
-            let at = sample.position;
-            if let Some(last) = previous {
-                let step = [at[0] - last[0], at[1] - last[1], at[2] - last[2]];
-                travelled += (step[0] * step[0] + step[1] * step[1] + step[2] * step[2]).sqrt();
-            }
-            previous = Some(at);
-            points.extend_from_slice(&at);
-            points.push(Self::tendril_radius(travelled, brush.size));
         }
 
         // The curve this gesture is already pulling, grown rather than joined.
@@ -4971,14 +4921,14 @@ impl ClayDocument {
             let regions =
                 Self::tendril_tail_regions(&points, hook.points, brush.size, mirror, &placed);
             self.live_hook = Some(LiveHook {
-                points: live.len(),
+                points: count,
                 ..hook
             });
             if regions.is_empty() {
                 // Nothing this can name, so the node's own bound it is. Reached
-                // when the curve did not grow — a mask freezing the newest
-                // samples is the way that happens — and correct rather than
-                // fast, which is the right way round for a case that is rare.
+                // only when the curve came back shorter than it was, and
+                // correct rather than fast, which is the right way round for a
+                // case that is rare.
                 self.refill(hook.layer, &[hook.node])?;
             } else {
                 self.refill_regions(&regions)?;
@@ -4989,21 +4939,7 @@ impl ClayDocument {
             });
         }
 
-        let mut item = Item::stroke().map_err(ModelError::engine)?;
-        // Catmull-Rom rather than the default hard corners. A stroke's points
-        // are straight-joined by default, which is right for a chain authored
-        // point by point and wrong for a tendril pulled along a curving drag:
-        // every pointer sample becomes a kink, and the swept sphere bulges at
-        // each one. A spline passes *through* the points, so the tendril is
-        // the path the pointer took.
-        item.set_curve_points(&points, POINT_KIND)
-            .map_err(ModelError::engine)?;
-        item.set_op(Op::Add).map_err(ModelError::engine)?;
-        item.set_stroke_blend_k(brush.size * 0.5)
-            .map_err(ModelError::engine)?;
-        item.set_mirror(takes_part_in_the_mirror(symmetry))
-            .map_err(ModelError::engine)?;
-
+        let item = self.tendril_item(&points, brush, symmetry)?;
         let node = self
             .document
             .add_item(layer, &item)
@@ -5014,7 +4950,7 @@ impl ClayDocument {
             self.live_hook = Some(LiveHook {
                 layer,
                 node,
-                points: live.len(),
+                points: count,
             });
         }
         self.refill(layer, &[node])?;
@@ -5022,6 +4958,192 @@ impl ClayDocument {
             changed: true,
             dirty_bricks: self.dirty.len(),
         })
+    }
+
+    /// The curve item a pull starts as, gated by the layer's mask.
+    ///
+    /// **The mask is a gate on the item, measured over everything the tendril
+    /// reaches.** It used to be sampled at the path's own samples, and the
+    /// frozen ones dropped. But a tendril is a tube around its path, and the
+    /// curve joining the samples either side of a masked band runs straight
+    /// through it — so the band was pulled as much as open surface: measured
+    /// across a band on the starting form, the tendril rose 0.270 over the
+    /// band's centre with the mask and 0.269 without. The gate is in world
+    /// space and does not travel with the item, and it is what the stamp verbs
+    /// already carry for the same reason (see `stroke_sdf`). Growing the curve
+    /// afterwards replaces its points and keeps the gate.
+    ///
+    /// **Joined to the surface with a fillet**, because a hard union meets the
+    /// form at a crease no wider than a voxel, and a crease sampled on a grid
+    /// is a sawtooth along the seam. The fillet is the brush's own half width,
+    /// the same measure the chain's links blend across.
+    ///
+    /// **The chain's links are not blended into one another.** They were, by
+    /// half a brush, and a spline is tessellated into many short spans: every
+    /// span within the blend of a point swelled it, so the tube stood well
+    /// past its radius — a 0.18 pull rose 0.31 — the tip ran past the end of
+    /// the path, and the root kept swelling as the pull went on until enough
+    /// of it lay past the root, measured at 0.046 from a first segment of six
+    /// samples and 0.25 from one of two. A Catmull-Rom curve is already
+    /// smooth, so the hard union of its spans is the tube it describes.
+    ///
+    /// **Tessellated at the document's tolerance from the first segment**,
+    /// which is the one every later segment sets; left at the engine's default,
+    /// the second segment re-tessellated the spans already down and the root
+    /// moved by a few ten-thousandths.
+    fn tendril_item(
+        &self,
+        points: &[f32],
+        brush: BrushSettings,
+        symmetry: [bool; 3],
+    ) -> Result<Item, ModelError> {
+        let mut item = Item::stroke().map_err(ModelError::engine)?;
+        // Catmull-Rom rather than the default hard corners. A stroke's points
+        // are straight-joined by default, which is right for a chain authored
+        // point by point and wrong for a tendril pulled along a curving drag:
+        // every pointer sample becomes a kink, and the swept sphere bulges at
+        // each one. A spline passes *through* the points, so the tendril is
+        // the path the pointer took.
+        item.set_curve_points(points, POINT_KIND)
+            .map_err(ModelError::engine)?;
+        item.set_curve(false, Self::CURVE_TOLERANCE)
+            .map_err(ModelError::engine)?;
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+        item.set_blend(
+            claycore::Blend::Quadratic,
+            brush.size * Self::TENDRIL_FILLET,
+        )
+        .map_err(ModelError::engine)?;
+        item.set_mirror(takes_part_in_the_mirror(symmetry))
+            .map_err(ModelError::engine)?;
+        if let Some(painted) = self.active_mask() {
+            // Refused for a mask that protects nothing, and an ungated
+            // tendril is exactly right then — see `stroke_sdf`.
+            let _ = item.set_gate(&painted, Self::GATE_THRESHOLD, Self::GATE_WIDTH);
+        }
+        Ok(item)
+    }
+
+    /// How wide a tendril's fillet into the surface is, in brush widths.
+    const TENDRIL_FILLET: f32 = 0.5;
+
+    /// A pull's control points, `x y z r`, trimmed so its tip ends at the
+    /// pointer.
+    ///
+    /// **The radius is measured along the path rather than across the point
+    /// index.** `index / (len - 1)` renumbers every point each time the pull
+    /// is extended, so a control point already laid down changed radius on
+    /// every segment — measured, the point at index 5 thickened by 82% over
+    /// one forty-sample pull. Arc length from the anchor never changes for a
+    /// point already placed, so a point's radius is fixed the moment it is put
+    /// down.
+    ///
+    /// **Trimmed by the tip's own radius.** A swept sphere caps the curve's
+    /// end with a half ball, so a curve ending at the pointer puts material a
+    /// whole tip radius past it — measured, a straight pull ending at 1.4 stood
+    /// out to 1.70. The end is moved back to the arc length `s` at which
+    /// `s + radius(s)` is the path's length, so the cap closes where the
+    /// pointer stopped. Only the end moves: every point before it is the
+    /// sample it always was, which is what keeps the root still as the pull
+    /// extends.
+    ///
+    /// Samples that repeat the one before them are skipped: a pointer resting
+    /// still emits them, and a zero-length span has no direction to trim along.
+    fn tendril_points(samples: &[GestureSample], size: f32) -> Vec<f32> {
+        let mut path: Vec<([f32; 3], f32)> = Vec::with_capacity(samples.len());
+        for sample in samples {
+            let at = sample.position;
+            let along = match path.last() {
+                Some((last, along)) => {
+                    let step = (0..3)
+                        .map(|axis| (at[axis] - last[axis]).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    if step <= f32::EPSILON {
+                        continue;
+                    }
+                    along + step
+                }
+                None => 0.0,
+            };
+            path.push((at, along));
+        }
+        let Some(&(_, length)) = path.last() else {
+            return Vec::new();
+        };
+        let end = Self::tendril_end(length, size);
+        if end <= 0.0 {
+            return Self::short_pull(&path);
+        }
+
+        let mut points = Vec::with_capacity(path.len() * 4);
+        let mut previous: Option<([f32; 3], f32)> = None;
+        for &(at, along) in &path {
+            if along >= end {
+                // The span that crosses the end: cut it there.
+                if let Some((from, start)) = previous {
+                    let t = (end - start) / (along - start);
+                    let cut: [f32; 3] =
+                        std::array::from_fn(|axis| from[axis] + (at[axis] - from[axis]) * t);
+                    points.extend_from_slice(&cut);
+                    points.push(Self::tendril_radius(end, size));
+                }
+                break;
+            }
+            points.extend_from_slice(&at);
+            points.push(Self::tendril_radius(along, size));
+            previous = Some((at, along));
+        }
+        points
+    }
+
+    /// A pull still shorter than its own tip: a bead that reaches the pointer,
+    /// rather than nothing.
+    ///
+    /// Trimming by the tip's radius leaves no curve at all until the pull is
+    /// about as long as the root is wide, and a short tug is still a pull the
+    /// sculptor expects to see. So the bead's radius grows with the pull — nine
+    /// tenths of it, on a span of the last tenth toward the pointer — and its
+    /// cap ends at the pointer as the trimmed curve's does. Once the pull
+    /// outgrows the root's own radius the trimmed curve takes over, a root
+    /// within a tenth of the radius the bead had.
+    fn short_pull(path: &[([f32; 3], f32)]) -> Vec<f32> {
+        let (Some(&(root, _)), Some(&(pointer, length))) = (path.first(), path.last()) else {
+            return Vec::new();
+        };
+        let reach: f32 = (0..3)
+            .map(|axis| (pointer[axis] - root[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        if reach <= f32::EPSILON {
+            return Vec::new();
+        }
+        let radius = 0.9 * reach.min(length);
+        let end: [f32; 3] =
+            std::array::from_fn(|axis| root[axis] + (pointer[axis] - root[axis]) * 0.1);
+        let mut points = Vec::with_capacity(8);
+        points.extend_from_slice(&root);
+        points.push(radius);
+        points.extend_from_slice(&end);
+        points.push(radius);
+        points
+    }
+
+    /// The arc length a pull of `length` ends its curve at, so that the tip's
+    /// rounded cap reaches exactly `length`.
+    ///
+    /// The `s` with `s + radius(s) = length`, found by iterating
+    /// `s = length - radius(s)`. That converges because the taper is gentle: a
+    /// radius loses at most 0.7 of the brush over `TAPER_SPAN` brushes, so the
+    /// step shrinks by a factor of 0.14 or better each time and four passes
+    /// leave an error far under a voxel. Zero or less means the pull is still
+    /// shorter than its own tip.
+    fn tendril_end(length: f32, size: f32) -> f32 {
+        let mut end = length - Self::tendril_radius(length, size);
+        for _ in 0..4 {
+            end = length - Self::tendril_radius(end.max(0.0), size);
+        }
+        end
     }
 
     /// Smooth on the field side: sample the region into a volume, relax it,
@@ -5958,23 +6080,30 @@ impl ClayDocument {
 
         // Baked first and moved second, because there is no
         // `clay_item_volume_move_topological_from`: the verb takes an item
-        // carrying a volume. The band has to cover the drag, which is what the
-        // box above is sized for.
+        // carrying a volume.
+        //
+        // The band covers the drag. A Replace volume's crossfade expresses a
+        // surface that moved further than the band from what sits beneath
+        // only up to the band — the engine's own accuracy contract — and at
+        // the default three cells a drag of any length stopped against a
+        // shelf 0.11 above the form it left.
+        // Scaled by Intensidade, as every other brush is: the engine takes the
+        // displacement whole and has no strength of its own here.
+        let dragged = displacement.map(|axis| axis * brush.intensity);
+        let mut params = Self::bake_volume(cell);
+        params.band = Some(travelled * brush.intensity + 3.0 * cell);
         let mut volume = self
             .document
-            .volume_from_region(Self::bake_volume(cell), min, max)
+            .volume_from_region(params, min, max)
             .map_err(ModelError::engine)?;
-        volume
-            .move_topological(&claycore::TopologicalMoveParams {
-                anchor,
-                radius: reach,
-                // Scaled by Intensidade, as every other brush is: the engine
-                // takes the displacement whole and has no strength of its own
-                // here, so this is where the slider has to act.
-                displacement: displacement.map(|axis| axis * brush.intensity),
-                ease: brush.drag.falloff.ease(),
-            })
-            .map_err(ModelError::engine)?;
+        Self::move_topologically_in_steps(&mut volume, anchor, dragged, reach, brush)?;
+
+        // The mask, as the stamp verbs take it: a gate on the item, so a
+        // frozen region keeps the field it had rather than the moved one.
+        // Refused for a mask that protects nothing, and ungated is right then.
+        if let Some(painted) = self.active_mask() {
+            let _ = volume.set_gate(&painted, Self::GATE_THRESHOLD, Self::GATE_WIDTH);
+        }
 
         volume.set_op(Op::Replace).map_err(ModelError::engine)?;
         let node = self
@@ -5987,6 +6116,50 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// Applies a topological drag as a series of short ones, each anchored
+    /// where the last one carried the material.
+    ///
+    /// **One long drag folds the surface.** The engine re-samples the volume
+    /// through the inverse of the move, and that inverse stops being one to
+    /// one once the displacement outruns the falloff's slope: two points of
+    /// the result read the same point of the source, and the surface between
+    /// them tears. Measured on the starting form, a 0.64 drag at a 0.3 reach
+    /// left a crater in the middle of the pulled lump — heights along the drag
+    /// of 1.16, 1.00, 0.96, 0.98 and back up to 1.27. Steps of a quarter of
+    /// the reach each stay one to one, and the same drag rises steadily to its
+    /// end.
+    ///
+    /// The same composition is why the gesture is held whole on a field (see
+    /// `ToolKind::holds_the_whole_gesture`): delivered as segments, each one
+    /// was anchored at the pointer rather than at the material the last one
+    /// had moved, and the drag ended as a shelf with a cliff at its far edge.
+    fn move_topologically_in_steps(
+        volume: &mut Item,
+        anchor: [f32; 3],
+        dragged: [f32; 3],
+        reach: f32,
+        brush: BrushSettings,
+    ) -> Result<(), ModelError> {
+        let length = dragged.iter().map(|d| d * d).sum::<f32>().sqrt();
+        let steps = (length / (reach * Self::TOPOLOGICAL_STEP)).ceil().max(1.0);
+        let step = dragged.map(|axis| axis / steps);
+        for taken in 0..steps as usize {
+            let at: [f32; 3] = std::array::from_fn(|axis| anchor[axis] + step[axis] * taken as f32);
+            volume
+                .move_topological(&claycore::TopologicalMoveParams {
+                    anchor: at,
+                    radius: reach,
+                    displacement: step,
+                    ease: brush.drag.falloff.ease(),
+                })
+                .map_err(ModelError::engine)?;
+        }
+        Ok(())
+    }
+
+    /// The longest step of a topological drag, as a fraction of its reach.
+    const TOPOLOGICAL_STEP: f32 = 0.25;
 
     /// A stroke against a mesh layer's own vertices.
     ///
@@ -7393,21 +7566,28 @@ impl ClayDocument {
     /// box is grown by each point's own radius plus the blend the stroke is
     /// built with.
     ///
+    /// The same count with the tip moved is a tail too, and a common one: the
+    /// end is trimmed back by the tip's radius (see `tendril_points`), so a
+    /// segment often advances the trimmed end without passing another sample.
+    /// Only the last point moved, which is inside the reach above.
+    ///
     /// `None` when the tail cannot be trusted to be the only change: a curve
     /// that shrank, or one whose first delivery this is.
+    ///
     /// The box is in the layer's **own** coordinates, because that is what the
     /// control points are in and what the layer mirror reflects through — the
     /// caller crosses into world before dirtying anything.
     fn tendril_tail_bounds(points: &[f32], sent: usize, size: f32) -> Option<([f32; 3], [f32; 3])> {
         const REACH: usize = 3;
         let count = points.len() / 4;
-        if sent == 0 || count <= sent {
+        if sent == 0 || count < sent {
             return None;
         }
         let first = sent.saturating_sub(REACH);
-        // The blend welds the new end into what is already there, so the
-        // region it disturbs is wider than the swept radius alone.
-        let blend = size * 0.5;
+        // The blends weld the new end into the chain and the chain into the
+        // surface, so the region it disturbs is wider than the swept radius
+        // alone.
+        let blend = size * (0.5 + Self::TENDRIL_FILLET);
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
         for index in first..count {
