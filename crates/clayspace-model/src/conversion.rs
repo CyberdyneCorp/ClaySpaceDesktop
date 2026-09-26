@@ -408,6 +408,12 @@ pub enum Refusal {
     },
     /// The hierarchy is already as deep as this build will take it.
     DepthLimit { levels: u32 },
+    /// The source changed, or went, while its crossing ran off the interface
+    /// thread, so the result describes a grid that is no longer there.
+    ///
+    /// Dropped rather than placed: a field made from the grid as it was would
+    /// quietly take back whatever the sculptor did to it in the meantime.
+    SourceMoved,
 }
 
 impl std::fmt::Display for Refusal {
@@ -467,6 +473,10 @@ impl std::fmt::Display for Refusal {
             Self::DepthLimit { levels } => write!(
                 f,
                 "this hierarchy is {levels} levels deep, which is as far as it goes"
+            ),
+            Self::SourceMoved => f.write_str(
+                "the grid changed while it was being converted, so the result \
+                 was dropped; run the crossing again",
             ),
         }
     }

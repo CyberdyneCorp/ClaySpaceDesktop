@@ -11,8 +11,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, Direction, GestureSample, ObjectModel, Refusal, Representation, SceneModel,
-    SculptModel, ToolKind,
+    BrushSettings, Direction, GestureSample, ModelError, ObjectModel, Refusal, Representation,
+    SceneModel, SculptModel, ToolKind,
 };
 
 fn document() -> ClayDocument {
@@ -675,4 +675,191 @@ fn a_carried_mesh_can_be_crossed_to_a_grid() {
         "the grid holds nothing, so the region it was rasterized over was not \
          the mesh's"
     );
+}
+
+// -- grid to field, off the interface thread ------------------------------------
+//
+// Issue #185 measured a grid-to-field crossing holding the window for seconds.
+// Its conversion now runs on a worker: the grid is read out on this thread,
+// converted wherever the caller puts it, and placed back here. These hold that
+// the split crossing is the same crossing, and that it never places a field
+// over a grid that changed while it ran.
+
+/// The starting form crossed to a grid, with the grid active.
+fn a_grid() -> ClayDocument {
+    let mut doc = document();
+    doc.convert_layer(Direction::SdfToVoxel, CELL, 1)
+        .expect("to a grid");
+    doc
+}
+
+/// What a scene looks like, without the keys two documents number alike.
+fn rows(doc: &ClayDocument) -> Vec<(String, Representation, bool)> {
+    doc.scene()
+        .layers
+        .iter()
+        .map(|layer| (layer.name.clone(), layer.representation, layer.visible))
+        .collect()
+}
+
+/// Converts on a worker thread, as the application does.
+fn on_a_worker(crossing: clayspace_engine::GridToField) -> clayspace_engine::FieldFromGrid {
+    std::thread::spawn(move || crossing.convert())
+        .join()
+        .expect("the worker")
+        .expect("the conversion")
+}
+
+#[test]
+fn a_grid_converted_on_a_worker_lands_as_the_same_crossing() {
+    let mut here = a_grid();
+    let mut there = a_grid();
+    let depth = there.history().depth;
+
+    let made_here = here
+        .convert_layer(Direction::VoxelToSdf, CELL, 1)
+        .expect("the crossing on this thread");
+    let crossing = there
+        .begin_grid_to_field(CELL, 1, false)
+        .expect("read the grid");
+    assert!(crossing.cell_count() > 0, "the grid was read out empty");
+    let made_there = there
+        .finish_grid_to_field(on_a_worker(crossing))
+        .expect("place the field");
+
+    assert_eq!(
+        rows(&there),
+        rows(&here),
+        "the two crossings left different scenes"
+    );
+    assert_eq!(
+        there.layer_bounds(made_there),
+        here.layer_bounds(made_here),
+        "the field placed from the worker is not the field made here"
+    );
+    assert_eq!(
+        there.history().depth,
+        depth + 1,
+        "a crossing from a worker is not one undo step"
+    );
+    let crossed = rows(&there);
+    assert!(there.undo().expect("undo"), "nothing to take back");
+    assert_eq!(
+        rows(&there).len(),
+        crossed.len() - 1,
+        "the field row stayed"
+    );
+    assert!(there.redo().expect("redo"), "nothing to put back");
+    assert_eq!(
+        rows(&there),
+        crossed,
+        "the redo did not bring the field back"
+    );
+}
+
+/// The sculptor may move to another row while the conversion runs; the field
+/// still lands as the crossing of the grid it was read from.
+#[test]
+fn a_field_lands_beside_its_grid_whatever_row_is_active() {
+    let mut doc = a_grid();
+    let grid = doc.scene().active.expect("the grid");
+    let crossing = doc.begin_grid_to_field(CELL, 1, true).expect("read");
+    let form = doc
+        .scene()
+        .layers
+        .iter()
+        .find(|layer| layer.representation == Representation::Sdf)
+        .map(|layer| layer.key)
+        .expect("the starting form");
+    doc.set_active_layer(form).expect("move away");
+    let at = doc
+        .scene()
+        .layers
+        .iter()
+        .position(|layer| layer.key == grid)
+        .expect("the grid's row");
+
+    let made = doc
+        .finish_grid_to_field(on_a_worker(crossing))
+        .expect("place in place");
+    let scene = doc.scene();
+    assert!(
+        scene.layer(grid).is_none(),
+        "an in-place crossing kept its grid"
+    );
+    assert_eq!(
+        scene.layers[at].key, made,
+        "the field did not take the grid's row"
+    );
+}
+
+#[test]
+fn a_grid_that_changed_while_converting_keeps_the_change() {
+    let mut doc = a_grid();
+    let crossing = doc.begin_grid_to_field(CELL, 1, false).expect("read");
+    doc.apply_stroke(
+        ToolKind::Inflar,
+        BrushSettings::default(),
+        &[GestureSample {
+            position: [0.0, 0.0, 1.0],
+            pressure: 1.0,
+            time: 0.0,
+        }],
+        [false; 3],
+    )
+    .expect("a stroke on the grid");
+    let before = rows(&doc);
+    let depth = doc.history().depth;
+
+    let refused = doc
+        .finish_grid_to_field(on_a_worker(crossing))
+        .expect_err("a field of the grid as it was");
+    assert!(
+        matches!(refused, ModelError::Conversion(Refusal::SourceMoved)),
+        "refused for the wrong reason: {refused}"
+    );
+    assert_eq!(
+        rows(&doc),
+        before,
+        "a dropped result still changed the scene"
+    );
+    assert_eq!(doc.history().depth, depth, "a dropped result left history");
+}
+
+#[test]
+fn a_grid_taken_back_while_converting_gets_no_field() {
+    let mut doc = a_grid();
+    let crossing = doc.begin_grid_to_field(CELL, 1, false).expect("read");
+    assert!(
+        doc.undo().expect("undo the grid"),
+        "the grid was not undoable"
+    );
+    let refused = doc
+        .finish_grid_to_field(on_a_worker(crossing))
+        .expect_err("a field of a grid that is gone");
+    assert!(matches!(
+        refused,
+        ModelError::Conversion(Refusal::SourceMoved)
+    ));
+}
+
+#[test]
+fn only_a_grid_with_cells_in_it_starts_a_conversion() {
+    let mut doc = document();
+    let refused = doc
+        .begin_grid_to_field(CELL, 1, false)
+        .expect_err("the starting form is a field");
+    assert!(matches!(
+        refused,
+        ModelError::Conversion(Refusal::WrongSource { .. })
+    ));
+
+    doc.add_voxel_layer("Vazia", CELL).expect("an empty grid");
+    let refused = doc
+        .begin_grid_to_field(CELL, 1, false)
+        .expect_err("an empty grid");
+    assert!(matches!(
+        refused,
+        ModelError::Conversion(Refusal::SourceEmpty)
+    ));
 }

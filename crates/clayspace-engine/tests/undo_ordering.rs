@@ -573,6 +573,48 @@ fn an_extrusion_is_one_undo_and_leaves_no_layer_standing() {
     });
 }
 
+/// The same on a grid, which extrudes through its own verb and arrives as a
+/// field row beside it: undo takes the row back with its wall, and redo puts
+/// both back. Issue #185 (V10) saw a 0.3 wall only tint the grid, fail to be
+/// its own undo step and redo as "nothing changed", and 0.1 and 0.05 refused;
+/// all three thicknesses are held here on a grid at the panel's default cell.
+#[test]
+fn a_grid_extrusion_is_taken_back_and_put_back_whole() {
+    for thickness in [0.3, 0.1, 0.05] {
+        let mut doc = document();
+        doc.convert_layer(Direction::SdfToVoxel, 0.02, 1)
+            .expect("to a grid");
+        paint_the_mask(&mut doc);
+        let depth = doc.history().depth;
+        let layers = doc.scene().layers.len();
+        doc.extrude_mask(ExtrudeSettings {
+            thickness,
+            ..ExtrudeSettings::default()
+        })
+        .unwrap_or_else(|e| panic!("extruding {thickness} off a grid: {e}"));
+        assert_eq!(doc.scene().layers.len(), layers + 1, "no wall row");
+        let wall = doc.scene().layers.last().expect("the wall").key;
+        assert!(
+            doc.layer_bounds(wall).is_some(),
+            "a {thickness} wall has no extent, so it holds no geometry"
+        );
+        let extruded = digest(&mut doc);
+        let cost = doc.history().depth - depth;
+        for _ in 0..cost {
+            assert!(doc.undo().expect("undo"), "ran out of history");
+        }
+        assert_eq!(doc.scene().layers.len(), layers, "the wall row stayed");
+        for _ in 0..cost {
+            assert!(doc.redo().expect("redo"), "the redo said nothing changed");
+        }
+        assert_eq!(
+            digest(&mut doc),
+            extruded,
+            "the redo did not bring the {thickness} wall back"
+        );
+    }
+}
+
 /// A redo puts the operation back, which is the other half of taking it back.
 #[test]
 fn redo_reapplies_the_mask_op() {
