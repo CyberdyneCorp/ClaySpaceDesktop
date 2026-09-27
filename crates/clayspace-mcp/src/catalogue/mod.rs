@@ -1378,6 +1378,24 @@ mod tests {
         assert!(refusal.message.contains("no group named nowhere"));
     }
 
+    /// UVs on a retopology are asked for, never assumed.
+    #[test]
+    fn retopology_uvs_are_off_unless_asked_for() {
+        let uv_of = |arguments: serde_json::Value| {
+            let args = Args::new("retopo", "set", &arguments);
+            match actions::build("retopo", "set", &args).expect("a valid call") {
+                Command::SetRetopoSettings(settings) => settings.uv,
+                other => panic!("retopo set built {other:?}"),
+            }
+        };
+        assert_eq!(uv_of(json!({ "target_quads": 800 })), None);
+        assert_eq!(uv_of(json!({ "uvs": false })), None);
+        assert_eq!(
+            uv_of(json!({ "uvs": true })),
+            Some(clayspace_model::UvSettings::default())
+        );
+    }
+
     #[test]
     fn dynamics_actions_are_offered() {
         let bench = Bench::new();

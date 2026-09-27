@@ -108,13 +108,37 @@ the resulting UV coordinates. Declining UV generation SHALL leave the result
 without newly generated UVs. A failed UV step SHALL be reported and SHALL NOT
 be silently presented as a UV-carrying success.
 
+UV generation SHALL be off by default, in the panel and in the agent's
+`retopo set` (`uvs`). The report SHALL carry the engine's chart count, angle
+distortion, coverage and seam count, and SHALL name flipped and projected
+(fallback) charts as defects rather than as figures.
+
+The engine writes a layout per face corner; a mesh layer stores one UV per
+vertex. The accepted mesh SHALL therefore duplicate exactly the vertices on a
+seam, one copy per distinct UV, and SHALL carry the welded mesh's normals on
+every copy so a seam is not shaded into the surface. The authored quad edges
+SHALL still be drawn.
+
+A failed layout SHALL NOT fail the retopology: the quads SHALL be placed without
+UVs, and the reason SHALL reach the sculptor and the agent. A cancellation
+during the layout SHALL cancel the whole run.
+
 #### Scenario: A result with UVs is accepted
 - **WHEN** automatic UV generation is requested and the retopology preview is accepted
 - **THEN** the new mesh subtool retains the previewed UV coordinates after save and reload
 
+#### Scenario: UVs survive the history
+- **WHEN** an accepted result carrying UVs is undone and redone
+- **THEN** the layer that returns carries the same UV coordinates
+
 #### Scenario: UVs are declined
 - **WHEN** a retopology result is accepted without requesting UV generation
 - **THEN** no automatic atlas is generated for that result
+
+#### Scenario: The layout is refused
+- **WHEN** UV generation is requested and the engine refuses the layout
+- **THEN** the quads are placed without UVs, the outcome reports `failed` with
+  the engine's reason, and the notice says the mesh carries no UVs
 
 ### Requirement: Maps are baked from the field where a field is what exists
 Normal, ambient occlusion, curvature and cavity SHALL be baked through

@@ -1398,6 +1398,58 @@ impl Document {
         Ok((positions, normals, colors, indices))
     }
 
+    /// An owned copy of a mesh layer, placed by the given layer transform.
+    ///
+    /// What [`Document::mesh_combined`] does to each visible mesh layer before
+    /// it concatenates them, for a caller assembling that export itself.
+    pub fn placed_mesh_layer(
+        &mut self,
+        layer_name: &str,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: [f32; 3],
+    ) -> Result<Mesh> {
+        let c_name = crate::cstring(layer_name, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: as `read_mesh_layer`.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_name.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        // Borrowed from the layer, so never dropped here; the transform makes
+        // the owned copy.
+        let borrowed =
+            std::mem::ManuallyDrop::new(Mesh::from_raw(mesh, "clay_document_mesh_layer")?);
+        borrowed.transformed_nonuniform(position, rotation_axis, rotation_angle, scale)
+    }
+
+    /// A mesh layer's UVs, one per vertex, or `None` when it carries none.
+    ///
+    /// Separate from [`Document::read_mesh_layer`] rather than a fifth vector
+    /// there: a layout is absent on most layers, and every reader of the four
+    /// would otherwise carry an empty one it never looks at.
+    pub fn mesh_layer_uvs(&mut self, layer_name: &str) -> Result<Option<Vec<[f32; 2]>>> {
+        let c_name = crate::cstring(layer_name, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: as `read_mesh_layer`.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_name.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        // Borrowed from the layer, so never dropped here — see
+        // `read_mesh_layer`.
+        let borrowed =
+            std::mem::ManuallyDrop::new(Mesh::from_raw(mesh, "clay_document_mesh_layer")?);
+        Ok(borrowed.uvs().map(<[[f32; 2]]>::to_vec))
+    }
+
     /// Converts one of this document's mesh layers into a new SDF layer.
     ///
     /// Mesh to SDF: the triangles are resampled onto a lattice as a volume

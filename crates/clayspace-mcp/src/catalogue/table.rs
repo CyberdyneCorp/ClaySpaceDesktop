@@ -1434,6 +1434,11 @@ pub const TABLE: &[ActionSpec] = &[
                 Kind::Boolean,
                 "replace the source layer instead of adding a new one",
             ),
+            o(
+                "uvs",
+                Kind::Boolean,
+                "lay out UVs on the result; off by default",
+            ),
         ],
         example: r#"{"target_quads":10000,"method":"quadcover"}"#,
     },

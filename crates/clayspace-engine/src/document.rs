@@ -1100,6 +1100,16 @@ struct AuthoredFaces {
 }
 
 impl AuthoredFaces {
+    /// [`AuthoredFaces::checked`] over a retopology's own result.
+    fn of(result: &clayspace_model::RetopoResult) -> Option<Self> {
+        Self::checked(
+            &result.positions,
+            &result.indices,
+            &result.edges,
+            result.outcome.faces,
+        )
+    }
+
     /// The faces a retopology authored, or `None` when its edge list cannot
     /// describe the vertices it came with — in which case the polyframe
     /// derives edges from the triangulation, which is right for triangles.
@@ -13254,9 +13264,9 @@ impl ExchangeModel for ClayDocument {
         path: &std::path::Path,
         settings: ExportSettings,
     ) -> Result<Vec<clayspace_model::ExportWarning>, ModelError> {
-        if Format::of(path).is_none() {
+        let Some(format) = Format::of(path) else {
             return Err(ModelError::engine("formato desconhecido"));
-        }
+        };
         let params = MeshParams {
             voxel_size: Some(settings.resolution.max(1e-4)),
             resolution: 128,
@@ -13282,10 +13292,7 @@ impl ExchangeModel for ClayDocument {
         // An adaptive surface has the same gap for the same reason: its layer
         // holds the triangles it was read from, and Dynamic → Mesh is the
         // crossing that exports what the brush has made since.
-        let mesh = self
-            .document
-            .mesh_combined(params)
-            .map_err(ModelError::engine)?;
+        let mesh = self.combined_for_export(params)?;
         // Asked of the mesh that is about to be written, not of the field it
         // came from. Decimation runs inside `mesh_combined`, and it can return
         // an edge with four incident triangles from an input that had none —
@@ -13308,16 +13315,31 @@ impl ExchangeModel for ClayDocument {
         // defect this path exists for shows up in the edge counts.
         let report = mesh.validation_report(0).ok();
         mesh.save(path).map_err(ModelError::engine)?;
-        Ok(report
-            .map(|r| {
-                clayspace_model::ExportWarning::for_written_mesh(clayspace_model::WrittenMesh {
-                    watertight: r.watertight,
-                    manifold: r.manifold,
-                    non_manifold_edges: r.non_manifold_edges,
-                    boundary_edges: r.boundary_edges,
-                })
-            })
-            .unwrap_or_default())
+        // Only where the format writes UVs at all: PLY is already warned
+        // about before the write, and FBX's writer is not stated to carry them.
+        let dropped_uvs = matches!(format, Format::Obj | Format::Glb)
+            && mesh.uvs().is_none()
+            && self.a_visible_layer_carries_uvs();
+        let written = report.map_or(
+            clayspace_model::WrittenMesh {
+                watertight: true,
+                manifold: true,
+                ..Default::default()
+            },
+            |r| clayspace_model::WrittenMesh {
+                watertight: r.watertight,
+                manifold: r.manifold,
+                non_manifold_edges: r.non_manifold_edges,
+                boundary_edges: r.boundary_edges,
+                dropped_uvs: false,
+            },
+        );
+        Ok(clayspace_model::ExportWarning::for_written_mesh(
+            clayspace_model::WrittenMesh {
+                dropped_uvs,
+                ..written
+            },
+        ))
     }
 
     fn has_mesh_layers(&self) -> bool {
@@ -16296,6 +16318,76 @@ impl ClayDocument {
         Ok((positions, normals, indices))
     }
 
+    /// The field meshed with every visible mesh layer beside it — or, where
+    /// the engine refuses because there is no field to mesh, the visible mesh
+    /// layers alone.
+    ///
+    /// `clay_document_mesh_combined` meshes the field first and refuses an
+    /// empty one, so a document whose only visible geometry is mesh layers —
+    /// a retopology exported on its own, with the sculpt hidden — could not
+    /// be exported at all. The fallback is the engine's own composition,
+    /// each layer placed by its transform and concatenated, which is what
+    /// that call does after meshing the field (ClayCore#662).
+    fn combined_for_export(&mut self, params: MeshParams) -> Result<Mesh, ModelError> {
+        let refusal = match self.document.mesh_combined(params) {
+            Ok(mesh) => return Ok(mesh),
+            Err(refusal) => refusal,
+        };
+        let placed: Vec<(String, clayspace_model::Transform)> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.visible && layer.representation.carries_vertices())
+            .map(|layer| (layer.engine_name.clone(), layer.transform))
+            .collect();
+        if placed.is_empty() {
+            return Err(ModelError::engine(refusal));
+        }
+        let mut parts = Vec::with_capacity(placed.len());
+        for (name, transform) in placed {
+            let part = self
+                .document
+                .placed_mesh_layer(
+                    &name,
+                    transform.position,
+                    transform.rotation_axis,
+                    transform.rotation_angle,
+                    std::array::from_fn(|axis| transform.scale[axis].max(1e-4)),
+                )
+                .map_err(ModelError::engine)?;
+            parts.push(part);
+        }
+        let parts: Vec<&Mesh> = parts.iter().collect();
+        Mesh::concat(&parts).map_err(ModelError::engine)
+    }
+
+    /// Whether any visible mesh subtool carries a UV layout — what an export
+    /// that wrote none has to answer for.
+    fn a_visible_layer_carries_uvs(&mut self) -> bool {
+        let keys: Vec<LayerKey> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.visible && layer.representation == Representation::Mesh)
+            .map(|layer| layer.key)
+            .collect();
+        keys.into_iter()
+            .any(|key| matches!(self.layer_uvs(key), Ok(Some(_))))
+    }
+
+    /// A mesh subtool's UVs, one per vertex, or `None` when it carries none.
+    ///
+    /// Read from the layer the engine holds, so what this answers is what a
+    /// save writes and an export carries — not a copy kept beside it.
+    pub fn layer_uvs(&mut self, key: LayerKey) -> Result<Option<Vec<[f32; 2]>>, ModelError> {
+        let layer = &self.layers[self.index_of(key)?];
+        if layer.representation != Representation::Mesh {
+            return Ok(None);
+        }
+        let name = layer.engine_name.clone();
+        self.document
+            .mesh_layer_uvs(&name)
+            .map_err(ModelError::engine)
+    }
+
     /// The revision the layer a running retopology was asked about stands at
     /// now. An error when it has gone, which makes any result for it stale.
     pub(crate) fn retopo_target_revision(&mut self) -> Result<u64, ModelError> {
@@ -16343,10 +16435,7 @@ impl ClayDocument {
         &mut self,
         key: LayerKey,
         expected_revision: u64,
-        positions: &[[f32; 3]],
-        indices: &[u32],
-        edges: &[u32],
-        faces: usize,
+        result: &clayspace_model::RetopoResult,
     ) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
         let layer = &self.layers[index];
@@ -16366,8 +16455,7 @@ impl ClayDocument {
         self.mesh_sculptors.borrow_mut().forget(key);
         self.layers[index].authored = None;
 
-        let mesh =
-            claycore::Mesh::from_triangles(positions, indices).map_err(ModelError::engine)?;
+        let mesh = crate::retopo::retopo_mesh(result)?;
         self.document
             .replace_mesh_layer(id, &mesh, expected_revision)
             .map_err(|e| {
@@ -16379,7 +16467,7 @@ impl ClayDocument {
 
         // And the new faces, now that the geometry they describe is the one
         // the layer holds.
-        self.layers[index].authored = AuthoredFaces::checked(positions, indices, edges, faces);
+        self.layers[index].authored = AuthoredFaces::of(result);
 
         self.refresh_mesh_bounds(key);
         self.settle_geometry_revisions();
@@ -16397,16 +16485,11 @@ impl ClayDocument {
     /// `expected_revision` is what the source was at when the work started.
     /// A source that moved since, or has gone, gets nothing: the result
     /// describes a sculpt that no longer exists.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn attach_quads_beside(
         &mut self,
         source: LayerKey,
         expected_revision: u64,
-        positions: &[[f32; 3]],
-        indices: &[u32],
-        edges: &[u32],
-        faces: usize,
-        name: &str,
+        result: &clayspace_model::RetopoResult,
     ) -> Result<LayerKey, ModelError> {
         let index = self.index_of(source).map_err(|_| {
             ModelError::engine(
@@ -16428,9 +16511,8 @@ impl ClayDocument {
         // it was made from is drawn: the triangles came out in the source's
         // own coordinates.
         let transform = self.layers[index].transform;
-        let name = self.unique_layer_name(name);
-        let mesh =
-            claycore::Mesh::from_triangles(positions, indices).map_err(ModelError::engine)?;
+        let name = self.unique_layer_name(&result.name);
+        let mesh = crate::retopo::retopo_mesh(result)?;
 
         let depth_before = self.engine_undo_depth();
         self.document
@@ -16450,7 +16532,7 @@ impl ClayDocument {
         closed?;
 
         let row = self.index_of(made)?;
-        self.layers[row].authored = AuthoredFaces::checked(positions, indices, edges, faces);
+        self.layers[row].authored = AuthoredFaces::of(result);
         self.record_crossing(made, depth_before);
         self.refresh_mesh_bounds(made);
         self.settle_geometry_revisions();

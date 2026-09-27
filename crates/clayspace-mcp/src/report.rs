@@ -26,8 +26,8 @@ use crate::session::{
     ExchangeState, ExportState, FallbackState, GateKind, GridState, HierarchyBakeState,
     HierarchyPassState, HierarchyState, HistoryState, ImportState, LayerState, LevelSizeState,
     MaskState, MemoryPart, MemoryState, ObjectState, OutcomeState, PassState, PhaseCostState,
-    PresentationState, ReferenceState, RemeshOutcomeState, RetopoOutcomeState, SceneState,
-    StallState, StrokeCostState, TimingState, ToolState,
+    PresentationState, ReferenceState, RemeshOutcomeState, RetopoOutcomeState, RetopoUvState,
+    SceneState, StallState, StrokeCostState, TimingState, ToolState, UvReportState,
 };
 
 /// How many agent jobs the interface thread does between two frames.
@@ -492,11 +492,42 @@ pub fn outcome_state(
             vertices: outcome.vertices,
             faces: outcome.faces,
             quads: outcome.is_quads(),
+            uv: retopo_uv_state(&outcome.uv),
         }),
         crossing: crossing.map(|(direction, layer)| CrossingOutcomeState {
             direction: tags::tag_of(tags::DIRECTIONS, direction).to_string(),
             layer: layer.0,
         }),
+    }
+}
+
+fn retopo_uv_state(uv: &clayspace_model::RetopoUv) -> RetopoUvState {
+    use clayspace_model::RetopoUv;
+    match uv {
+        RetopoUv::NotRequested => RetopoUvState {
+            status: "not_requested",
+            reason: None,
+            report: None,
+        },
+        RetopoUv::Failed(why) => RetopoUvState {
+            status: "failed",
+            reason: Some(why.clone()),
+            report: None,
+        },
+        RetopoUv::Laid(report) => RetopoUvState {
+            status: "laid",
+            reason: None,
+            report: Some(UvReportState {
+                charts: report.charts,
+                seam_edges: report.seam_edges,
+                max_angle_distortion: report.max_angle_distortion,
+                rms_angle_distortion: report.rms_angle_distortion,
+                flipped_charts: report.flipped_charts,
+                fallback_charts: report.fallback_charts,
+                dropped_charts: report.dropped_charts,
+                packed_area: report.packed_area,
+            }),
+        },
     }
 }
 
@@ -1652,6 +1683,34 @@ mod tests {
         let crossing = state.crossing.expect("a crossing");
         assert_eq!(crossing.direction, "field-to-mesh");
         assert_eq!(crossing.layer, 9);
+    }
+
+    /// A refused layout reaches the agent as a reason with no figures, so it
+    /// cannot be read as a result that carries UVs.
+    #[test]
+    fn a_refused_retopology_layout_reports_why_and_no_figures() {
+        let outcome = clayspace_model::RetopoOutcome {
+            triangles_before: 100,
+            faces: 40,
+            triangles: 80,
+            vertices: 42,
+            uv: clayspace_model::RetopoUv::Failed("o atlas recusou".to_string()),
+        };
+        let state = outcome_state(None, Some(&outcome), None);
+        let uv = state.retopology.expect("a retopology").uv;
+        assert_eq!(uv.status, "failed");
+        assert_eq!(uv.reason.as_deref(), Some("o atlas recusou"));
+        assert!(uv.report.is_none());
+
+        let not_asked = clayspace_model::RetopoOutcome {
+            uv: clayspace_model::RetopoUv::NotRequested,
+            ..outcome
+        };
+        let state = outcome_state(None, Some(&not_asked), None);
+        assert_eq!(
+            state.retopology.expect("a retopology").uv.status,
+            "not_requested"
+        );
     }
 
     /// The chrome and the fade change what a capture looks like without

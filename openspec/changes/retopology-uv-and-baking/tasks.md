@@ -194,9 +194,25 @@ field evaluator with no field. We are the first of either.
 - [ ] 11.3 Store editable flow guides and density painting as retopology input,
       independently of sculpt brushes, with undo and visual feedback; test
       that each changes the output in the intended region. (#212)
-- [ ] 11.4 Add optional atlas generation to the retopology job, report UV
+- [x] 11.4 Add optional atlas generation to the retopology job, report UV
       metrics and failures, and preserve accepted UV coordinates through
-      save/load and undo/redo. (#213)
+      save/load and undo/redo. (#213) `RetopoSettings::uv`, off by default
+      (panel checkbox, agent `retopo set` `uvs`). The engine's per-corner
+      layout is split into per-vertex UVs along its seams
+      (`split_at_uv_seams`), with the welded normals on every copy, and the
+      layer is built through the in-memory OBJ reader — the one ABI entry that
+      attaches UVs (ClayCore#661 asks for a constructor). A refused layout
+      places the quads without UVs and says why (`RetopoUv::Failed`, notice,
+      agent `uv.status`). Held by `retopo_uv.rs` (engine: save/open,
+      undo/redo, export), `uv_generation_is_optional` and
+      `a_failed_uv_run_leaves_the_mesh` (VM).
+- [x] 11.7 Export carries the accepted UVs: a document whose visible geometry
+      is mesh layers alone exports them (the engine's combined call refuses an
+      empty field, ClayCore#662), and an export that dropped a visible layer's
+      UVs says so. (#213)
+- [ ] 11.8 A checker preview and a seam/island display for a result carrying
+      UVs. The data is on the layer; the renderer has no UV attribute or
+      checker material yet. (#213)
 - [ ] 11.5 Pin the workflow with UI, VM and agent regression tests; update
       `docs/features.md` to describe the accepted-result lifecycle. (#211–#213)
 

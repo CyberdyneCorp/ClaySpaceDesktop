@@ -11,14 +11,14 @@
 //! one address space have no reason to go through a temporary file, and the
 //! engine's authors built the buffer profile for exactly this case.
 
+use clayspace_model::{
+    split_at_uv_seams, ModelError, QuadMethod, Representation, RetopoModel, RetopoOutcome,
+    RetopoResult, RetopoSettings, RetopoSource, RetopoUv, Retopologiser, Unwrapper, UvModel,
+    UvOutcome, UvResult, UvSettings, UvSource,
+};
 use clayspace_model::{BakeMap, BakeModel, BakeResult, BakeSettings, BakedMap, Baker};
 use clayspace_model::{
     ConformModel, ConformOutcome, ConformResult, ConformSettings, ConformSource, Conformer,
-};
-use clayspace_model::{
-    ModelError, QuadMethod, Representation, RetopoModel, RetopoOutcome, RetopoResult,
-    RetopoSettings, RetopoSource, Retopologiser, Unwrapper, UvModel, UvOutcome, UvResult,
-    UvSettings, UvSource,
 };
 
 use crate::document::ClayDocument;
@@ -111,26 +111,26 @@ impl RetopoModel for ClayDocument {
             ));
         };
         if settings.in_place {
-            return self.replace_mesh_with_quads(
-                key,
-                revision,
-                &result.positions,
-                &result.indices,
-                &result.edges,
-                result.outcome.faces,
-            );
+            return self.replace_mesh_with_quads(key, revision, result);
         }
-        self.attach_quads_beside(
-            key,
-            revision,
-            &result.positions,
-            &result.indices,
-            &result.edges,
-            result.outcome.faces,
-            &result.name,
-        )
-        .map(|_| ())
+        self.attach_quads_beside(key, revision, result).map(|_| ())
     }
+}
+
+/// The mesh a retopology result is placed as: with its UVs where it carries a
+/// layout, and as bare triangles where it does not.
+pub(crate) fn retopo_mesh(result: &RetopoResult) -> Result<claycore::Mesh, ModelError> {
+    if result.uvs.is_empty() {
+        return claycore::Mesh::from_triangles(&result.positions, &result.indices)
+            .map_err(ModelError::engine);
+    }
+    claycore::Mesh::from_triangles_with_uvs(
+        &result.positions,
+        &result.normals,
+        &result.uvs,
+        &result.indices,
+    )
+    .map_err(|e| ModelError::engine(format!("a malha com UVs foi recusada: {e}")))
 }
 
 /// The heavy middle, off the interface thread.
@@ -164,12 +164,12 @@ impl Retopologiser for EngineRetopologiser {
         .map_err(|e| format!("a entrega da malha foi recusada: {e}"))?;
         let triangles_before = mesh.triangle_count();
 
-        let mut relay = Relay {
-            progress,
-            cancelled,
-        };
+        // The layout, when asked for, takes the last fifth of the bar: it is
+        // quick on a retopology's few thousand faces next to the field solve.
+        let quad_share = if settings.uv.is_some() { 0.8 } else { 1.0 };
+        let mut relay = Relay::span(progress, cancelled, 0.0, quad_share);
 
-        let quads = cyberremesh::remesh(
+        let mut quads = cyberremesh::remesh(
             &mesh,
             cyberremesh::RemeshParams {
                 target_quads: settings.target_quads,
@@ -188,20 +188,105 @@ impl Retopologiser for EngineRetopologiser {
             }
         })?;
 
-        Ok(RetopoResult {
+        let mut result = RetopoResult {
             outcome: RetopoOutcome {
                 triangles_before,
                 faces: quads.face_count(),
                 triangles: quads.triangle_count(),
                 vertices: quads.vertex_count(),
+                uv: RetopoUv::NotRequested,
             },
             positions: quads.positions(),
             indices: quads.triangle_indices(),
             edges: authored_edges(&quads),
+            uvs: Vec::new(),
+            normals: Vec::new(),
             name: format!("{} · quads", source.name),
-        })
+        };
+        if let Some(uv) = settings.uv {
+            let mut relay = Relay::span(progress, cancelled, quad_share, 1.0 - quad_share);
+            lay_out_uvs(&mut quads, uv, &mut relay, &mut result)?;
+        }
+        Ok(result)
         // `quads` drops here: a mesh handle is valid for the operation it was
         // made for, and everything worth keeping has been copied out.
+    }
+}
+
+/// Lays UVs out on the retopologised quads and carries them into `result`.
+///
+/// **A layout that fails does not fail the retopology.** The quads are still
+/// what the sculptor asked for; they are placed without UVs and the outcome
+/// says why, so a refused atlas is never presented as a mesh carrying one.
+/// Only a cancellation is an error here, because the sculptor asked for the
+/// whole run to stop.
+fn lay_out_uvs(
+    quads: &mut cyberremesh::Mesh,
+    settings: UvSettings,
+    relay: &mut Relay<'_>,
+    result: &mut RetopoResult,
+) -> Result<(), String> {
+    let atlas = match cyberremesh::atlas(quads, atlas_params(settings), relay) {
+        Ok(atlas) => atlas,
+        Err(e) if cyberremesh::was_cancelled(&e) => {
+            return Err("a retopologia foi cancelada".to_string());
+        }
+        Err(e) => {
+            result.outcome.uv = RetopoUv::Failed(format!("o desdobramento foi recusado: {e}"));
+            return Ok(());
+        }
+    };
+    // Read again after the atlas rather than trusted from before it: the
+    // layout is written into this mesh, and the corner table is only
+    // meaningful against the positions it now indexes.
+    let positions = quads.positions();
+    let (offsets, corners) = quads.polygons();
+    let seamed = quads
+        .corner_uvs()
+        .and_then(|uvs| split_at_uv_seams(&positions, &offsets, &corners, &uvs));
+    let Some(seamed) = seamed else {
+        result.outcome.uv = RetopoUv::Failed(
+            "o desdobramento terminou sem coordenadas legíveis por canto".to_string(),
+        );
+        return Ok(());
+    };
+    // The welded mesh's normals, copied onto every copy of a vertex, so the
+    // seams the layout cut are not shaded into the surface.
+    let welded = claycore::area_weighted_normals(&positions, &quads.triangle_indices());
+    result.normals = seamed.welded.iter().map(|&v| welded[v as usize]).collect();
+    result.outcome.vertices = seamed.positions.len();
+    result.outcome.uv = RetopoUv::Laid(uv_outcome(&atlas));
+    result.positions = seamed.positions;
+    result.indices = seamed.indices;
+    result.edges = seamed.edges;
+    result.uvs = seamed.uvs;
+    Ok(())
+}
+
+fn atlas_params(settings: UvSettings) -> cyberremesh::AtlasParams {
+    let settings = settings.sanitized();
+    cyberremesh::AtlasParams {
+        max_chart_angle_degrees: settings.max_chart_angle_degrees,
+        pack_margin: settings.pack_margin,
+        texture_size: settings.texture_size,
+        reorient_charts: settings.reorient_charts,
+        merge_charts: settings.merge_charts,
+        max_chart_distortion: settings.max_chart_distortion,
+    }
+}
+
+fn uv_outcome(atlas: &cyberremesh::Atlas) -> UvOutcome {
+    UvOutcome {
+        charts: atlas.charts,
+        seam_edges: atlas.seam_edges,
+        max_angle_distortion: atlas.max_angle_distortion,
+        rms_angle_distortion: atlas.rms_angle_distortion,
+        flipped_charts: atlas.flipped_charts,
+        fallback_charts: atlas.fallback_charts,
+        dropped_charts: atlas.dropped_charts,
+        packed_area: atlas.packed_area,
+        packed_box_area: atlas.packed_box_area,
+        texel_density: atlas.texel_density,
     }
 }
 
@@ -282,42 +367,18 @@ impl Unwrapper for EngineUnwrapper {
         )
         .map_err(|e| format!("a entrega da malha foi recusada: {e}"))?;
 
-        let mut relay = Relay {
-            progress,
-            cancelled,
-        };
-        let atlas = cyberremesh::atlas(
-            &mut mesh,
-            cyberremesh::AtlasParams {
-                max_chart_angle_degrees: settings.max_chart_angle_degrees,
-                pack_margin: settings.pack_margin,
-                texture_size: settings.texture_size,
-                reorient_charts: settings.reorient_charts,
-                merge_charts: settings.merge_charts,
-                max_chart_distortion: settings.max_chart_distortion,
-            },
-            &mut relay,
-        )
-        .map_err(|e| {
-            if cyberremesh::was_cancelled(&e) {
-                "o desdobramento foi cancelado".to_string()
-            } else {
-                format!("o desdobramento foi recusado: {e}")
-            }
-        })?;
+        let mut relay = Relay::span(progress, cancelled, 0.0, 1.0);
+        let atlas =
+            cyberremesh::atlas(&mut mesh, atlas_params(settings), &mut relay).map_err(|e| {
+                if cyberremesh::was_cancelled(&e) {
+                    "o desdobramento foi cancelado".to_string()
+                } else {
+                    format!("o desdobramento foi recusado: {e}")
+                }
+            })?;
 
         Ok(UvResult {
-            outcome: UvOutcome {
-                charts: atlas.charts,
-                seam_edges: atlas.seam_edges,
-                max_angle_distortion: atlas.max_angle_distortion,
-                rms_angle_distortion: atlas.rms_angle_distortion,
-                flipped_charts: atlas.flipped_charts,
-                dropped_charts: atlas.dropped_charts,
-                packed_area: atlas.packed_area,
-                packed_box_area: atlas.packed_box_area,
-                texel_density: atlas.texel_density,
-            },
+            outcome: uv_outcome(&atlas),
             name: source.name.clone(),
         })
     }
@@ -331,11 +392,32 @@ impl Unwrapper for EngineUnwrapper {
 struct Relay<'a> {
     progress: &'a dyn Fn(f32, &str),
     cancelled: &'a dyn Fn() -> bool,
+    /// Where on the job's bar this stage starts, and how much of it it
+    /// covers — so a retopology followed by a layout fills one bar once
+    /// rather than twice.
+    from: f32,
+    width: f32,
+}
+
+impl<'a> Relay<'a> {
+    fn span(
+        progress: &'a dyn Fn(f32, &str),
+        cancelled: &'a dyn Fn() -> bool,
+        from: f32,
+        width: f32,
+    ) -> Self {
+        Self {
+            progress,
+            cancelled,
+            from,
+            width,
+        }
+    }
 }
 
 impl cyberremesh::Watcher for Relay<'_> {
     fn progress(&mut self, fraction: f32, stage: &str) {
-        (self.progress)(fraction, stage);
+        (self.progress)(self.from + fraction * self.width, stage);
     }
     fn cancelled(&mut self) -> bool {
         (self.cancelled)()
@@ -493,10 +575,7 @@ impl Baker for EngineBaker {
         // A bake writes into a layout, so one is made here if the caller has
         // not. Its own report is not carried up: this is the bake's business
         // and the UV panel is where a sculptor judges a layout.
-        let mut relay = Relay {
-            progress,
-            cancelled,
-        };
+        let mut relay = Relay::span(progress, cancelled, 0.0, 1.0);
         cyberremesh::atlas(&mut low, Default::default(), &mut relay)
             .map_err(|e| format!("o desdobramento para a cozedura foi recusado: {e}"))?;
 
