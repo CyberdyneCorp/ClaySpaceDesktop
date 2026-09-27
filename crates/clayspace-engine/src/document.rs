@@ -24,7 +24,7 @@ use clayspace_model::{
 
 use crate::backend::{BackendPolicy, Operation};
 use crate::grid_to_field::{FieldFromGrid, GridToField, GridToken};
-use crate::objects::{extent_of, kind_of, primitive_of, union, PlacedObject};
+use crate::objects::{clip, extent_of, kind_of, primitive_of, union, PlacedObject};
 
 /// The engine's op for a combine operation.
 ///
@@ -15778,6 +15778,76 @@ impl ClayDocument {
             .map_err(ModelError::engine)
     }
 
+    /// Writes a placed object's whole transform and says what the move changed.
+    ///
+    /// Two bounds each cover the move, and the refill is their overlap (see
+    /// [`clip`]): the node's influence bound on both sides, and — with a
+    /// uniform scale — the region `clay_layer_set_transform_bound` reports.
+    /// For an intersect operand the influence bound is the whole layer, since
+    /// an arbitrary edit to an intersect really does reach that far, while the
+    /// engine's region is the sweep of where it was and where it went, dilated
+    /// by the layer's chain pad. A drag used to refill the layer every frame
+    /// (#282). For any other op the two are the same box.
+    ///
+    /// A per-axis scale keeps the per-axis call. The ABI does not do partial
+    /// updates: each setter writes the *whole* transform, so the uniform one
+    /// applied to a stretched node would collapse it — which is why the
+    /// uniform path is taken only when the three factors are equal, where the
+    /// two calls write the same field. The engine has no narrow answer for a
+    /// squashed operand either, so the influence bounds are all there is.
+    fn write_object_transform(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        transform: clayspace_model::Transform,
+    ) -> Result<Influence, ModelError> {
+        let clayspace_model::Transform {
+            position,
+            rotation_axis,
+            rotation_angle,
+            scale,
+        } = transform;
+        // Where it was, before it stops being there. Refilling only the
+        // destination leaves the surface it used to cut still cut.
+        let before = self.node_bound(layer, node);
+        let swept = if scale[0] == scale[1] && scale[1] == scale[2] {
+            self.document
+                .set_node_transform_bound(
+                    layer,
+                    node,
+                    position,
+                    rotation_axis,
+                    rotation_angle,
+                    scale[0],
+                )
+                .map_err(ModelError::engine)?
+        } else {
+            self.document
+                .set_node_transform_nonuniform(
+                    layer,
+                    node,
+                    position,
+                    rotation_axis,
+                    rotation_angle,
+                    scale,
+                )
+                .map_err(ModelError::engine)?;
+            Influence::Everything
+        };
+        let after = self.node_bound(layer, node);
+        Ok(clip(swept, union(before, after)))
+    }
+
+    /// Refills what an engine-reported region reached: nothing, a box, or —
+    /// where no finite box exists — the layer.
+    fn refill_reached(&mut self, layer: LayerId, reached: Influence) -> Result<(), ModelError> {
+        match reached {
+            Influence::Nothing => Ok(()),
+            Influence::Box { min, max } => self.refill_region(min, max),
+            Influence::Everything => self.refill(layer, &[]),
+        }
+    }
+
     fn refill_bound(
         &mut self,
         layer: LayerId,
@@ -16099,24 +16169,18 @@ impl ClayDocument {
         item.set_blend(engine_blend(combine.blend), combine.radius)
             .map_err(ModelError::engine)?;
         item.set_mirror(mirrored).map_err(ModelError::engine)?;
+        // Built where it stands rather than added at the origin and then
+        // moved there. The two are the same slot — an item's creation
+        // position is its node transform — but the second is two engine edits
+        // with no refill between them. When the item intersects, ClayCore
+        // v0.120.1 then refills the bricks outside the move's sweep from
+        // seeds that predate the add, and the cache kept the whole
+        // un-intersected form however much of it the host dirtied (#282,
+        // CyberdyneCorp/ClayCore#665). One edit has nothing to lose.
+        item.set_position(at).map_err(ModelError::engine)?;
         let node = self
             .document
             .add_item(layer, &item)
-            .map_err(ModelError::engine)?;
-        // Placed through the node transform rather than by building the item
-        // at `at`: an item's creation position and its node transform are the
-        // same slot, so everything about where an object stands goes through
-        // one call — the one the manipulator drives.
-        //
-        // An earlier version of this comment claimed the engine mishandles
-        // undo across the two, which it does not. Checked directly: an item
-        // built at 0.9, retransformed to -0.5 and undone once comes back to
-        // 0.9. The symptom that suggested otherwise was ours — an object's
-        // position was being read from the node's influence bound, which under
-        // the layer mirror covers the reflection too and centres between the
-        // pair.
-        self.document
-            .set_node_transform(layer, node, at, [0.0, 1.0, 0.0], 0.0, 1.0)
             .map_err(ModelError::engine)?;
         Ok(node)
     }
@@ -17547,10 +17611,13 @@ impl ObjectModel for ClayDocument {
             .ok_or_else(|| self.no_objects_here())?;
         let layer = self.layer_id(id.layer)?;
         let node = self.objects[at].node;
+        let transform = clayspace_model::Transform {
+            position,
+            rotation_axis,
+            rotation_angle,
+            scale,
+        };
 
-        // Where it was, before it stops being there. Refilling only the
-        // destination leaves the surface it used to cut still cut.
-        let before = self.node_bound(layer, node);
         // Inside a gesture the group is already open and the table was already
         // recorded at its start; snapshotting per frame would key thirty
         // states to one undo depth and keep only the last.
@@ -17558,23 +17625,7 @@ impl ObjectModel for ClayDocument {
         if !gesturing {
             self.remember_objects_before();
         }
-        // The per-axis call, always — not only when the three differ. The ABI
-        // does not do partial updates: each of the two writes the *whole*
-        // transform, so the uniform one applied to a node carrying a stretch
-        // would collapse it. Using one call for both means a move can never
-        // quietly unsquash what it moves. A uniform value costs nothing: the
-        // engine says `(1, 1, 1)` and any other uniform triple keeps the field
-        // exact and compiles to identical tape.
-        self.document
-            .set_node_transform_nonuniform(
-                layer,
-                node,
-                position,
-                rotation_axis,
-                rotation_angle,
-                scale,
-            )
-            .map_err(ModelError::engine)?;
+        let reached = self.write_object_transform(layer, node, transform)?;
 
         let object = &mut self.objects[at];
         object.position = position;
@@ -17585,8 +17636,7 @@ impl ObjectModel for ClayDocument {
             self.remember_objects_after();
         }
 
-        let after = self.node_bound(layer, node);
-        self.refill_bound(layer, union(before, after))
+        self.refill_reached(layer, reached)
     }
 
     fn set_object_shape(

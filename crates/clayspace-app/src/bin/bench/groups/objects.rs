@@ -6,14 +6,14 @@
 //! whether that is affordable is the whole question of whether the feature is
 //! usable rather than merely present.
 //!
-//! It is measured twice, because one of the fourteen operations is
-//! categorically more expensive than the other thirteen. The engine drops a
-//! node's finite influence bound for "a non-local op (intersect, the spatial
-//! morphs) anywhere in the subtree", so an ordinary cube placed with
-//! `Intersect` dirties the whole layer every frame while the same cube
-//! subtracting dirties its own box. That is not a fault in this application
-//! and it is not visible from the interface, which is exactly why it is worth
-//! a figure of its own.
+//! It is measured twice, because one of the operations used to be much more
+//! expensive to drag than the others. An `Intersect` operand's influence bound
+//! is its whole layer, so a frame that refilled by that bound refilled the
+//! layer, while the same shape subtracting refilled its own box. A move
+//! changes only the sweep of where the operand was and where it went, and the
+//! frame now refills that region as the engine reports it (#282). The two
+//! figures together are what shows that it stays that way, and nothing in the
+//! interface would.
 //!
 //! `object.pick` is here for a different reason. The attributing raycast "is
 //! not the cheap path — it compiles the document, then one tape per layer and
@@ -108,7 +108,7 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
     pick(&gpu, policy, run);
 
     drag_frames(&gpu, policy, run, "object.drag_frame", Combine::Subtract);
-    // The same drag on the operation with no finite influence bound.
+    // The same drag on the operation whose influence bound is its layer.
     drag_frames(
         &gpu,
         policy,
