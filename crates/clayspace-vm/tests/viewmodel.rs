@@ -375,8 +375,14 @@ fn draw(vm: &mut SculptViewModel, points: &[[f32; 3]]) -> Result<(), ModelError>
 fn a_stroke_reaches_the_model_as_it_is_drawn() {
     // The sculptor watches the clay move under the pointer, so the gesture is
     // sent in pieces rather than held until the release. What must not change
-    // is that every sample gets there, exactly once and in order.
+    // is that every sample gets there, in order — and, since the engine lays a
+    // stamp at the start of every call, that each piece after the first
+    // starts where the next stamp is owed rather than at its own first
+    // sample.
     let (mut vm, recorded) = fixture();
+    // Unsteadied, so the samples arrive where they were drawn.
+    vm.dispatch(Command::SetBrushSmoothing(0.0))
+        .expect("smoothing");
     let path = [[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]];
     draw(&mut vm, &path).expect("stroke");
 
@@ -387,14 +393,94 @@ fn a_stroke_reaches_the_model_as_it_is_drawn() {
          visible until the pointer came up"
     );
 
-    let carried: Vec<[f32; 3]> = recorded
+    let carried: Vec<f32> = recorded
         .strokes
         .iter()
-        .flat_map(|stroke| stroke.1.iter().map(|sample| sample.position))
+        .flat_map(|stroke| stroke.1.iter().map(|sample| sample.position[0]))
         .collect();
-    assert_eq!(
-        carried, path,
-        "the segments must carry every sample once, in order"
+    assert!(
+        carried.windows(2).all(|pair| pair[0] <= pair[1]),
+        "the segments went back along the path: {carried:?}"
+    );
+    for sample in &path {
+        assert!(
+            carried.contains(&sample[0]),
+            "the sample at {} never reached the model: {carried:?}",
+            sample[0]
+        );
+    }
+    for stroke in &recorded.strokes[1..] {
+        let head = stroke.1[0].position;
+        assert!(
+            head[1] == 0.0 && head[2] == 0.0 && (0.0..=0.2).contains(&head[0]),
+            "a segment started off the path, at {head:?}"
+        );
+    }
+}
+
+#[test]
+fn a_sparse_stroke_is_stamped_along_its_whole_length() {
+    // What an agent draws: a handful of samples far apart, each one enough to
+    // send a segment. Each segment used to start at its own sample, so the
+    // engine laid one stamp there and nothing between — a chain of beads
+    // (#178). Every segment now starts where the next stamp is owed, so the
+    // stamps the segments begin with are one gap apart all the way along.
+    let (mut vm, recorded) = fixture();
+    vm.dispatch(Command::SetBrushSmoothing(0.0))
+        .expect("smoothing");
+    let path = [[0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    draw(&mut vm, &path).expect("stroke");
+
+    let recorded = recorded.borrow();
+    let heads: Vec<f32> = recorded
+        .strokes
+        .iter()
+        .map(|stroke| stroke.1[0].position[0])
+        .collect();
+    assert!(heads.len() >= 3, "segments: {heads:?}");
+    // The press is the first stamp; the next segment picks up one gap along
+    // rather than a whole sample away.
+    assert_eq!(heads[0], 0.0);
+    assert!(
+        heads[1] > 0.0 && heads[1] < 0.5,
+        "the second segment began at {}, leaving everything before it \
+         unstamped",
+        heads[1]
+    );
+}
+
+#[test]
+fn smoothing_steadies_the_whole_gesture_and_is_not_applied_twice() {
+    // The engine's lazy mouse runs per call, from the call's first sample, so
+    // on a segmented stroke it restarted at every joint and did nothing a
+    // sculptor could see. It is run over the gesture before anything is sent,
+    // and the brush the model receives no longer asks for it again.
+    let (mut vm, recorded) = fixture();
+    vm.dispatch(Command::SetBrushSmoothing(0.5))
+        .expect("smoothing");
+    let zigzag: Vec<[f32; 3]> = (0..30)
+        .map(|i| [i as f32 * 0.05, if i % 2 == 0 { 0.1 } else { -0.1 }, 0.0])
+        .collect();
+    draw(&mut vm, &zigzag).expect("stroke");
+
+    let recorded = recorded.borrow();
+    assert!(
+        recorded
+            .strokes
+            .iter()
+            .all(|stroke| stroke.3.shaping.smoothing == 0.0),
+        "the model was asked to steady a path that was already steadied"
+    );
+    let swing = recorded
+        .strokes
+        .iter()
+        .flat_map(|stroke| stroke.1.iter())
+        .skip(4)
+        .map(|sample| sample.position[1].abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        swing < 0.06,
+        "a 0.1 zigzag reached the model swinging {swing} with Suavização at 0.5"
     );
 }
 

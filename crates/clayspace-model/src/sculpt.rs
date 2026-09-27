@@ -222,6 +222,20 @@ pub trait SculptModel {
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError>;
 
+    /// How far apart, in world units, a stroke by `tool` lays its stamps on
+    /// the active subtool.
+    ///
+    /// Asked by whoever sends a gesture in segments, so the next segment can
+    /// start where the next stamp is owed rather than at its own first sample:
+    /// the engine spaces stamps from the start of each call, and a segment
+    /// that started anywhere else left a gap or a double stamp at every joint.
+    /// A document whose tools space their stamps differently says so here.
+    fn stamp_gap(&self, tool: ToolKind, brush: &BrushSettings) -> f32 {
+        let _ = tool;
+        let brush = brush.sanitized();
+        brush.spacing() * brush.size * 2.0
+    }
+
     /// The symmetry axes the active subtool is set to.
     ///
     /// Per layer rather than per document, because the mirror is: the engine

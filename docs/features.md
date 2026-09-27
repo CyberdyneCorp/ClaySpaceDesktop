@@ -348,6 +348,33 @@ brush count and the tool count differ. *Sculpting a mesh layer* has the detail.
 | Acumular | buildup against clamped accumulation | on/off |
 | Suavização | lazy-mouse lag | 0–0.95 |
 
+**Borda on a field is the width of the stamp's rim.** A mesh and a grid take the
+curve by name; a field stroke stamps an item, which has no curve, and every
+falloff used to produce the same stamp. The rim is what shapes a field dab's
+profile, so each name sets it: Dura a quarter of the region (a flat top that
+drops off short), Linear half, Suave the whole region — the stamp field strokes
+have always had — and Gaussiana one and a half (a long, low skirt).
+`field_falloff.rs` holds the four profiles apart.
+
+**Suavização steadies the stroke's path, and nothing else.** The dabs trail the
+pointer by a first-order lag; it does not relax the surface. The engine runs
+that lag per call, from the call's first sample, and a live stroke is sent in
+segments about three stamps long — so the trailing point restarted at every
+joint and the control did nothing a sculptor could see. The ViewModel now
+steadies the whole gesture itself, with the engine's own lag, and sends the
+brush with the lag at zero. A drag is not steadied: it is measured to the
+pointer.
+
+**A stroke is stamped the same however sparsely it was sampled.** The engine
+lays a stamp at the start of every call and spaces the rest by arc length from
+there, so each segment after the first starts exactly where the next stamp is
+owed, one gap past the last stamp — the gap the document reports for that tool,
+since the named field brushes scale Fluxo's spacing. Segments used to start at
+their own first new sample: a pointer's dense samples hid the gap, but an agent's
+few far-apart samples each sent a one-sample segment and the stroke came out as
+a chain of blobs. `stroke_continuity.rs` holds a nine-sample stroke to within 80%
+of a dense one along its whole length.
+
 **Grão** is the engine's `stamp_azimuth`, and it is what makes a rake, a
 chisel, clay strips and a turned stamp one number rather than four brushes. It
 is observable only where the footprint has something to orient: a round brush
@@ -1205,6 +1232,16 @@ Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
 1.16, **Para dentro** leaves the outside at 1.000 and builds inward, and
 **Centrado** reaches 1.1015 — half the thickness above the surface, which is
 what half each way means.
+
+**A wall is no taller than the mask reaches off the surface.** The engine keeps
+the part of the shell that lies *inside the mask's own volume*, and a mask
+painted on a surface is a thin volume around it — a dab's ball, or an outline's
+prism swept to just past the form. Past that the thickness is not honoured:
+measured on the unit sphere with an outline mask, 0.05 gives a 0.05 wall and 0.1
+a 0.1 wall, but 0.3 and 0.6 both stop at about 0.11, with a top that follows the
+dabs the outline was painted with. That is the engine's to fix — the region has
+to be read where a point projects onto the surface rather than where it is —
+and is filed as CyberdyneCorp/ClayCore#660.
 
 **Extrudar needs something to sample.** `clay_document_mask_extrude` samples a
 *layer's field*, and a grid has a verb of its own that works from its cells

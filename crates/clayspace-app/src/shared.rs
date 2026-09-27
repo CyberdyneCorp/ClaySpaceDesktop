@@ -151,6 +151,10 @@ impl SculptModel for SharedDocument {
         self.document.borrow_mut().apply_operation(operation)
     }
 
+    fn stamp_gap(&self, tool: clayspace_model::ToolKind, brush: &BrushSettings) -> f32 {
+        self.document.borrow().stamp_gap(tool, brush)
+    }
+
     fn symmetry(&self) -> [bool; 3] {
         self.document.borrow().symmetry()
     }
