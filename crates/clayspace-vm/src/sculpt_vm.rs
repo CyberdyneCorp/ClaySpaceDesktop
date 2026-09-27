@@ -5,11 +5,12 @@
 //! exercised in a test with no window and no GPU.
 
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, Representation,
-    SceneStats, SculptModel, ToolKind, ViewPresetKind,
+    BrushSettings, EditOutcome, HistoryState, ModelError, Representation, SceneStats, SculptModel,
+    ToolKind, ViewPresetKind,
 };
 
 use crate::command::{Axis, Command};
+use crate::stroke_path::ActiveStroke;
 
 /// What the status line says when a layer change forced a different tool.
 ///
@@ -18,24 +19,6 @@ use crate::command::{Axis, Command};
 /// an engine refusal, which is already English and already flows through.
 pub const TOOL_SUBSTITUTED: &str = "tool-substituted";
 use crate::observable::Observable;
-
-/// A stroke being drawn.
-#[derive(Debug, Default)]
-struct ActiveStroke {
-    samples: Vec<GestureSample>,
-    /// Wall-clock is not available here, so time advances by sample index.
-    /// The engine uses it only for ordering and taper.
-    next_time: f32,
-    /// How many samples have already been sent to the model.
-    ///
-    /// A gesture is applied as it is drawn rather than on release, so the
-    /// sculptor watches the clay move under the pointer. This marks the
-    /// boundary between what the document already has and what is still only
-    /// a pointer path.
-    applied: usize,
-    /// Arc length travelled since the last segment was sent.
-    travelled: f32,
-}
 
 /// What the last completed operation did, for the status area.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -641,7 +624,7 @@ impl SculptViewModel {
                 // lay the whole gesture down again from its anchor — instead of
                 // stacking segment on segment.
                 self.model.begin_gesture();
-                let mut stroke = ActiveStroke::default();
+                let mut stroke = ActiveStroke::new(self.steadying(tool));
                 stroke.push(position, pressure);
                 self.stroke = Some(stroke);
                 // The first dab lands on the press rather than on the first
@@ -656,16 +639,15 @@ impl SculptViewModel {
                 // Asked before the stroke is borrowed: it reads the model, and
                 // the borrow below is exclusive.
                 let whole = self.holds_the_whole_gesture(tool);
-                let stamps = self.stamps_between_segments(tool);
+                let threshold = self.segment_threshold(tool);
                 let Some(stroke) = self.stroke.as_mut() else {
                     return Ok(());
                 };
                 stroke.push(position, pressure);
-                let brush = *self.brush.get();
                 // A region tool is applied once, when the gesture is complete.
                 // Segmenting it stacks a replacement per segment and the
                 // result crumbles.
-                if !whole && stroke.segment_is_worth_applying(&brush, stamps) {
+                if !whole && stroke.has_travelled(threshold) {
                     return self.apply_segment();
                 }
             }
@@ -982,11 +964,42 @@ impl SculptViewModel {
     }
 
     /// The brush this stroke is actually using.
+    ///
+    /// Without its Suavização: the stroke is steadied here, over the whole
+    /// gesture, before any of it is sent — see [`ActiveStroke`]. Left on the
+    /// brush, the engine would steady every segment again from its own start.
     fn stroking_brush(&self) -> BrushSettings {
+        let brush = *self.brush.get();
         BrushSettings {
             invert: self.modifiers.invert,
-            ..*self.brush.get()
+            shaping: clayspace_model::Shaping {
+                smoothing: 0.0,
+                ..brush.shaping
+            },
+            ..brush
         }
+    }
+
+    /// How far the pointer lags behind the stroke it lays down.
+    ///
+    /// The brush's Suavização for a verb that stamps. None for one that drags:
+    /// a drag is the displacement from where it was pressed to where the
+    /// pointer is, and a lagged one would never reach the pointer.
+    fn steadying(&self, tool: ToolKind) -> f32 {
+        if tool.is_path_driven() {
+            return 0.0;
+        }
+        self.brush.get().sanitized().shaping.smoothing
+    }
+
+    /// How far a stroke travels before the next segment is sent — zero for a
+    /// replayed one, which is sent on every move.
+    fn segment_threshold(&self, tool: ToolKind) -> f32 {
+        let stamps = self.stamps_between_segments(tool);
+        if stamps <= 0.0 {
+            return 0.0;
+        }
+        self.model.stamp_gap(tool, self.brush.get()) * stamps
     }
 
     /// Whether a segment carries the gesture from its anchor rather than only
@@ -1053,31 +1066,43 @@ impl SculptViewModel {
     /// The stroke stays open: this is a piece of it, not the end of it.
     fn apply_segment(&mut self) -> Result<(), ModelError> {
         let tool = self.stroking_tool();
-        // Asked before the stroke is borrowed: it reads the model.
+        let brush = self.stroking_brush();
+        // Asked before the stroke is borrowed: they read the model.
         let replay = self.replays_from_the_anchor(tool);
+        let gap = self.model.stamp_gap(tool, &brush);
         let Some(stroke) = self.stroke.as_ref() else {
             return Ok(());
         };
-        let pending = if replay {
-            stroke.whole()
+        let segment = if replay {
+            stroke.whole().to_vec()
+        } else if tool.is_path_driven() {
+            stroke.since_last_sent().to_vec()
         } else {
-            stroke.pending(tool)
+            // Nothing owed yet: the path has not reached the next stamp.
+            let Some(segment) = stroke.stamping_segment(gap) else {
+                return Ok(());
+            };
+            segment
         };
         // One sample is a whole instruction for a stamping tool and none at
         // all for a dragging one, which needs a start and an end.
         let enough = if tool.is_path_driven() { 2 } else { 1 };
-        if pending.len() < enough {
+        if segment.len() < enough {
             return Ok(());
         }
-        let outcome =
-            self.model
-                .apply_stroke(tool, self.stroking_brush(), pending, *self.symmetry.get());
+        let outcome = self
+            .model
+            .apply_stroke(tool, brush, &segment, *self.symmetry.get());
 
         // Marked applied whether or not the engine accepted them. Re-sending a
         // segment the engine already refused would refuse again every frame,
         // and re-sending one it accepted would deposit it twice.
         if let Some(stroke) = self.stroke.as_mut() {
-            stroke.mark_applied();
+            if tool.is_path_driven() {
+                stroke.mark_applied();
+            } else {
+                stroke.mark_stamped(&segment, gap);
+            }
         }
 
         self.record(tool, outcome?);
@@ -1348,85 +1373,6 @@ impl SculptViewModel {
     }
 }
 
-impl ActiveStroke {
-    fn push(&mut self, position: [f32; 3], pressure: f32) {
-        if let Some(previous) = self.samples.last() {
-            let step = (0..3)
-                .map(|axis| {
-                    let d = position[axis] - previous.position[axis];
-                    d * d
-                })
-                .sum::<f32>()
-                .sqrt();
-            self.travelled += step;
-        }
-        self.samples.push(GestureSample {
-            position,
-            pressure: pressure.clamp(0.0, 1.0),
-            time: self.next_time,
-        });
-        // A nominal step. Spacing follows arc length in the engine, so this
-        // only orders the samples and drives taper.
-        self.next_time += 0.008;
-    }
-
-    /// Whether enough of the path is unapplied to be worth sending.
-    ///
-    /// Paced by the brush's own stamp spacing rather than by sample count or
-    /// by a timer. A segment shorter than one stamp gap gives the engine's
-    /// stroke engine nothing to space out, and it would deposit at the
-    /// segment's start regardless — so a fast machine would lay down more
-    /// material than a slow one for the same gesture. Pacing by distance makes
-    /// the result depend on the path, which is the only thing the sculptor
-    /// controls.
-    /// Whether enough of the gesture has happened to be worth sending.
-    ///
-    /// A stamping segment costs a re-mesh of everything it touched, so it
-    /// waits for three stamps' worth of travel — sending one per pointer move
-    /// would re-mesh the same neighbourhood over and over.
-    ///
-    /// A *replayed* one costs a revert and a single stamp, and does not grow
-    /// with the gesture: the whole drag is laid down from its anchor every
-    /// time, so the work is the same on the first segment and the fortieth.
-    /// It waits for nothing, because waiting is exactly what a sculptor sees.
-    /// At the default flow and a brush of 0.858 the stamping threshold is 1.03
-    /// world units — most of the way across a unit sphere — so a drag reached
-    /// its end before a single segment fired and the surface only moved when
-    /// the pointer came up.
-    fn segment_is_worth_applying(&self, brush: &BrushSettings, stamps: f32) -> bool {
-        if self.applied >= self.samples.len() {
-            return false;
-        }
-        stamps <= 0.0 || self.travelled >= stamp_gap(brush) * stamps
-    }
-
-    /// The samples not yet sent.
-    ///
-    /// A dragging tool also gets the last sample it was already sent, because
-    /// a displacement needs somewhere to start from — see
-    /// [`ToolKind::is_path_driven`]. Re-sending it costs nothing there: the
-    /// tool moves the surface from that point, it does not deposit at it.
-    fn pending(&self, tool: ToolKind) -> &[GestureSample] {
-        let applied = self.applied.min(self.samples.len());
-        let from = if tool.is_path_driven() {
-            applied.saturating_sub(1)
-        } else {
-            applied
-        };
-        &self.samples[from..]
-    }
-
-    /// Every sample since the press, which is what a replayed gesture needs.
-    fn whole(&self) -> &[GestureSample] {
-        &self.samples
-    }
-
-    fn mark_applied(&mut self) {
-        self.applied = self.samples.len();
-        self.travelled = 0.0;
-    }
-}
-
 /// How many stamps' worth of path each segment carries.
 ///
 /// One was tried, on the reasoning that the smallest segment gives the most
@@ -1439,16 +1385,3 @@ impl ActiveStroke {
 /// re-meshes by the same factor. It is still far below what an eye reads as
 /// lag.
 const STAMPS_PER_SEGMENT: f32 = 3.0;
-
-/// How far the brush travels between stamps, in world units.
-///
-/// Mirrors the engine adapter's mapping of flow onto stroke spacing — flow is
-/// spacing, and spacing is a fraction of the footprint's diameter. Kept in the
-/// ViewModel because pacing is a matter of when to talk to the model, which is
-/// the ViewModel's business, but it has to agree with what the model does or
-/// the segments will not line up with the stamps.
-fn stamp_gap(brush: &BrushSettings) -> f32 {
-    let brush = brush.sanitized();
-    let spacing = (1.0 - brush.flow).clamp(0.05, 0.9);
-    (spacing * brush.size * 2.0).max(1e-4)
-}

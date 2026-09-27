@@ -3850,7 +3850,7 @@ impl ClayDocument {
         StrokePreset {
             radius: brush.size,
             // Flow is spacing: more flow means stamps closer together.
-            spacing: (1.0 - brush.flow).clamp(0.05, 0.9),
+            spacing: brush.spacing(),
             strength: brush.intensity,
             // The design's Ruído, Suavização and Acumular, each landing on the
             // preset field the engine already has for it.
@@ -4345,7 +4345,14 @@ impl ClayDocument {
         // all. Measured, going from zero to the brush radius tripled the
         // displacement — leaving it at zero was throwing away most of the
         // brush as well as its soft edge.
-        stamp.set_rounding(region).map_err(ModelError::engine)?;
+        //
+        // It is also the only thing on a field that Borda can reach: a field
+        // stroke stamps an item, and an item has no falloff curve of its own.
+        // So the curve is spent as the rim's width, which is what shapes the
+        // profile — see `field_rim`.
+        stamp
+            .set_rounding(region * field_rim(brush.shaping.falloff))
+            .map_err(ModelError::engine)?;
         // Every stamp is a copy of this template, so the stroke's symmetry is
         // decided here, once, and stays with the items it made — see
         // `takes_part_in_the_mirror`.
@@ -10154,6 +10161,19 @@ impl SculptModel for ClayDocument {
         self.active_layer().symmetry
     }
 
+    fn stamp_gap(&self, tool: ToolKind, brush: &BrushSettings) -> f32 {
+        let brush = brush.sanitized();
+        // A named field brush scales the spacing Fluxo asked for — see
+        // `SdfRecipe::spacing` — and the gap has to be the one its stroke is
+        // actually laid down at, or a segmented stroke is spaced by the wrong
+        // ruler at every joint.
+        let named = match self.active_representation() {
+            Representation::Sdf => sdf_recipe(tool).map_or(1.0, |recipe| recipe.spacing),
+            _ => 1.0,
+        };
+        (brush.spacing() * named).clamp(0.05, 0.9) * brush.size * 2.0
+    }
+
     fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
         // Recorded, not written. The engine's mirror is pointed by the stroke
         // that uses it — see `point_the_mirror` and the note on `Layer::mirror`
@@ -11164,6 +11184,32 @@ struct SdfRecipe {
 /// of every mirror the layer is given afterwards.
 fn takes_part_in_the_mirror(symmetry: [bool; 3]) -> bool {
     symmetry.contains(&true)
+}
+
+/// How wide a field stamp's rim is, as a fraction of its region — Borda on a
+/// field.
+///
+/// A mesh and a grid take the falloff curve by name; a field stroke stamps an
+/// item, which has none, so every setting used to produce the same stamp. The
+/// rim's width is what does shape the profile, measured with a single Padrão
+/// dab of size 0.18 on the starting sphere:
+///
+/// | Borda | rim | peak | profile |
+/// |---|---|---|---|
+/// | Dura | 0.25 | 0.050 | a flat top that drops off inside 0.075 rad |
+/// | Linear | 0.5 | 0.055 | a steady slope out to 0.1 rad |
+/// | Suave | 1.0 | 0.085 | a dome out to 0.1 rad — the stamp as it always was |
+/// | Gaussiana | 1.5 | 0.105 | a long, low skirt out to 0.15 rad |
+///
+/// Suave is the default and keeps the rim every field stroke was tuned
+/// against, so the measurements the named brushes rest on still hold.
+fn field_rim(falloff: clayspace_model::Falloff) -> f32 {
+    match falloff {
+        clayspace_model::Falloff::Constant => 0.25,
+        clayspace_model::Falloff::Linear => 0.5,
+        clayspace_model::Falloff::Smooth => 1.0,
+        clayspace_model::Falloff::Gaussian => 1.5,
+    }
 }
 
 fn sdf_recipe(tool: ToolKind) -> Option<SdfRecipe> {
