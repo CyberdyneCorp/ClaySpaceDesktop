@@ -21,6 +21,14 @@ that showed what used to be true.
 - **V9.** `grid-brush-radius` was complete but for re-recording the benchmark
   baseline, which #288 did on the runners (`voxel-reference` r3 on both
   platforms). It is archived alongside this change.
+- **I16.** Re-measured at ClayCore v0.120.1 rather than fixed: the undo
+  difference the audit saw is gone. A stroke undone through the application's
+  own sync-and-settle path draws the frame from before it, on the starting form
+  and across a smooth seam with a sibling placed after the form (the bound
+  ClayCore #650 fixed). The two cases are now visual regression tests; no
+  application change was needed, so no display defect is left to class. A
+  residual on short chains or squashed placements would belong to ClayCore
+  #649, not here.
 
 ## What Changes
 
@@ -58,10 +66,10 @@ that showed what used to be true.
 - `crates/clayspace-model/src/gizmo.rs`, `crates/clayspace-engine/src/document.rs`
 - `crates/clayspace-view/src/shell/workspace.rs`, `crates/clayspace-view/src/shell/left.rs`
 - Tests: `clayspace-vm/tests/viewmodel.rs`, `clayspace-engine/tests/objects.rs`,
-  the `clayspace-model` gizmo unit tests, `clayspace-app/tests/visual_shell.rs`.
+  the `clayspace-model` gizmo unit tests, `clayspace-app/tests/visual_shell.rs`,
+  `clayspace-app/tests/visual_incremental.rs` (I16).
 
 Not in this change, and still open on #196: D14 (first gizmo drag after
-`set_mode`), I14 (`set_grid_display` with no grid layer), I16 (the undo pixel
-difference, to be re-measured at v0.120.1 against ClayCore #649) and D9 (a
-curve on a stretched subtool). Each needs a profile or a reproduction in the
-running application.
+`set_mode`), I14 (`set_grid_display` with no grid layer) and D9 (a curve on a
+stretched subtool). Each needs a profile or a reproduction in the running
+application.

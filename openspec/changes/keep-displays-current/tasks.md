@@ -25,3 +25,9 @@
 ## 4. Housekeeping
 
 - [x] 4.1 Archive `grid-brush-radius` (V9), whose last task #288 completed
+
+## 5. Undo against the frame it took back (I16)
+
+- [x] 5.1 Re-measure at v0.120.1: a stroke undone through sync and settle draws
+      the frame before it, on the starting form and across a smooth seam
+      (`clayspace-app/tests/visual_incremental.rs`)
