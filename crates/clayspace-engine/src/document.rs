@@ -24,7 +24,7 @@ use clayspace_model::{
 
 use crate::backend::{BackendPolicy, Operation};
 use crate::grid_to_field::{FieldFromGrid, GridToField, GridToken};
-use crate::objects::{extent_of, kind_of, primitive_of, union, PlacedObject};
+use crate::objects::{clip, extent_of, kind_of, primitive_of, union, PlacedObject};
 
 /// The engine's op for a combine operation.
 ///
@@ -15780,21 +15780,21 @@ impl ClayDocument {
 
     /// Writes a placed object's whole transform and says what the move changed.
     ///
-    /// A uniform scale goes through `clay_layer_set_transform_bound`, which
-    /// reports where *this move* changed the surface. For an intersect operand
-    /// that is the swept union of its two places rather than the whole layer —
-    /// the layer is what `node_bound` answers, because an arbitrary edit to an
-    /// intersect really does reach that far — and a drag that refilled the
-    /// layer every frame refills the sweep (#282). For any other op the engine
-    /// reports the same before/after union the influence query would.
+    /// Two bounds each cover the move, and the refill is their overlap (see
+    /// [`clip`]): the node's influence bound on both sides, and — with a
+    /// uniform scale — the region `clay_layer_set_transform_bound` reports.
+    /// For an intersect operand the influence bound is the whole layer, since
+    /// an arbitrary edit to an intersect really does reach that far, while the
+    /// engine's region is the sweep of where it was and where it went, dilated
+    /// by the layer's chain pad. A drag used to refill the layer every frame
+    /// (#282). For any other op the two are the same box.
     ///
     /// A per-axis scale keeps the per-axis call. The ABI does not do partial
     /// updates: each setter writes the *whole* transform, so the uniform one
     /// applied to a stretched node would collapse it — which is why the
     /// uniform path is taken only when the three factors are equal, where the
-    /// two calls write the same field. The engine has no fast path for a
-    /// squashed operand either, so this side loses nothing by asking the
-    /// influence bound on both sides.
+    /// two calls write the same field. The engine has no narrow answer for a
+    /// squashed operand either, so the influence bounds are all there is.
     fn write_object_transform(
         &mut self,
         layer: LayerId,
@@ -15807,9 +15807,11 @@ impl ClayDocument {
             rotation_angle,
             scale,
         } = transform;
-        if scale[0] == scale[1] && scale[1] == scale[2] {
-            return self
-                .document
+        // Where it was, before it stops being there. Refilling only the
+        // destination leaves the surface it used to cut still cut.
+        let before = self.node_bound(layer, node);
+        let swept = if scale[0] == scale[1] && scale[1] == scale[2] {
+            self.document
                 .set_node_transform_bound(
                     layer,
                     node,
@@ -15818,26 +15820,22 @@ impl ClayDocument {
                     rotation_angle,
                     scale[0],
                 )
-                .map_err(ModelError::engine);
-        }
-        // Where it was, before it stops being there. Refilling only the
-        // destination leaves the surface it used to cut still cut.
-        let before = self.node_bound(layer, node);
-        self.document
-            .set_node_transform_nonuniform(
-                layer,
-                node,
-                position,
-                rotation_axis,
-                rotation_angle,
-                scale,
-            )
-            .map_err(ModelError::engine)?;
+                .map_err(ModelError::engine)?
+        } else {
+            self.document
+                .set_node_transform_nonuniform(
+                    layer,
+                    node,
+                    position,
+                    rotation_axis,
+                    rotation_angle,
+                    scale,
+                )
+                .map_err(ModelError::engine)?;
+            Influence::Everything
+        };
         let after = self.node_bound(layer, node);
-        Ok(match union(before, after) {
-            Some((min, max)) => Influence::Box { min, max },
-            None => Influence::Everything,
-        })
+        Ok(clip(swept, union(before, after)))
     }
 
     /// Refills what an engine-reported region reached: nothing, a box, or —
