@@ -249,6 +249,13 @@ pub enum Command {
 
     // -- scene and layers -------------------------------------------------
     SelectLayer(LayerKey),
+    /// Makes a layer the active one, saying beforehand what becomes of a cage
+    /// left standing on the one that is active now.
+    ///
+    /// `SelectLayer` asks the person at the window when a dragged cage stands,
+    /// and a question only a person can answer is one an agent cannot get
+    /// past. This is the same switch with the answer given up front.
+    SelectLayerSettlingCage(LayerKey, CageFate),
     SetLayerVisible(LayerKey, bool),
     /// Shows one subtool alone, or releases the solo with `None`.
     ///
@@ -304,7 +311,13 @@ pub enum Command {
     OpenRecent(PathBuf),
     Save,
     SaveAs,
+    /// Writes the document to a named path and makes it the document's own —
+    /// what `SaveAs` does once its panel has been answered.
+    SaveTo(PathBuf),
     Quit,
+    /// Answers the offer to bring back what a session that did not close left
+    /// behind: `true` recovers it, `false` discards it.
+    AnswerRecovery(bool),
     /// Shows or hides the import and export panels.
     ToggleImport,
     ToggleExport,
@@ -392,6 +405,12 @@ pub enum Command {
     RunImport,
     /// Asks for a file and writes it with the settings as they stand.
     RunExport,
+    /// Brings a named file in with the settings as they stand — what
+    /// `RunImport` does once its panel has been answered.
+    ImportFrom(PathBuf),
+    /// Writes a named file with the settings as they stand — what `RunExport`
+    /// does once its panel has been answered.
+    ExportTo(PathBuf),
 
     // -- armatures --------------------------------------------------------
     /// Starts a rig on the active layer, replacing whatever it had.
@@ -566,7 +585,9 @@ impl Command {
                 | Self::OpenRecent(_)
                 | Self::Save
                 | Self::SaveAs
+                | Self::SaveTo(_)
                 | Self::Quit
+                | Self::AnswerRecovery(_)
                 | Self::ToggleImport
                 | Self::ToggleExport
                 | Self::ToggleConvert
@@ -692,6 +713,8 @@ impl Command {
                 // edit path as well would double the entry.
                 | Self::RunImport
                 | Self::RunExport
+                | Self::ImportFrom(_)
+                | Self::ExportTo(_)
                 | Self::SelectTool(_)
                 | Self::SetBrushSize(_)
                 | Self::SetBrushIntensity(_)
@@ -729,6 +752,7 @@ impl Command {
                 // document; changing that layer does. Entering rigging is the
                 // same: it changes what the pointer means, not the surface.
                 | Self::SelectLayer(_)
+                | Self::SelectLayerSettlingCage(..)
                 // Solo is a way of looking at the scene. It writes visibility
                 // and the engine journals that, but the document is the
                 // sculpture and this changed none of it — a title bar saying
@@ -767,6 +791,7 @@ impl Command {
                 self,
                 Self::RunConversion
                     | Self::RunImport
+                    | Self::ImportFrom(_)
                     | Self::InsertMesh
                     | Self::CommitRenameLayer
                     | Self::SculptLayer(_)
@@ -907,7 +932,7 @@ impl Command {
             Self::SetReferenceSettings(..) => "reference placement",
             Self::SetSurfaceOpacity(_) => "surface opacity",
             Self::SetBrushSmoothing(_) => "brush smoothing",
-            Self::SelectLayer(_) => "select layer",
+            Self::SelectLayer(_) | Self::SelectLayerSettlingCage(..) => "select layer",
             Self::SetLayerVisible(..) => "layer visibility",
             Self::SoloLayer(_) => "solo layer",
             Self::AddLayer(_) => "new layer",
@@ -959,7 +984,9 @@ impl Command {
             Self::OpenRecent(_) => "open recent",
             Self::Save => "save",
             Self::SaveAs => "save as",
+            Self::SaveTo(_) => "save as",
             Self::Quit => "quit",
+            Self::AnswerRecovery(_) => "recover work",
             Self::ToggleImport => "import panel",
             Self::ToggleExport => "export panel",
             Self::SetImportSettings(_) => "import settings",
@@ -980,6 +1007,8 @@ impl Command {
             Self::RunConversion => "convert",
             Self::RunImport => "import",
             Self::RunExport => "export",
+            Self::ImportFrom(_) => "import",
+            Self::ExportTo(_) => "export",
             Self::NextDisplayUnit => "display unit",
             Self::SetLocale(_) => "idioma",
             Self::SetVoxelDisplay(..) => "exibição de voxels",
@@ -992,6 +1021,15 @@ impl Command {
             Self::ExportProfile => "exportar perfil",
         }
     }
+}
+
+/// What becomes of a dragged cage when the active layer changes under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CageFate {
+    /// The cage's deformation is applied to the layer it stands on.
+    Apply,
+    /// The cage is taken down and its drags are dropped.
+    Discard,
 }
 
 /// A symmetry axis.
@@ -1127,6 +1165,26 @@ mod tests {
             "the import marks the document on the composition root's own path; \
              counting it here would double the entry"
         );
+    }
+
+    /// A path given up front is the panel's answer, so each path command is
+    /// classified exactly as the panel command it stands in for.
+    #[test]
+    fn a_path_command_is_classified_as_its_panel_command() {
+        let path = std::path::PathBuf::from("/tmp/a");
+        for (named, panel) in [
+            (Command::SaveTo(path.clone()), Command::SaveAs),
+            (Command::ImportFrom(path.clone()), Command::RunImport),
+            (Command::ExportTo(path), Command::RunExport),
+        ] {
+            assert_eq!(named.touches_document(), panel.touches_document());
+            assert_eq!(named.changes_the_document(), panel.changes_the_document());
+            assert_eq!(named.label(), panel.label());
+        }
+        let key = clayspace_model::LayerKey(2);
+        let settled = Command::SelectLayerSettlingCage(key, CageFate::Apply);
+        assert!(!settled.touches_document());
+        assert_eq!(settled.label(), Command::SelectLayer(key).label());
     }
 
     /// Resolving a boolean is an edit; choosing what one would do is not.

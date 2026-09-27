@@ -4596,6 +4596,29 @@ in the session store and can be undone by editing `agente.consentimentos`.
 Nobody answering it refuses it after a bound rather than holding the connection
 open on an unattended machine.
 
+The bound is inside the call's own: eight seconds of waiting against a
+ten-second call, so a client is told before it gives up. It used to be twenty,
+and a person agreeing at second twelve agreed to a call nobody was waiting on.
+The ask stays up when the wait ends, and the retry picks up the answer.
+
+A gated operation takes its path rather than opening a file panel after
+consent: `document.save_as`, `document.open`, `exchange.run_import` and
+`exchange.run_export` each take `path`, and the person sees that path in the
+ask. The panel versions stay on the pointer path. Nothing the door does opens a
+native dialog, because a dialog holds the thread that serves the door and asks
+a question the caller cannot answer. Where the pointer's path would stop to
+ask, the door refuses and names the call that answers up front: a document
+never saved has no path for `document.save`, so `save_as` names one; opening or
+quitting over unsaved work is refused, and `document.new` is the route gated on
+discarding it; switching layers away from a dragged cage takes `cage: "apply"`
+or `"discard"` on `layer.select`.
+
+The crash-recovery offer is a window in the application, not an alert. The
+alert came up before the first frame and held the interface thread until
+somebody dismissed it, and every agent call timed out meanwhile. Nothing is
+autosaved over the file on offer while it stands, and an offer nobody answered
+is made again next time rather than cleared by a clean quit.
+
 Everything the edit history can bring back is ungated — sculpting, masking,
 transforming, selecting, navigating, undoing. That is what the session is for.
 

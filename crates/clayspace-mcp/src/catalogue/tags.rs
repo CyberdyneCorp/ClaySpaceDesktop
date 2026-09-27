@@ -18,7 +18,7 @@ use clayspace_model::{
     ExportMesher, ExtrudeSide, Falloff, GizmoMode, ImportAs, InsertAs, Locale, MaskGesture,
     QuadMethod, RefPlane, Representation, Shape, ToolKind, ViewPresetKind, VoxelDisplay,
 };
-use clayspace_vm::Axis;
+use clayspace_vm::{Axis, CageFate};
 
 /// The tag of a value, found by walking the table it is in.
 pub fn tag_of<T: PartialEq + Copy>(table: &[(&'static str, T)], value: T) -> &'static str {
@@ -195,6 +195,10 @@ pub const EXTRUDE_SIDES: &[(&str, ExtrudeSide)] = &[
 pub const DEFORM_VERBS: &[(&str, DeformVerb)] =
     &[("taper", DeformVerb::Taper), ("twist", DeformVerb::Twist)];
 
+/// What becomes of a dragged cage when `layer.select` moves away from it.
+pub const CAGE_FATES: &[(&str, CageFate)] =
+    &[("apply", CageFate::Apply), ("discard", CageFate::Discard)];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +229,7 @@ mod tests {
         assert!(distinct(MESHERS));
         assert!(distinct(EXTRUDE_SIDES));
         assert!(distinct(DEFORM_VERBS));
+        assert!(distinct(CAGE_FATES));
         assert!(distinct(&tools()));
         assert!(distinct(&shapes()));
         assert!(distinct(&combines()));

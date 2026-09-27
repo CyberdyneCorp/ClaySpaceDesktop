@@ -34,8 +34,8 @@ use clayspace_view::{
     SurfaceLoss, Vertex, ViewPreset, ViewportProfile, WindowSurface,
 };
 use clayspace_vm::{
-    AgentAnswer, AgentAsk, AgentViewModel, ArmatureViewModel, Axis, BooleanViewModel, Command,
-    CommandQueue, CurveViewModel, DocumentViewModel, Door, Grab, Guard, LatticeViewModel,
+    AgentAnswer, AgentAsk, AgentViewModel, ArmatureViewModel, Axis, BooleanViewModel, CageFate,
+    Command, CommandQueue, CurveViewModel, DocumentViewModel, Door, Grab, Guard, LatticeViewModel,
     MaskViewModel, ObjectViewModel, Observable, ReferenceViewModel, SceneViewModel,
     SculptViewModel, UNTITLED,
 };
@@ -54,8 +54,6 @@ fn main() {
             return;
         }
     };
-    report(&policy);
-
     let mut document =
         match ClayDocument::new(policy.clone()).and_then(ClayDocument::with_starting_form) {
             Ok(document) => document,
@@ -81,16 +79,8 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App::new(SharedDocument::new(document), policy);
     app.open_the_door(event_loop.create_proxy());
+    print!("{}", app.startup_report());
     event_loop.run_app(&mut app).expect("run the application");
-}
-
-/// The same report the diagnostics window shows, on the way up.
-///
-/// Printed from the one value rather than assembled again here: a startup
-/// banner that drifts from the panel is worse than no banner, because the two
-/// disagree in a bug report.
-fn report(policy: &BackendPolicy) {
-    print!("{}", policy.diagnostics().to_report());
 }
 
 /// Half a frame, which is what a refill may spend on the interface thread
@@ -663,6 +653,13 @@ struct App {
     /// [`Session::apply`] — which is where a refused stroke used to be
     /// reported as a success.
     sculpt_refusal: Option<ModelError>,
+    /// Whether the command being handled came through the agent door.
+    ///
+    /// Set for the length of one `Session::apply` and read by the few paths
+    /// that would otherwise put a native dialog in front of the person: a
+    /// dialog blocks the interface thread, which is the thread that serves
+    /// the door, and it asks a question the caller cannot answer.
+    answering_agent: bool,
     /// Why the last operation the composition root ran *itself* was refused.
     ///
     /// A handful of operations belong to no ViewModel — a repair, a crossing,
@@ -928,6 +925,7 @@ impl App {
             agent_proxy: None,
             agent_gesture: AgentGesture::default(),
             sculpt_refusal: None,
+            answering_agent: false,
             operation_refusal: clayspace_vm::Observable::new(None),
             operation_remark: clayspace_vm::Observable::new(None),
             repair_outcome: None,
@@ -965,7 +963,6 @@ impl App {
                     eprintln!("{}: {e}", self.strings.log_door_publish);
                 }
                 let handle = server.serve();
-                println!("agent: {}", handle.url());
                 self.agent.listening(Door {
                     listening: true,
                     url: handle.url(),
@@ -1504,10 +1501,17 @@ impl App {
     }
 
     /// Saves, asking for a path when there is not one yet.
+    ///
+    /// Never asks while answering the door. An agent names its path with
+    /// `document.save_as`, and a `document.save` of a document that has never
+    /// been saved is refused before it reaches here; this is the second line,
+    /// so a panel cannot open on the person's screen for a call nobody at the
+    /// window made.
     fn save(&mut self, ask_for_path: bool) {
         let known = self.document_vm.path().get().clone();
         let path = match (known, ask_for_path) {
             (Some(path), false) => Some(path),
+            _ if self.answering_agent => None,
             _ => rfd::FileDialog::new()
                 .set_title(self.strings.dialog_save_sculpt)
                 .add_filter("ClaySpace", &["clayspace"])
@@ -1517,9 +1521,18 @@ impl App {
         let Some(path) = path else {
             return; // Cancelled. Not a failure, and nothing to report.
         };
-        match self.document_vm.save_as(&path) {
+        self.save_to(&path);
+    }
+
+    /// Writes the document to a path it then belongs to.
+    ///
+    /// What the panel leads to, and what `document.save_as` reaches without
+    /// one. A failure is on the document's notice, which is a channel the door
+    /// reads, so an agent is told the write failed rather than that it ran.
+    fn save_to(&mut self, path: &std::path::Path) {
+        match self.document_vm.save_as(path) {
             Ok(()) => {
-                self.remember(&path);
+                self.remember(path);
                 // The autosave clock restarts from a real save: the point is
                 // how long work has been at risk, not how long the timer has
                 // been running.
@@ -1589,7 +1602,13 @@ impl App {
 
     /// Starts a new document, after asking about unsaved work.
     fn new_document(&mut self) {
-        if self.document_vm.guard() == Guard::WouldLoseWork && !self.confirm_discarding_work() {
+        // On the door's path the confirmation has already been given: a new
+        // document is held behind the gate for discarding unsaved work, and
+        // it reaches here only once the person agreed to it at the window.
+        if self.document_vm.guard() == Guard::WouldLoseWork
+            && !self.answering_agent
+            && !self.confirm_discarding_work()
+        {
             return;
         }
         match self.document_vm.new_document() {
@@ -1599,24 +1618,31 @@ impl App {
         self.request_redraw();
     }
 
-    /// Offers back what a session that did not close left behind.
+    /// Answers the offer to bring back what a session that did not close left
+    /// behind.
     ///
-    /// Once, at the start, and only where there is something to offer. A
-    /// declined offer takes the file with it: asking again next time about
+    /// The offer is a window drawn in the shell rather than a native alert.
+    /// A native alert at startup held the interface thread — the thread that
+    /// also serves the agent door — until somebody dismissed it, and every
+    /// agent call in the meantime timed out. The offer stands until it is
+    /// answered, and nothing is autosaved over it while it does.
+    ///
+    /// A declined offer takes the file with it: asking again next time about
     /// work the sculptor has already said they do not want is nagging.
-    fn offer_recovery(&mut self) {
+    fn answer_recovery(&mut self, wanted: bool) {
         let Some(path) = self.pending_recovery.path().map(PathBuf::from) else {
             return;
         };
+        // Recovering replaces the document, and the offer no longer comes
+        // before anything else happens: work done while it stood is asked
+        // about as any document being replaced is.
+        if wanted
+            && self.document_vm.guard() == Guard::WouldLoseWork
+            && !self.confirm_discarding_work()
+        {
+            return;
+        }
         self.pending_recovery = Recovery::Nothing;
-
-        let wanted = rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title(self.strings.dialog_recovered_title)
-            .set_description(self.strings.dialog_recovered_question)
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show()
-            == rfd::MessageDialogResult::Yes;
 
         if !wanted {
             if let Some(store) = &self.store {
@@ -1646,6 +1672,11 @@ impl App {
         let Some(store) = self.store.clone() else {
             return;
         };
+        // The autosave is the file on offer. Writing over it before the offer
+        // is answered would replace the work being offered with this session's.
+        if self.recovery_on_offer() {
+            return;
+        }
         let path = store.autosave_path();
         let modified = *self.document_vm.modified().get();
         let gesture_open = self.a_gesture_is_open();
@@ -1668,7 +1699,7 @@ impl App {
         // loop rather than let it sleep — for as long as a sculptor holds the
         // pointer still. The end of the gesture is an event of its own, and the
         // wait is worked out again then.
-        if self.a_gesture_is_open() {
+        if self.a_gesture_is_open() || self.recovery_on_offer() {
             return None;
         }
         self.autosave
@@ -1686,9 +1717,19 @@ impl App {
 
     /// Everything that has to happen before the process ends.
     fn end_session(&self) {
+        // An offer nobody answered is left for the next session: ending this
+        // one cleanly would clear the autosave that holds the work on offer.
+        if self.recovery_on_offer() {
+            return;
+        }
         if let Some(store) = &self.store {
             store.end_session();
         }
+    }
+
+    /// Whether the offer to recover a previous session's work is still up.
+    fn recovery_on_offer(&self) -> bool {
+        self.pending_recovery.path().is_some()
     }
 
     /// Asks for a mesh file and brings it in as a subtool of its own.
@@ -1730,14 +1771,24 @@ impl App {
         else {
             return;
         };
-        match self.timed("importar", |app| app.document.import_mesh(&path, settings)) {
-            Ok(()) => {
-                self.show_import = false;
-                self.scene.refresh();
-                self.document_vm.touched();
-                self.after_document_replaced();
-            }
-            Err(e) => eprintln!("{}: {e}", self.strings.log_import),
+        self.import_mesh_from(&path, settings);
+    }
+
+    /// Brings a named file in. What the panel leads to, and what
+    /// `exchange.run_import` reaches without one.
+    ///
+    /// A refusal is stated as well as logged, so the door answers it as an
+    /// error rather than as an import that ran.
+    fn import_mesh_from(&mut self, path: &std::path::Path, settings: ImportSettings) {
+        let outcome = self.timed("importar", |app| app.document.import_mesh(path, settings));
+        if let Err(e) = &outcome {
+            eprintln!("{}: {e}", self.strings.log_import);
+        }
+        if self.stated(outcome).is_some() {
+            self.show_import = false;
+            self.scene.refresh();
+            self.document_vm.touched();
+            self.after_document_replaced();
         }
         self.request_redraw();
     }
@@ -1913,20 +1964,25 @@ impl App {
         else {
             return;
         };
+        self.export_mesh_to(&path);
+    }
+
+    /// Writes a named file. What the panel leads to, and what
+    /// `exchange.run_export` reaches without one.
+    fn export_mesh_to(&mut self, path: &std::path::Path) {
         let settings = self.export;
-        match self.timed("exportar", |app| app.document.export_mesh(&path, settings)) {
-            // The panel stays OPEN when the written mesh is unsound, because
-            // closing it is how the application says "that went fine" and the
-            // finding has nowhere else to appear. A clean export closes it as
-            // it always did.
-            Ok(findings) => {
-                self.show_export = !findings.is_empty();
-                self.export_findings = findings;
-            }
-            Err(e) => {
-                self.export_findings.clear();
-                eprintln!("{}: {e}", self.strings.log_export);
-            }
+        let outcome = self.timed("exportar", |app| app.document.export_mesh(path, settings));
+        if let Err(e) = &outcome {
+            self.export_findings.clear();
+            eprintln!("{}: {e}", self.strings.log_export);
+        }
+        // The panel stays OPEN when the written mesh is unsound, because
+        // closing it is how the application says "that went fine" and the
+        // finding has nowhere else to appear. A clean export closes it as it
+        // always did.
+        if let Some(findings) = self.stated(outcome) {
+            self.show_export = !findings.is_empty();
+            self.export_findings = findings;
         }
         self.request_redraw();
     }
@@ -1957,12 +2013,14 @@ impl App {
     /// sculptor says what becomes of it, and staying put is one of the
     /// answers.
     fn resolve_a_standing_cage(&mut self, incoming: clayspace_model::LayerKey) -> bool {
-        let standing = {
-            let cage = self.lattice.state().get();
-            cage.active && cage.touched
-        };
-        if !standing || self.scene.scene().get().active == Some(incoming) {
+        if !self.a_cage_stands_in_the_way(incoming) {
             return true;
+        }
+        // The door never gets here with a cage standing: a plain switch is
+        // refused before it is applied and names the argument that settles
+        // it. Staying put is the answer that costs nothing if it ever did.
+        if self.answering_agent {
+            return false;
         }
         let s = self.strings;
         let answer = rfd::MessageDialog::new()
@@ -1988,6 +2046,33 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// Whether switching to `incoming` would leave a dragged cage behind.
+    fn a_cage_stands_in_the_way(&self, incoming: clayspace_model::LayerKey) -> bool {
+        let cage = self.lattice.state().get();
+        cage.active && cage.touched && self.scene.scene().get().active != Some(incoming)
+    }
+
+    /// Switches the active layer with what becomes of a standing cage said up
+    /// front — the door's form of the question `resolve_a_standing_cage` asks.
+    ///
+    /// Where the cage is still standing afterwards — an apply the lattice
+    /// refused, with its reason already on the lattice's notice — the switch
+    /// does not happen, because the drags would go with it.
+    fn select_layer_settling_cage(&mut self, incoming: clayspace_model::LayerKey, fate: CageFate) {
+        if self.a_cage_stands_in_the_way(incoming) {
+            self.apply(match fate {
+                CageFate::Apply => Command::ApplyLattice,
+                // The one command that takes a cage down; the model discards
+                // its preview with it.
+                CageFate::Discard => Command::ToggleLattice,
+            });
+            if self.a_cage_stands_in_the_way(incoming) {
+                return;
+            }
+        }
+        self.apply(Command::SelectLayer(incoming));
     }
 
     /// Everything that has to catch up when the document underneath changes.
@@ -3650,12 +3735,7 @@ impl App {
         });
         // Whether a second party could have been driving this session. The
         // address and never the secret: a report is pasted into issues.
-        report.agent = Some(clayspace_model::AgentDiagnostics {
-            listening: self.agent.is_listening(),
-            address: self.agent.door().url.clone(),
-            connected: self.agent.door().connected,
-            commands: self.agent.from_agent(),
-        });
+        report.agent = Some(self.agent_diagnostics());
         // Both halves of a stroke meet in the handle every stroke passes
         // through, so the report has one thing to read rather than two.
         //
@@ -5364,6 +5444,7 @@ impl App {
             agent_ask: self.agent.ask(),
             agent_acted: self.agent.seconds_since_agent_acted(),
             agent_access: self.agent.showing_access(),
+            recovery_offered: self.recovery_on_offer(),
             strings: self.strings,
             shortcuts: &self.shortcuts,
             mask: *self.mask.state().get(),
@@ -5689,6 +5770,7 @@ impl App {
             shell::attribution_window(ctx, &state, &mut queue);
             shell::agent_access_window(ctx, &state, &mut queue);
             shell::agent_ask_window(ctx, &state, &mut queue);
+            shell::recovery_window(ctx, &state, &mut queue);
             shell::convert_window(ctx, &state, &mut queue);
             shell::repair_window(ctx, &state, &mut queue);
             shell::deform_window(ctx, &state, &mut queue);
@@ -6065,7 +6147,9 @@ impl App {
             }
             Command::Save => self.save(false),
             Command::SaveAs => self.save(true),
+            Command::SaveTo(path) => self.save_to(&path),
             Command::Quit => self.quit_requested = true,
+            Command::AnswerRecovery(wanted) => self.answer_recovery(wanted),
             Command::ToggleImport => {
                 self.show_import = !self.show_import;
                 self.request_redraw();
@@ -6083,6 +6167,10 @@ impl App {
                 self.request_redraw();
             }
             Command::RunImport => self.import_mesh(),
+            Command::ImportFrom(path) => {
+                let settings = self.import;
+                self.import_mesh_from(&path, settings);
+            }
             Command::InsertMesh => self.insert_mesh_subtool(),
             Command::LoadAlpha => self.load_alpha(),
             Command::ClearAlpha => {
@@ -6090,6 +6178,7 @@ impl App {
                 self.request_redraw();
             }
             Command::RunExport => self.export_mesh(),
+            Command::ExportTo(path) => self.export_mesh_to(&path),
             Command::SetVoxelDisplay(display, blur) => {
                 // Display only. Nothing in the document is touched, so this
                 // neither marks it modified nor enters the history — the same
@@ -6223,6 +6312,9 @@ impl App {
                 if self.resolve_a_standing_cage(key) {
                     self.apply(Command::SelectLayer(key));
                 }
+            }
+            Command::SelectLayerSettlingCage(key, fate) => {
+                self.select_layer_settling_cage(key, fate)
             }
             Command::SetViewPreset(preset) => {
                 self.camera.apply_preset(match preset {
@@ -6372,8 +6464,9 @@ impl ApplicationHandler<AgentWake> for App {
             event_loop.exit();
             return;
         }
-        // After the window, so the dialog has something to sit in front of.
-        self.offer_recovery();
+        // No alert here. A recovery on offer is a window in the shell, drawn
+        // from `pending_recovery` on the first frame, so the interface thread
+        // — which also serves the agent door — is never held by a question.
         self.request_redraw();
     }
 
@@ -7071,6 +7164,62 @@ impl App {
         Ok(())
     }
 
+    /// What the door refuses because the pointer's path would stop to ask.
+    ///
+    /// Each of these is a question the window puts to the person — where to
+    /// save, whether unsaved work may go, what becomes of a dragged cage — as
+    /// a native dialog that holds the interface thread until it is answered.
+    /// An agent cannot answer it, and the thread it holds is the one serving
+    /// the agent. So the door refuses, and says which call says the answer up
+    /// front, rather than opening something only a person can close.
+    ///
+    /// Unsaved work is refused rather than consented away for an open and a
+    /// quit: their gates are about opening and closing, and agreeing to open
+    /// a file is not agreeing to lose what is unsaved. `document.new` is held
+    /// behind the discard gate itself, so it is the route that asks for that.
+    fn refused_at_the_door(&self, command: &Command) -> Option<&'static str> {
+        let unsaved = self.document_vm.guard() == Guard::WouldLoseWork;
+        match command {
+            Command::Save if self.document_vm.path().get().is_none() => Some(
+                "this document has never been saved, so it has no path to save to; \
+                 document.save_as names one",
+            ),
+            Command::OpenRecent(_) | Command::Quit if unsaved => Some(
+                "the open document has unsaved work; save it first with document.save or \
+                 document.save_as, or discard it with document.new",
+            ),
+            Command::SelectLayer(key) if self.a_cage_stands_in_the_way(*key) => Some(
+                "a dragged cage stands on the active layer; pass cage: \"apply\" or \
+                 \"discard\" to layer.select to say what becomes of it",
+            ),
+            _ => None,
+        }
+    }
+
+    /// Where the door stands, for the diagnostics report and the banner.
+    ///
+    /// The address and never the secret: a report is pasted into issues.
+    fn agent_diagnostics(&self) -> clayspace_model::AgentDiagnostics {
+        clayspace_model::AgentDiagnostics {
+            listening: self.agent.is_listening(),
+            address: self.agent.door().url.clone(),
+            connected: self.agent.door().connected,
+            commands: self.agent.from_agent(),
+        }
+    }
+
+    /// The banner printed on the way up: the diagnostics report's build and
+    /// backend lines, with the door as it stands once it has been opened.
+    ///
+    /// Printed after the door rather than before it. Before, the report said
+    /// "agent: not built with a door" and the next line printed the door's
+    /// address — two statements about one door, one of them false.
+    fn startup_report(&self) -> String {
+        let mut report = self.policy.diagnostics();
+        report.agent = Some(self.agent_diagnostics());
+        report.to_report()
+    }
+
     fn nothing_to_do(&self, command: &Command) -> Option<&'static str> {
         match command {
             Command::CancelStroke if !self.sculpt.is_stroking() => Some("no stroke is open"),
@@ -7146,10 +7295,16 @@ impl Session for App {
             return Err(Refusal::new(RefusalCode::Unavailable, why));
         }
 
+        if let Some(why) = self.refused_at_the_door(&command) {
+            return Err(Refusal::new(RefusalCode::Unavailable, why));
+        }
+
         // Cleared rather than assumed empty: a refusal left over from a
         // person's own click is not this command's.
         self.sculpt_refusal = None;
+        self.answering_agent = true;
         self.handle(command);
+        self.answering_agent = false;
         self.agent_gesture
             .settled(opened_a_gesture, self.a_commanded_gesture_is_open());
 

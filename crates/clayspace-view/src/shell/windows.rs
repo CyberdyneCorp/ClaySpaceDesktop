@@ -1207,6 +1207,36 @@ pub fn agent_ask_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut
         });
 }
 
+/// The offer to bring back what a session that did not close left behind.
+///
+/// A window rather than the native alert it used to be. The alert came up
+/// before the first frame and held the interface thread — which also serves
+/// the agent door — until somebody dismissed it; this one stands until it is
+/// answered and blocks nothing while it does.
+pub fn recovery_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.recovery_offered {
+        return;
+    }
+    let s = state.strings;
+    egui::Window::new(s.dialog_recovered_title)
+        .resizable(false)
+        .collapsible(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(420.0);
+            ui.label(egui::RichText::new(s.dialog_recovered_question).size(type_scale::HEADING));
+            ui.add_space(space::SNUG);
+            ui.horizontal(|ui| {
+                if ui.button(s.recovery_restore).clicked() {
+                    queue.push(Command::AnswerRecovery(true));
+                }
+                if ui.button(s.recovery_discard).clicked() {
+                    queue.push(Command::AnswerRecovery(false));
+                }
+            });
+        });
+}
+
 /// What a gate is, in the interface's own language.
 ///
 /// Indexed by position in the enumeration, and the table is a fixed-length

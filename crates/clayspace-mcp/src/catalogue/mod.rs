@@ -50,8 +50,22 @@ pub struct Bounds {
     pub capture: Duration,
     /// Waiting for the session to go quiet, where the caller names none.
     pub settle: Duration,
-    /// How long an ask may stand at the window unanswered.
+    /// How long one call waits for the ask standing at the window before it
+    /// answers that the ask is still pending.
+    ///
+    /// Held inside [`Bounds::call`]: a client that bounds each call the way
+    /// this server bounds its own work must hear back before it gives up, or
+    /// a person who agrees a moment later agrees to a call nobody is waiting
+    /// on. The ask is not taken down when the wait ends, so the retry that
+    /// follows picks up an answer given in between.
     pub consent: Duration,
+}
+
+impl Bounds {
+    /// The wait for an ask, held inside the call bound whatever was asked for.
+    pub fn consent_wait(&self) -> Duration {
+        self.consent.min(self.call.saturating_sub(POLL_THE_ASK))
+    }
 }
 
 impl Default for Bounds {
@@ -61,10 +75,13 @@ impl Default for Bounds {
             capture: Duration::from_secs(30),
             settle: Duration::from_secs(30),
             // Long enough for somebody looking at the screen to read the ask
-            // and click, short enough that a client is told rather than left
-            // hanging. The ask stays up when this expires, so an answer given
-            // late is picked up by the agent's next try rather than lost.
-            consent: Duration::from_secs(20),
+            // and click, and inside the call bound so a client is told rather
+            // than timed out. It was twenty seconds against a ten-second call
+            // bound, and an operation the person agreed to at second twelve
+            // reached a client that had already given up on it. The ask stays
+            // up when this expires, so an answer given late is picked up by
+            // the agent's next try rather than lost.
+            consent: Duration::from_secs(8),
         }
     }
 }
@@ -252,10 +269,10 @@ impl Catalogue {
             // clients. A supplied client name is carried unchanged.
             client: client.unwrap_or("").to_string(),
             path: path_of(command),
-            bound: self.bounds.consent,
+            bound: self.bounds.consent_wait(),
         };
 
-        let deadline = Instant::now() + self.bounds.consent;
+        let deadline = Instant::now() + self.bounds.consent_wait();
         loop {
             let asked = ask.clone();
             let answer = self.queue.submit(self.bounds.call, move |session| {
@@ -817,7 +834,12 @@ impl ToolSurface for Catalogue {
          frame, and a half-meshed surface is not a defect.\n\n\
          Saving over a file, exporting, opening a document, starting a new one and \
          quitting are gated: the person is asked at the window, and you will be told \
-         what would lift the gate rather than being refused silently. A stroke of \
+         what would lift the gate rather than being refused silently. Each takes the \
+         path as an argument — `document.save_as`, `document.open`, \
+         `exchange.run_import`, `exchange.run_export` — and opens no file panel. An \
+         ask nobody has answered yet comes back as `consent_timed_out` within the \
+         call bound and stays up at the window; call again to pick up the answer. A \
+         stroke of \
          theirs in progress refuses your changes and serves your reads.\n\n\
          Timings you take here are live-session figures. They are evidence about this \
          machine at this moment, not benchmark baselines."
@@ -862,7 +884,10 @@ fn word_of(outcome: ConsentOutcome) -> &'static str {
 
 fn path_of(command: &Command) -> Option<PathBuf> {
     match command {
-        Command::OpenRecent(path) => Some(path.clone()),
+        Command::OpenRecent(path)
+        | Command::SaveTo(path)
+        | Command::ImportFrom(path)
+        | Command::ExportTo(path) => Some(path.clone()),
         _ => None,
     }
 }
@@ -971,10 +996,13 @@ fn not_offered() -> Vec<Value> {
 /// not offered, so a command withheld from agents cannot also be missing from
 /// what `describe` says is withheld — which left a caller unable to tell "not
 /// available" from "does not exist".
-fn not_offered_commands() -> [Command; 11] {
+fn not_offered_commands() -> [Command; 14] {
     [
         Command::OpenDocument,
         Command::SaveAs,
+        Command::RunImport,
+        Command::RunExport,
+        Command::AnswerRecovery(true),
         Command::InsertMesh,
         Command::LoadAlpha,
         Command::LoadReference(clayspace_model::RefPlane::Front),
@@ -1762,10 +1790,147 @@ mod tests {
         let bench = Bench::new();
         bench.record_consent("exportar");
         bench
-            .call("exchange", json!({ "action": "run_export" }))
+            .call(
+                "exchange",
+                json!({ "action": "run_export", "path": "/tmp/head.obj" }),
+            )
             .unwrap();
-        assert_eq!(bench.applied(), vec![Command::RunExport]);
+        assert_eq!(
+            bench.applied(),
+            vec![Command::ExportTo("/tmp/head.obj".into())]
+        );
         assert!(bench.session.lock().unwrap().asked.is_empty());
+    }
+
+    /// The operations behind a gate take the path the file panel would have
+    /// asked for, so an agent finishes them with no dialog — and the person is
+    /// shown that path in the ask.
+    #[test]
+    fn export_accepts_a_path() {
+        for (group, action, path, command) in [
+            (
+                "exchange",
+                "run_export",
+                "/tmp/head.obj",
+                Command::ExportTo("/tmp/head.obj".into()),
+            ),
+            (
+                "exchange",
+                "run_import",
+                "/tmp/scan.obj",
+                Command::ImportFrom("/tmp/scan.obj".into()),
+            ),
+            (
+                "document",
+                "save_as",
+                "/tmp/head.clayspace",
+                Command::SaveTo("/tmp/head.clayspace".into()),
+            ),
+            (
+                "document",
+                "open",
+                "/tmp/head.clayspace",
+                Command::OpenRecent("/tmp/head.clayspace".into()),
+            ),
+        ] {
+            let bench = Bench::new();
+            bench
+                .call(group, json!({ "action": action, "path": path }))
+                .unwrap_or_else(|e| panic!("{group}.{action}: {e}"));
+            assert_eq!(bench.applied(), vec![command], "{group}.{action}");
+            let asked = bench.session.lock().unwrap().asked.clone();
+            assert_eq!(asked.len(), 1, "{group}.{action} was not gated");
+            assert_eq!(asked[0].path.as_deref(), Some(std::path::Path::new(path)));
+        }
+    }
+
+    /// Without a path there is nothing an agent could finish, so the call is
+    /// refused rather than opening a panel on the person's screen.
+    #[test]
+    fn an_exchange_without_a_path_is_refused_before_anything_is_asked() {
+        for action in ["run_export", "run_import"] {
+            let bench = Bench::new();
+            let refusal = bench
+                .call("exchange", json!({ "action": action }))
+                .unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::BadArgument, "{action}");
+            assert!(bench.session.lock().unwrap().asked.is_empty());
+            assert!(bench.applied().is_empty());
+        }
+    }
+
+    /// The wait for an ask ends inside the call bound, and the answer says the
+    /// ask is still standing — so a person who agrees late agrees to the
+    /// retry, not to a call nobody is waiting on.
+    #[test]
+    fn consent_fits_the_call_bound() {
+        let bounds = Bounds::default();
+        assert!(
+            bounds.consent_wait() + POLL_THE_ASK <= bounds.call,
+            "a consent wait of {:?} does not fit a call bound of {:?}",
+            bounds.consent_wait(),
+            bounds.call
+        );
+
+        // Held there even where a caller asks for a longer wait.
+        let bench = Bench::with(FakeSession::new().answering_consent(ConsentOutcome::Pending));
+        let catalogue = Catalogue::new(bench.catalogue.queue.clone(), &bench.catalogue.store)
+            .with_bounds(Bounds {
+                call: Duration::from_secs(1),
+                consent: Duration::from_secs(20),
+                ..Bounds::default()
+            });
+        let started = Instant::now();
+        let refusal = catalogue
+            .call_scoped("agent", None, "document", &json!({ "action": "save" }))
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::ConsentTimedOut);
+        assert!(
+            refusal.message.contains("still standing"),
+            "{}",
+            refusal.message
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "the ask held the call for {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A standing cage is settled by an argument, not by a question at the
+    /// window.
+    #[test]
+    fn select_with_a_cage_takes_an_argument() {
+        use clayspace_model::LayerKey;
+        use clayspace_vm::CageFate;
+
+        let bench = Bench::new();
+        for (cage, fate) in [("apply", CageFate::Apply), ("discard", CageFate::Discard)] {
+            bench
+                .call(
+                    "layer",
+                    json!({ "action": "select", "layer": 2, "cage": cage }),
+                )
+                .unwrap();
+            assert_eq!(
+                bench.applied().last(),
+                Some(&Command::SelectLayerSettlingCage(LayerKey(2), fate))
+            );
+        }
+        bench
+            .call("layer", json!({ "action": "select", "layer": 2 }))
+            .unwrap();
+        assert_eq!(
+            bench.applied().last(),
+            Some(&Command::SelectLayer(LayerKey(2)))
+        );
+        let refusal = bench
+            .call(
+                "layer",
+                json!({ "action": "select", "layer": 2, "cage": "keep" }),
+            )
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::BadArgument);
     }
 
     #[test]

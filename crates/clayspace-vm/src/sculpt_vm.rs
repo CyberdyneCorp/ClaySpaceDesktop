@@ -432,13 +432,20 @@ impl SculptViewModel {
             | Command::OpenRecent(_)
             | Command::Save
             | Command::SaveAs
+            | Command::SaveTo(_)
             | Command::Quit
+            | Command::AnswerRecovery(_)
             | Command::ToggleImport
             | Command::ToggleExport
             | Command::SetImportSettings(_)
             | Command::SetExportSettings(_)
             | Command::RunImport
             | Command::RunExport
+            | Command::ImportFrom(_)
+            | Command::ExportTo(_)
+            // The composition root settles the cage and then dispatches a
+            // plain `SelectLayer`, which is the one followed below.
+            | Command::SelectLayerSettlingCage(..)
             | Command::NewArmature
             | Command::ToggleArmatureEditing
             | Command::RemoveZsphere
