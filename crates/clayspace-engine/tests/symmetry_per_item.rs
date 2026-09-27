@@ -17,8 +17,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, Combine, CombineSettings, CurveModel, GestureSample, ObjectModel,
-    Representation, SceneModel, SculptModel, Shape, ToolKind,
+    ArmatureModel, BrushSettings, Combine, CombineSettings, CurveModel, GestureSample, NodeIndex,
+    ObjectModel, Representation, SceneModel, SculptModel, Shape, ToolKind,
 };
 
 const OFF: [bool; 3] = [false; 3];
@@ -284,4 +284,108 @@ fn a_placed_object_is_mirrored_when_symmetry_is_on() {
         "a sphere placed with symmetry on has no twin"
     );
     assert_drawn_as_it_is(&document, -1.8, "the placed sphere's twin");
+}
+
+/// A rig with one sphere added one-sided, well clear of the root.
+fn rig_with_a_one_sided_sphere(document: &mut ClayDocument) -> NodeIndex {
+    document
+        .begin_armature([0.0, 0.0, 0.0], 0.3)
+        .expect("a rig");
+    document
+        .add_zsphere(0, [1.0, 0.0, 0.0], 0.2, false)
+        .expect("a one-sided sphere")
+}
+
+/// A stroke made with symmetry on on the rig's own subtool mirrors the stroke,
+/// not the rig: a sphere added one-sided stays one-sided (#170, A5).
+#[test]
+fn a_stroke_under_symmetry_does_not_mirror_a_one_sided_zsphere() {
+    let mut document = document();
+    let sphere = rig_with_a_one_sided_sphere(&mut document);
+    let twin = [-1.0, 0.0, 0.0];
+    assert!(!solid(&document, twin), "added one-sided with a twin");
+
+    dab(&mut document, [0.0, 1.5, 0.0], X);
+    assert!(
+        !solid(&document, twin),
+        "a stroke made with symmetry on gave a one-sided ZSphere a twin"
+    );
+
+    // And a rig edit afterwards does not bring the twin in either.
+    document
+        .move_zsphere(sphere, [0.0, 0.1, 0.0])
+        .expect("a rig edit");
+    assert!(
+        !solid(&document, [-1.0, 0.1, 0.0]),
+        "a rig edit mirrored a ZSphere that was added one-sided"
+    );
+    assert!(solid(&document, [1.0, 0.1, 0.0]), "the sphere did not move");
+    assert_drawn_as_it_is(&document, -1.0, "the one-sided sphere's far side");
+}
+
+/// A rig edit keeps what was sculpted on the rig's subtool — a carve into the
+/// rig included, which a rig re-placed at the end of the layer filled in.
+#[test]
+fn a_rig_edit_keeps_the_strokes_on_the_rig_layer() {
+    let mut document = document();
+    let sphere = rig_with_a_one_sided_sphere(&mut document);
+    // A lump beside the rig, and a carve into the root sphere.
+    dab(&mut document, [0.0, 1.5, 0.0], OFF);
+    let carve = [0.0, 0.0, 0.3];
+    SculptModel::set_combine(
+        &mut document,
+        CombineSettings {
+            op: Combine::Subtract,
+            ..CombineSettings::default()
+        },
+    );
+    let samples: Vec<GestureSample> = (0..3)
+        .map(|i| GestureSample {
+            position: [carve[0], carve[1] + i as f32 * 0.02, carve[2]],
+            pressure: 1.0,
+            time: i as f32,
+        })
+        .collect();
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: 0.2,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            OFF,
+        )
+        .expect("a carve");
+    assert!(!solid(&document, carve), "the carve cut nothing");
+    let before = document.history().depth;
+
+    document
+        .move_zsphere(sphere, [0.0, 0.1, 0.0])
+        .expect("a rig edit");
+
+    assert!(solid(&document, [1.0, 0.1, 0.0]), "the sphere did not move");
+    assert!(
+        solid(&document, [0.0, 1.5, 0.0]),
+        "a rig edit erased a stroke on the rig's subtool"
+    );
+    assert!(
+        !solid(&document, carve),
+        "a rig edit filled in a carve made into the rig"
+    );
+    assert_drawn_as_it_is(&document, 0.0, "the carved rig");
+
+    // Still one undoable action, and it takes back only the edit.
+    assert_eq!(
+        document.history().depth,
+        before + 1,
+        "a rig edit is one step"
+    );
+    document.undo().expect("undo the rig edit");
+    assert!(
+        solid(&document, [1.0, 0.0, 0.0]),
+        "undo did not move it back"
+    );
+    assert!(!solid(&document, carve), "undo filled in the carve");
 }

@@ -16,6 +16,10 @@ symmetry off SHALL stay out of any mirror the layer is given later. A curve and
 a placed object made with symmetry on SHALL be mirrored from the moment they
 are made, in the same undo step as the item.
 
+An armature SHALL stay out of its layer's mirror, since it mirrors itself: a
+stroke made with symmetry on on a rig's subtool SHALL NOT give a sphere added
+one-sided a twin.
+
 A mirror change SHALL leave no stale surface. The reflections the old mirror
 made and the ones the new mirror makes SHALL both be re-evaluated, whether or
 not they lie inside the region of the edit that changed it.
@@ -54,6 +58,11 @@ against each other — only against an unmirrored gesture.
 - **WHEN** a curve is laid on a layer with symmetry on
 - **THEN** its reflection is placed with it, in one undo step
 
+#### Scenario: A stroke under symmetry does not mirror a one-sided ZSphere
+- **WHEN** a sphere is added to a rig one-sided and a stroke is then made with
+  X symmetry on on the rig's subtool
+- **THEN** the sphere has no twin, before and after a later rig edit
+
 #### Scenario: A mirror change leaves no ghost
 - **WHEN** a stroke changes a layer's mirror, and the layer is then hidden
 - **THEN** the viewport draws neither the reflections the old mirror made nor
@@ -64,3 +73,18 @@ against each other — only against an unmirrored gesture.
   that has it on, and sculpts
 - **THEN** the edit on the second layer is mirrored, and returning to the
   first layer finds symmetry still off
+
+## ADDED Requirements
+
+### Requirement: A rig edit keeps the rig's place in its layer
+A rig edit SHALL leave everything else on the rig's subtool as it was. A layer
+is evaluated in the order of its items, so an armature that is removed and
+placed again SHALL be put back where it stood in that order, in the same undo
+step as the edit; appended at the end instead, it is combined after every
+stroke made on its subtool since, and a carve into the rig is filled in.
+
+#### Scenario: A rig edit keeps a carve made into the rig
+- **WHEN** the user carves into a rig on its own subtool, adds a stroke beside
+  it, and then moves a sphere of the rig
+- **THEN** the carve and the stroke are both still there, and one undo takes
+  back the move alone

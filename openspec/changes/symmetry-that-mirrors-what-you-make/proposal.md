@@ -29,19 +29,29 @@ default, so the switch reached backwards (#170):
   the same undo group as the item, so they are mirrored from the start and one
   undo takes back both. Made with symmetry off they leave the layer's mirror
   alone: nothing they do needs it.
+- **Rigs (A5).** An armature mirrors itself, so its item stays out of the
+  layer mirror: a stroke made with symmetry on on a rig's subtool no longer
+  gives a sphere added one-sided a twin. And a rig edit, which removes the
+  armature and places it again, puts it back where it stood in the layer's
+  order (`clay_layer_move`) instead of appending it, where it filled in every
+  carve made into the rig since.
 
 ## Not in this change
 
-The per-layer engine mirror stays. What remains of #170 needs either the
-engine's per-item axes or a host-side bake, and is tracked on the issue:
+The per-layer engine mirror stays. What remains of #170 is the engine's, and
+is tracked there:
 
 - Turning symmetry **off**, or switching it to a different axis, still re-points
   the layer's mirror and so still changes items made under the old one.
-- A Move drag exactly on the mirror plane is applied once per image (F10); the
-  drag images are the engine's.
-- Rig edits and the rig layer's strokes (A5).
+  Participation is one bool per item, and a host cannot express a reflected
+  copy of an arbitrary item to bake it (ClayCore #664).
+- A Move drag exactly on the mirror plane is applied once per image (F10):
+  on the plane the reflected image is the drag itself (ClayCore #663).
 
 ## Impact
 
 Documents saved before this change keep each item's participation as it was
-saved. Only items made from now on carry the new decision.
+saved. Only items made from now on carry the new decision. A rig saved before
+this change still takes part in its layer's mirror until its next edit places
+it again; the ABI has no setter for a placed node's participation (asked for in
+ClayCore #664).

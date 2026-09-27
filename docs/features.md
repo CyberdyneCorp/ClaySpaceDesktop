@@ -572,8 +572,10 @@ write the *active* subtool's axes, and switching subtools restores that
 subtool's own setting rather than carrying the previous one's along. A new
 subtool starts with X on, which is what the design asks. One exception, and it
 is the rig's: a rig's own subtool starts with symmetry **off**, because a rig
-does its own mirroring (`add_zsphere` places the reflected node itself) and a
-layer mirror on top of that hangs a second arm off the first.
+does its own mirroring (`add_zsphere` places the reflected node itself). For
+the same reason the rig's item stays out of the layer mirror, so a stroke made
+with symmetry on on the rig's subtool mirrors the stroke and never gives a
+sphere added one-sided a twin (#170, A5).
 
 The setting and the engine's mirror are two things, and the mirror is written
 by the stroke that wants it rather than by the toggle that asked for it.
@@ -614,10 +616,13 @@ sphere (whose reflection is itself) costs nothing extra; marking the whole
 layer re-meshed all 1043 of its keys on the next dab. The gap is a node whose
 box is symmetric about the plane while its shape is not.
 
-Still open on #170: turning symmetry *off*, or moving it to another axis,
-re-points the layer's mirror and so still changes items made under the old
-one; a Move drag exactly on the mirror plane is applied once per image; and rig
-edits.
+Still open on #170, both waiting on the engine: turning symmetry *off*, or
+moving it to another axis, re-points the layer's mirror and so still changes
+items made under the old one, because an item's participation is one bool and
+a host cannot express a reflected copy to bake it (ClayCore #664); and a Move
+drag exactly on the mirror plane is applied once per image, 1.58x the
+unmirrored pull, because on the plane the reflected image is the drag itself
+(ClayCore #663, pinned by the ignored `a_move_on_the_plane_is_applied_once`).
 
 On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
@@ -3723,6 +3728,12 @@ which is what makes rigging feel like modelling rather than filling in a form.
   the one a redo has to put right, and re-reading only the rigged ones left it
   in the surface and out of reach. A rig a step brings back takes the sculptor
   with it, since a rig is offered for the active subtool alone.
+- **A rig edit keeps what was sculpted on the rig's subtool.** Every edit
+  removes the armature and places it again, and it used to be placed at the
+  end of the layer, so it was combined after every stroke made there since: a
+  carve into the rig was filled in on the next edit. The rewritten armature is
+  moved back to where it stood in the layer's order (`clay_layer_move`) in the
+  same undo step (#170, A5).
 - An edit naming a sphere the rig does not have is refused rather than ignored.
   Every rig edit rewrites the whole armature, so a resize or a reparent of a
   sphere nobody has used to place the tree again unchanged — an undo step for a
