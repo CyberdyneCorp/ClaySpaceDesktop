@@ -29,5 +29,6 @@
 ## 5. Undo against the frame it took back (I16)
 
 - [x] 5.1 Re-measure at v0.120.1: a stroke undone through sync and settle draws
-      the frame before it, on the starting form and across a smooth seam
+      the frame before it exactly on the starting form, and within the render
+      noise floor across a smooth seam, where the residual is ClayCore #649
       (`clayspace-app/tests/visual_incremental.rs`)

@@ -21,14 +21,17 @@ that showed what used to be true.
 - **V9.** `grid-brush-radius` was complete but for re-recording the benchmark
   baseline, which #288 did on the runners (`voxel-reference` r3 on both
   platforms). It is archived alongside this change.
-- **I16.** Re-measured at ClayCore v0.120.1 rather than fixed: the undo
-  difference the audit saw is gone. A stroke undone through the application's
-  own sync-and-settle path draws the frame from before it, on the starting form
-  and across a smooth seam with a sibling placed after the form (the bound
-  ClayCore #650 fixed). The two cases are now visual regression tests; no
-  application change was needed, so no display defect is left to class. A
-  residual on short chains or squashed placements would belong to ClayCore
-  #649, not here.
+- **I16.** Re-measured at ClayCore v0.120.1 rather than fixed in the
+  application. A stroke undone through the application's own sync-and-settle
+  path draws the frame from before it, exactly, on the starting form. Across a
+  smooth seam with a sibling placed after the form (the bound ClayCore #650
+  fixed) the undo is exact on a workstation (2 pixels), but on the `macos-14`
+  runners the frame *before* the edit is 334 pixels at up to 16 levels off, in
+  a ring on the sibling's silhouette, while the undone frame is right: a brick
+  build disagreeing with a later refill of the same field inside the blend
+  band, the class ClayCore #649 leaves open. That case is bounded at the
+  render noise floor rather than held exact, and nothing here pads the
+  engine's bounds.
 
 ## What Changes
 
