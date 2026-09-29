@@ -1284,6 +1284,11 @@ impl RefillBudget {
     }
 }
 
+enum MaskRefreshScope {
+    Full,
+    Region(Bounds),
+}
+
 pub struct ClayDocument {
     // -- what must go before the document ------------------------------------
     //
@@ -1485,6 +1490,9 @@ pub struct ClayDocument {
     /// counter is what lets the frozen region be shown without re-sampling
     /// every vertex on every frame.
     mask_revision: u64,
+    /// Pending viewport mask refresh: a bounded stroke, or the full surface
+    /// for operations such as invert, undo, and layer selection.
+    mask_refresh: Option<MaskRefreshScope>,
     /// The document's own history order, which nothing ever lowers.
     ///
     /// **This replaced the engine's undo depth**, which every ordering
@@ -1576,6 +1584,8 @@ pub struct ClayDocument {
     /// byte-identical. Beside-placement never needed this, which is part of
     /// what made it the easier first shape.
     retopo_target: Option<(LayerKey, u64)>,
+    /// Surface guidance for the next retopology, separate from sculpt history.
+    pub(crate) retopo_guidance: clayspace_model::RetopoGuidance,
     crossing_redo: Vec<Crossing>,
     /// Layers an undone crossing has taken off the scene.
     ///
@@ -1782,6 +1792,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
             retopo_target: None,
+            retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -1799,6 +1810,7 @@ impl ClayDocument {
             voxel_smooth: std::collections::BTreeMap::new(),
             cage_revision: 0,
             mask_revision: 0,
+            mask_refresh: Some(MaskRefreshScope::Full),
             next_key: 2,
             skin_undo: Vec::new(),
             skin_redo: Vec::new(),
@@ -5935,6 +5947,21 @@ impl ClayDocument {
         brush: BrushSettings,
         samples: &[GestureSample],
     ) -> Result<EditOutcome, ModelError> {
+        // Keep the dirty region in displayed world coordinates. The mask is
+        // sampled there after placement, and interpolation reaches beyond its
+        // painted cells by at most a cell on either side.
+        let reach = brush.sanitized().size + Self::VOXEL_SIZE * 2.0;
+        let dirty_bounds = samples.first().map(|first| {
+            let mut min = first.position.map(|v| v - reach);
+            let mut max = first.position.map(|v| v + reach);
+            for sample in &samples[1..] {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(sample.position[axis] - reach);
+                    max[axis] = max[axis].max(sample.position[axis] + reach);
+                }
+            }
+            (min, max)
+        });
         // In the layer's own frame, as a sculpting stroke is, because that is
         // the frame every consumer of this mask actually reads it in.
         //
@@ -5996,7 +6023,11 @@ impl ClayDocument {
         // because it draws the frozen region — and a surface that has not
         // moved reports no dirty brick, so the mask carries its own counter.
         if painted > 0 {
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            if let Some(bounds) = dirty_bounds {
+                self.mark_mask_region(bounds);
+            } else {
+                self.mark_mask_full();
+            }
         }
         Ok(EditOutcome {
             changed: painted > 0,
@@ -8347,6 +8378,35 @@ impl ClayDocument {
         self.mask_revision
     }
 
+    /// The region changed since the last viewport refresh. `None` means a
+    /// whole-surface change, including the initial draw and history steps.
+    pub fn take_mask_dirty_bounds(&mut self) -> Option<([f32; 3], [f32; 3])> {
+        match self.mask_refresh.take() {
+            Some(MaskRefreshScope::Region(bounds)) => Some(bounds),
+            _ => None,
+        }
+    }
+
+    fn mark_mask_full(&mut self) {
+        self.mask_revision = self.mask_revision.wrapping_add(1);
+        self.mask_refresh = Some(MaskRefreshScope::Full);
+    }
+
+    fn mark_mask_region(&mut self, bounds: ([f32; 3], [f32; 3])) {
+        self.mask_revision = self.mask_revision.wrapping_add(1);
+        self.mask_refresh = match self.mask_refresh.take() {
+            Some(MaskRefreshScope::Full) => Some(MaskRefreshScope::Full),
+            Some(MaskRefreshScope::Region((mut min, mut max))) => {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(bounds.0[axis]);
+                    max[axis] = max[axis].max(bounds.1[axis]);
+                }
+                Some(MaskRefreshScope::Region((min, max)))
+            }
+            None => Some(MaskRefreshScope::Region(bounds)),
+        };
+    }
+
     /// Whether the active layer has anything masked.
     ///
     /// What [`Self::mask_at`] checks before sampling, for a caller that would
@@ -9009,7 +9069,7 @@ impl ClayDocument {
     /// where it is not.
     fn mask_may_have_moved(&mut self, stepped: bool) {
         if stepped {
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            self.mark_mask_full();
         }
     }
 
@@ -10818,16 +10878,14 @@ struct Curve {
 
 impl Curve {
     /// The guide as the engine takes it: x, y, z, radius per point.
-    fn guide(&self) -> Vec<f32> {
+    fn guide(&self, frame: clayspace_model::Transform) -> Vec<f32> {
         self.points
             .iter()
             .flat_map(|point| {
-                [
-                    point.position[0],
-                    point.position[1],
-                    point.position[2],
-                    point.radius,
-                ]
+                // Controls are held in world space for the viewport; the
+                // engine applies the subtool's transform to its curve item.
+                let local = frame.into_local(point.position);
+                [local[0], local[1], local[2], point.radius]
             })
             .collect()
     }
@@ -11432,7 +11490,7 @@ impl SceneModel for ClayDocument {
         // different picture, so the viewport is told to look again. Nothing in
         // the surface moved, which is exactly why the mask carries a counter
         // of its own.
-        self.mask_revision = self.mask_revision.wrapping_add(1);
+        self.mark_mask_full();
         self.arm_mesh_sculptor();
         Ok(())
     }
@@ -12880,6 +12938,14 @@ impl DocumentModel for ClayDocument {
         // `.clayspace` holds the triangles each was read from and nothing a
         // stroke has done since.
         self.write_surfaces(path)?;
+        let guidance_path = crate::retopo_session::sidecar_for(path);
+        crate::retopo_session::write_guidance(&guidance_path, &self.retopo_guidance).map_err(
+            |error| {
+                ModelError::engine(format!(
+                "a orientação da retopologia não pôde ser gravada em {guidance_path:?}: {error}"
+            ))
+            },
+        )?;
         Ok(())
     }
 
@@ -12894,6 +12960,8 @@ impl DocumentModel for ClayDocument {
         // not a failed open: the sculpture is all there, and what is lost is
         // which of its shapes can be picked up again.
         opened.objects = crate::objects::read_table(&crate::objects::sidecar_for(path));
+        opened.retopo_guidance =
+            crate::retopo_session::read_guidance(&crate::retopo_session::sidecar_for(path));
         // The hierarchies are *not* overlaid here, unlike the objects. They
         // are applied inside `from_file`, before the passes that measure each
         // layer, because a hierarchy changes what the row **is**: the engine
@@ -13062,6 +13130,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
             retopo_target: None,
+            retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -13079,6 +13148,7 @@ impl ClayDocument {
             voxel_smooth: std::collections::BTreeMap::new(),
             cage_revision: 0,
             mask_revision: 0,
+            mask_refresh: Some(MaskRefreshScope::Full),
             combine: CombineSettings::for_strokes(),
             colour: clayspace_model::ColourState::default(),
             smooth_mode: clayspace_model::SmoothFrequency::default(),
@@ -13902,7 +13972,7 @@ impl ClayDocument {
         }
         let index = self.index_of(curve.layer)?;
         let layer = self.layers[index].id;
-        let guide = curve.guide();
+        let guide = curve.guide(self.layers[index].transform);
         let kind = point_type(curve.join);
 
         if let Some(node) = curve.node {
@@ -14664,6 +14734,13 @@ impl ClayDocument {
 }
 
 impl ClayDocument {
+    /// Monotonic ID of the latest history entry, including entries that
+    /// replaced an evicted one while the stack stayed at its depth limit.
+    pub fn history_revision(&mut self) -> u64 {
+        self.note_engine_entries();
+        self.history_seq
+    }
+
     /// How many things the history holds, as the interface counts them.
     ///
     /// The one number every ViewModel that writes to the document measures
@@ -14715,15 +14792,9 @@ impl MaskModel for ClayDocument {
             if let Some(mut mask) = self.document.layer_mask_mut(layer) {
                 mask.clear().map_err(ModelError::engine)?;
             }
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            self.mark_mask_full();
             return Ok(());
         }
-        // Bumped before the operation, and whatever it turns out to do: every
-        // one of them changes what is frozen, and a viewport that missed one
-        // would keep drawing the mask as it was. A redundant re-sample costs a
-        // buffer write; a missed one is a lie on the screen.
-        self.mask_revision = self.mask_revision.wrapping_add(1);
-
         // Refused where nothing is frozen, which is the same refusal as before
         // and now has to be spelled out: a document-owned mask stays attached
         // once it exists, so "carries a mask" and "freezes something" are no
@@ -14736,7 +14807,7 @@ impl MaskModel for ClayDocument {
             return Err(ModelError::engine("não há máscara para editar"));
         };
 
-        match op {
+        let result = match op {
             MaskOp::Invert => mask.invert().map_err(ModelError::engine),
             MaskOp::Expand(steps) => mask.expand(steps.max(1)).map_err(ModelError::engine),
             MaskOp::Contract(steps) => mask.contract(steps.max(1)).map_err(ModelError::engine),
@@ -14758,7 +14829,11 @@ impl MaskModel for ClayDocument {
                 mask.invert_within(low, high).map_err(ModelError::engine)
             }
             MaskOp::Clear => unreachable!("handled above"),
+        };
+        if result.is_ok() {
+            self.mark_mask_full();
         }
+        result
     }
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
@@ -14902,7 +14977,7 @@ impl MaskModel for ClayDocument {
         // As a mask stroke does: nothing in the surface moved, so no brick is
         // dirty and the viewport would keep drawing the region as it was.
         if painted > 0 {
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            self.mark_mask_full();
         }
         Ok(())
     }
@@ -16392,6 +16467,80 @@ impl ClayDocument {
         Ok((positions, normals, indices))
     }
 
+    /// Temporary triangles for the selected sculpt, without publishing a
+    /// conversion layer or changing the sculpt's representation.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn active_retopo_geometry(
+        &mut self,
+    ) -> Result<(Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>), ModelError> {
+        let index = self.active;
+        let mesh = match self.layers[index].representation {
+            Representation::Mesh => return self.active_mesh_geometry(),
+            Representation::Voxel => {
+                let name = self.layers[index].engine_name.clone();
+                let (_, grid) = self
+                    .document
+                    .voxel_reader(&name)
+                    .map_err(ModelError::engine)?;
+                grid.mesh().map_err(ModelError::engine)?
+            }
+            Representation::Multires => {
+                let hierarchy = self.layers[index]
+                    .multires
+                    .as_mut()
+                    .ok_or_else(|| ModelError::engine("a hierarquia não carrega uma superfície"))?;
+                let level = hierarchy.levels().display;
+                hierarchy
+                    .surface_mut()
+                    .copy_level_mesh(level)
+                    .map_err(ModelError::engine)?
+            }
+            Representation::Dynamic => self.layers[index]
+                .dynamic
+                .as_ref()
+                .ok_or_else(|| ModelError::engine("a superfície dinâmica está vazia"))?
+                .to_mesh()?,
+            Representation::Sdf => {
+                let source = self.layers[index].id;
+                let hidden: Vec<LayerId> = self
+                    .layers
+                    .iter()
+                    .filter(|layer| {
+                        layer.id != source
+                            && layer.visible
+                            && layer.representation == Representation::Sdf
+                    })
+                    .map(|layer| layer.id)
+                    .collect();
+                let cell = self.cache.config().voxel_size;
+                let sampled = self.meshed_alone(&hidden, cell);
+                for id in hidden {
+                    self.document
+                        .set_layer_visible(id, true)
+                        .map_err(ModelError::engine)?;
+                }
+                sampled?
+            }
+        };
+        if mesh.is_empty() {
+            return Err(ModelError::engine(
+                "esta camada ainda não tem superfície para retopologizar",
+            ));
+        }
+        Ok((
+            mesh.positions().to_vec(),
+            mesh.normals_or_derived(),
+            mesh.indices().to_vec(),
+        ))
+    }
+
+    pub(crate) fn active_retopo_placement(
+        &self,
+    ) -> (clayspace_model::Representation, clayspace_model::Transform) {
+        let layer = &self.layers[self.active];
+        (layer.representation, layer.transform)
+    }
+
     /// The field meshed with every visible mesh layer beside it — or, where
     /// the engine refuses because there is no field to mesh, the visible mesh
     /// layers alone.
@@ -16470,10 +16619,8 @@ impl ClayDocument {
                 "não há camada registada para receber esta retopologia",
             ));
         };
-        let id = self.layers[self.index_of(key)?].id;
-        self.document
-            .mesh_layer_revision(id)
-            .map_err(ModelError::engine)
+        self.index_of(key)?;
+        Ok(self.mesh_revision())
     }
 
     /// The revision the active mesh layer is at, and the key it belongs to.
@@ -16482,11 +16629,8 @@ impl ClayDocument {
     /// compare-and-swap. See [`ClayDocument::retopo_target`].
     pub(crate) fn remember_retopo_target(&mut self) -> Result<(), ModelError> {
         let key = self.active_layer().key;
-        let id = self.layers[self.index_of(key)?].id;
-        let revision = self
-            .document
-            .mesh_layer_revision(id)
-            .map_err(ModelError::engine)?;
+        self.index_of(key)?;
+        let revision = self.mesh_revision();
         self.retopo_target = Some((key, revision));
         Ok(())
     }
@@ -16511,6 +16655,11 @@ impl ClayDocument {
         expected_revision: u64,
         result: &clayspace_model::RetopoResult,
     ) -> Result<(), ModelError> {
+        if self.mesh_revision() != expected_revision {
+            return Err(ModelError::engine(
+                "a camada mudou enquanto a retopologia corria, por isso não foi aplicada",
+            ));
+        }
         let index = self.index_of(key)?;
         let layer = &self.layers[index];
         if layer.representation != Representation::Mesh {
@@ -16522,6 +16671,10 @@ impl ClayDocument {
             return Err(ModelError::engine(refusal));
         }
         let id = layer.id;
+        let engine_revision = self
+            .document
+            .mesh_layer_revision(id)
+            .map_err(ModelError::engine)?;
 
         // Before the replacement, as a rebuild does it: the sculptor holds an
         // adjacency and a BVH over triangles that are about to stop existing,
@@ -16531,7 +16684,7 @@ impl ClayDocument {
 
         let mesh = crate::retopo::retopo_mesh(result)?;
         self.document
-            .replace_mesh_layer(id, &mesh, expected_revision)
+            .replace_mesh_layer(id, &mesh, engine_revision)
             .map_err(|e| {
                 ModelError::engine(format!(
                     "a camada mudou enquanto a retopologia corria, por isso não foi \
@@ -16571,10 +16724,7 @@ impl ClayDocument {
                  por isso o resultado não foi publicado",
             )
         })?;
-        let revision = self
-            .document
-            .mesh_layer_revision(self.layers[index].id)
-            .map_err(ModelError::engine)?;
+        let revision = self.mesh_revision();
         if revision != expected_revision {
             return Err(ModelError::engine(
                 "a camada de origem mudou enquanto a retopologia corria, por \

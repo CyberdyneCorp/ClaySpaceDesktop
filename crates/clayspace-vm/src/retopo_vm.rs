@@ -17,10 +17,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clayspace_model::{
-    RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoUv, Retopologiser,
+    DensityDab, FlowGuide, RetopoGuidance, RetopoModel, RetopoOutcome, RetopoResult,
+    RetopoSettings, RetopoToolState, RetopoUv, Retopologiser,
 };
 
-use crate::command::Command;
+use crate::command::{Command, RetopoEdit};
 use crate::jobs::{Completion, JobRunner};
 use crate::observable::Observable;
 
@@ -29,6 +30,12 @@ pub struct RetopoViewModel {
     model: Box<dyn RetopoModel>,
     engine: Arc<dyn Retopologiser>,
     settings: Observable<RetopoSettings>,
+    tool: Observable<RetopoToolState>,
+    guidance: Observable<RetopoGuidance>,
+    guide_draft: Observable<Vec<[f32; 3]>>,
+    guidance_undo: Vec<RetopoGuidance>,
+    guidance_redo: Vec<RetopoGuidance>,
+    gesture_before: Option<RetopoGuidance>,
     /// Why the tool is unavailable, where it is.
     unavailable: Observable<Option<String>>,
     /// What the last retopology came to.
@@ -51,10 +58,17 @@ pub struct RetopoViewModel {
 
 impl RetopoViewModel {
     pub fn new(model: Box<dyn RetopoModel>, engine: Arc<dyn Retopologiser>) -> Self {
+        let guidance = model.retopo_guidance();
         Self {
             model,
             engine,
             settings: Observable::new(RetopoSettings::default()),
+            tool: Observable::new(RetopoToolState::default()),
+            guidance: Observable::new(guidance),
+            guide_draft: Observable::new(Vec::new()),
+            guidance_undo: Vec::new(),
+            guidance_redo: Vec::new(),
+            gesture_before: None,
             unavailable: Observable::new(None),
             last: Observable::new(None),
             notice: Observable::new(None),
@@ -66,6 +80,18 @@ impl RetopoViewModel {
 
     pub fn settings(&self) -> &Observable<RetopoSettings> {
         &self.settings
+    }
+
+    pub fn tool(&self) -> &Observable<RetopoToolState> {
+        &self.tool
+    }
+
+    pub fn guidance(&self) -> &Observable<RetopoGuidance> {
+        &self.guidance
+    }
+
+    pub fn guide_draft(&self) -> &Observable<Vec<[f32; 3]>> {
+        &self.guide_draft
     }
 
     pub fn unavailable(&self) -> &Observable<Option<String>> {
@@ -93,6 +119,7 @@ impl RetopoViewModel {
     /// Called when the active subtool changes: retopology rebuilds a mesh's
     /// topology, and a field is not a mesh.
     pub fn refresh(&mut self) {
+        self.guidance.set_if_changed(self.model.retopo_guidance());
         let reason = self.model.can_retopologise().err();
         self.unavailable.set_if_changed(reason);
     }
@@ -102,6 +129,13 @@ impl RetopoViewModel {
             Command::SetRetopoSettings(settings) => {
                 self.settings.set_if_changed(settings.sanitized());
             }
+            Command::SetRetopoTool(tool) => {
+                if self.tool.get().mode != tool.mode {
+                    self.guide_draft.set_if_changed(Vec::new());
+                }
+                self.tool.set_if_changed(tool.sanitized());
+            }
+            Command::EditRetopo(edit) => self.edit(edit),
             Command::RunRetopology => self.start(),
             Command::CancelRetopology => {
                 // Read by the worker between stages. The job is not abandoned
@@ -111,6 +145,129 @@ impl RetopoViewModel {
             }
             _ => {}
         }
+    }
+
+    fn edit(&mut self, edit: &RetopoEdit) {
+        match edit {
+            RetopoEdit::AddGuidePoint(point) => {
+                if !point.iter().all(|value| value.is_finite()) {
+                    return;
+                }
+                let mut draft = self.guide_draft.get().clone();
+                if draft.last().is_none_or(|last| last != point) {
+                    draft.push(*point);
+                    self.guide_draft.set(draft);
+                }
+            }
+            RetopoEdit::FinishGuide => {
+                let points = self.guide_draft.get().clone();
+                self.guide_draft.set(Vec::new());
+                if points.len() < 2 {
+                    return;
+                }
+                let tool = *self.tool.get();
+                let mut guidance = self.guidance.get().clone();
+                guidance.guides.push(FlowGuide {
+                    points,
+                    strength: tool.guide_strength,
+                    radius: tool.guide_radius,
+                    mode: tool.guide_mode,
+                    closed: false,
+                });
+                self.commit_guidance(guidance);
+            }
+            RetopoEdit::BeginGesture => {
+                self.gesture_before = Some(self.guidance.get().clone());
+            }
+            RetopoEdit::EndGesture => {
+                if let Some(before) = self.gesture_before.take() {
+                    if before != *self.guidance.get() {
+                        self.guidance_undo.push(before);
+                        self.guidance_redo.clear();
+                    }
+                }
+            }
+            RetopoEdit::MoveGuidePoint {
+                guide,
+                point,
+                position,
+            } => {
+                if !position.iter().all(|value| value.is_finite()) {
+                    return;
+                }
+                let mut guidance = self.guidance.get().clone();
+                let Some(target) = guidance
+                    .guides
+                    .get_mut(*guide)
+                    .and_then(|g| g.points.get_mut(*point))
+                else {
+                    return;
+                };
+                *target = *position;
+                self.commit_guidance(guidance);
+            }
+            RetopoEdit::DeleteGuide(index) => {
+                let mut guidance = self.guidance.get().clone();
+                if *index >= guidance.guides.len() {
+                    return;
+                }
+                guidance.guides.remove(*index);
+                self.commit_guidance(guidance);
+            }
+            RetopoEdit::SetGuide {
+                index,
+                mode,
+                strength,
+                radius,
+            } => {
+                let mut guidance = self.guidance.get().clone();
+                let Some(guide) = guidance.guides.get_mut(*index) else {
+                    return;
+                };
+                guide.mode = *mode;
+                guide.strength = *strength;
+                guide.radius = *radius;
+                self.commit_guidance(guidance);
+            }
+            RetopoEdit::PaintDensity(position) => {
+                let tool = *self.tool.get();
+                let mut guidance = self.guidance.get().clone();
+                guidance.density.push(DensityDab {
+                    position: *position,
+                    radius: tool.density_radius,
+                    multiplier: tool.density_multiplier,
+                });
+                self.commit_guidance(guidance);
+            }
+            RetopoEdit::Undo => {
+                if let Some(previous) = self.guidance_undo.pop() {
+                    self.guidance_redo.push(self.guidance.get().clone());
+                    self.install_guidance(previous);
+                }
+            }
+            RetopoEdit::Redo => {
+                if let Some(next) = self.guidance_redo.pop() {
+                    self.guidance_undo.push(self.guidance.get().clone());
+                    self.install_guidance(next);
+                }
+            }
+        }
+    }
+
+    fn commit_guidance(&mut self, guidance: RetopoGuidance) {
+        if !guidance.valid() || guidance == *self.guidance.get() {
+            return;
+        }
+        if self.gesture_before.is_none() {
+            self.guidance_undo.push(self.guidance.get().clone());
+            self.guidance_redo.clear();
+        }
+        self.install_guidance(guidance);
+    }
+
+    fn install_guidance(&mut self, guidance: RetopoGuidance) {
+        self.model.set_retopo_guidance(guidance.clone());
+        self.guidance.set(guidance);
     }
 
     fn start(&mut self) {
@@ -205,6 +362,7 @@ impl RetopoViewModel {
                     }
                     _ => None,
                 };
+                let notice = result.outcome.guidance_warnings.first().cloned().or(notice);
                 self.last.set(Some(result.outcome));
                 self.notice.set(notice);
             }

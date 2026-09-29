@@ -66,7 +66,7 @@
 - [x] 6.2 Wrap and expose the cube and sphere paint/erase brushes with their falloff curves
 - [x] 6.3 Wrap and expose pre-bake repair: report, close holes, fill voids
 - [x] 6.4 Add a repair panel that reports before it changes anything
-- [x] 6.5 Expose regional refinement through `clay_voxel_add_level_region`
+- [ ] 6.5 Expose regional refinement through `clay_voxel_add_level_region` (binding and document path exist; no UI or MCP command reaches them)
 - [x] 6.6 Test that a repair's report changes after the repair it describes
 
 ## 7. Phase 3 — voxel sculpt layers
@@ -1423,4 +1423,3 @@ Recorded under *Not built yet*.
     filter, the shading level, and dilating the request by one and two bricks.
     None of them converged; the store itself was never at fault, which was
     settled by requesting every surface brick and seeing the losses go to zero.
-

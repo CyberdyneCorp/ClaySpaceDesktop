@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use clayspace_model::{
-    ModelError, RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, RetopoUv,
-    Retopologiser, UvOutcome, UvSettings,
+    ModelError, RetopoGuidance, RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings,
+    RetopoSource, RetopoUv, Retopologiser, UvOutcome, UvSettings,
 };
-use clayspace_vm::{Command, RetopoViewModel};
+use clayspace_vm::{Command, RetopoEdit, RetopoViewModel};
 
 /// A document that records what was asked of it.
 #[derive(Default)]
@@ -26,6 +26,7 @@ struct Subtool {
     /// What was placed, and whether it was asked to replace the source.
     placed: Vec<RetopoResult>,
     in_place: Vec<bool>,
+    guidance: RetopoGuidance,
 }
 
 struct Doubles {
@@ -33,6 +34,14 @@ struct Doubles {
 }
 
 impl RetopoModel for Doubles {
+    fn retopo_guidance(&self) -> RetopoGuidance {
+        self.subtool.lock().expect("not poisoned").guidance.clone()
+    }
+
+    fn set_retopo_guidance(&mut self, guidance: RetopoGuidance) {
+        self.subtool.lock().expect("not poisoned").guidance = guidance;
+    }
+
     fn can_retopologise(&self) -> Result<(), String> {
         match self.subtool.lock().expect("not poisoned").available.clone() {
             Some(reason) => Err(reason),
@@ -56,6 +65,7 @@ impl RetopoModel for Doubles {
             indices: vec![0, 1, 2],
             name: "Forma · mesh".to_string(),
             revision: subtool.revision,
+            guidance: subtool.guidance.clone(),
         })
     }
 
@@ -147,6 +157,7 @@ impl Retopologiser for Double {
                 triangles: 2,
                 vertices: source.positions.len(),
                 uv,
+                guidance_warnings: Vec::new(),
             },
             name: format!("{} · quads · {}", source.name, settings.target_quads),
         })
@@ -486,4 +497,33 @@ fn a_failed_uv_run_leaves_the_mesh() {
         notice.contains("o atlas recusou a malha"),
         "the notice does not say why: {notice}"
     );
+}
+
+#[test]
+fn guidance_edits_stay_out_of_sculpt_geometry_and_are_undoable() {
+    let (mut vm, subtool) = fixture(plain(None));
+    let before_revision = subtool.lock().unwrap().revision;
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::BeginGesture));
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::AddGuidePoint([
+        0.0, 0.0, 0.0,
+    ])));
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::AddGuidePoint([
+        1.0, 0.0, 0.0,
+    ])));
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::FinishGuide));
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::EndGesture));
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::PaintDensity([
+        0.2, 0.0, 0.0,
+    ])));
+    assert_eq!(vm.guidance().get().guides.len(), 1);
+    assert_eq!(vm.guidance().get().density.len(), 1);
+    assert_eq!(subtool.lock().unwrap().revision, before_revision);
+
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::Undo));
+    assert!(vm.guidance().get().density.is_empty());
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::Undo));
+    assert!(vm.guidance().get().guides.is_empty());
+    vm.dispatch(&Command::EditRetopo(RetopoEdit::Redo));
+    assert_eq!(vm.guidance().get().guides.len(), 1);
+    assert_eq!(subtool.lock().unwrap().revision, before_revision);
 }

@@ -227,7 +227,15 @@ impl Scene {
 
     /// A field, worked.
     fn build_sdf(self, policy: BackendPolicy) -> Result<ClayDocument, ModelError> {
-        let radius = self.radius();
+        Self::build_worked_sdf_at_radius(policy, self.radius())
+    }
+
+    /// The same worked field at a specified radius, for benchmark fixtures
+    /// between the reference and its ten-times-area member.
+    pub fn build_worked_sdf_at_radius(
+        policy: BackendPolicy,
+        radius: f32,
+    ) -> Result<ClayDocument, ModelError> {
         let mut document = ClayDocument::new(policy)?;
         document.add_starting_sphere(radius)?;
 

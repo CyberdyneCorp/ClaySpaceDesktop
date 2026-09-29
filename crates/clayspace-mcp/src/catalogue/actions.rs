@@ -338,6 +338,9 @@ pub fn home_of(command: &Command) -> Home {
         // section — which needs no panel, changes nothing, and hands back the
         // same per-phase split the file carries.
         ExportProfile => Home::NotOffered(OPENS_A_PANEL),
+        SetRetopoTool(_) | EditRetopo(_) => {
+            Home::NotOffered("retopology guidance is edited in the viewport and its panel")
+        }
     }
 }
 

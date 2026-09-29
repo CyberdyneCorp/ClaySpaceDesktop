@@ -20,7 +20,7 @@ mod contract_tests;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
@@ -101,6 +101,131 @@ pub struct Catalogue {
     bounds: Bounds,
     /// Frames a client asked to keep, for a later comparison.
     remembered: Mutex<HashMap<(String, String), Frame>>,
+    history_owners: Arc<Mutex<HistoryOwners>>,
+}
+
+#[derive(Clone)]
+struct HistoryOwner {
+    session: String,
+    name: String,
+}
+
+impl HistoryOwner {
+    fn window() -> Self {
+        Self {
+            session: String::new(),
+            name: "window".into(),
+        }
+    }
+
+    fn new(caller: &str, client: Option<&str>) -> Self {
+        Self {
+            session: caller.to_string(),
+            name: match client {
+                Some(name) if name != caller => format!("{name} (session {caller})"),
+                _ => caller.to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Default)]
+struct HistoryOwners {
+    undo: Vec<HistoryOwner>,
+    redo: Vec<HistoryOwner>,
+    revision: Option<u64>,
+}
+
+struct HistoryChange {
+    before: usize,
+    after: usize,
+    changed: bool,
+    new_entry: bool,
+    revision: Option<u64>,
+}
+
+impl HistoryOwners {
+    fn sync(&mut self, depth: usize, redo_depth: usize, revision: Option<u64>) {
+        let external_entry =
+            matches!((self.revision, revision), (Some(before), Some(after)) if after > before);
+        // The window can add entries while the stack is full, evicting the
+        // oldest entry without changing its depth. It may also have made
+        // several edits and undos since our last read. We cannot infer which
+        // stored owner belongs at each index from the final depths, so make
+        // the whole stack window-owned rather than authorize a wrong undo.
+        if external_entry {
+            self.undo.clear();
+            self.redo.clear();
+        }
+        self.undo.truncate(depth);
+        self.redo.truncate(redo_depth);
+        self.undo.resize_with(depth, HistoryOwner::window);
+        self.redo.resize_with(redo_depth, HistoryOwner::window);
+        self.revision = revision;
+    }
+
+    fn check(&self, command: &Command, caller: &str) -> Result<(), Refusal> {
+        let entry = match command {
+            Command::Undo => self.undo.last(),
+            Command::Redo => self.redo.last(),
+            _ => return Ok(()),
+        };
+        if let Some(entry) = entry {
+            if entry.session != caller {
+                return Err(Refusal::new(
+                    RefusalCode::Unavailable,
+                    format!(
+                        "the next history entry belongs to {}; this MCP session cannot {} it",
+                        entry.name,
+                        command.label()
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn applied(&mut self, command: &Command, owner: HistoryOwner, change: HistoryChange) {
+        let HistoryChange {
+            before,
+            after,
+            changed,
+            new_entry,
+            revision,
+        } = change;
+        if !changed {
+            return;
+        }
+        match command {
+            Command::Undo if after < before => {
+                if let Some(entry) = self.undo.pop() {
+                    self.redo.push(entry);
+                }
+            }
+            Command::Redo if after > before => {
+                if let Some(entry) = self.redo.pop() {
+                    self.undo.push(entry);
+                }
+            }
+            _ if after > before => {
+                self.redo.clear();
+                self.undo.push(owner);
+            }
+            // A full history evicts its oldest entry when a new one lands.
+            _ if after == before && before > 0 && new_entry => {
+                self.redo.clear();
+                self.undo.remove(0);
+                self.undo.push(owner);
+            }
+            _ => {}
+        }
+        self.revision = revision;
+        self.sync(after, self.redo.len(), revision);
+    }
+
+    fn last_entry_by(&self) -> Option<String> {
+        self.undo.last().map(|owner| owner.name.clone())
+    }
 }
 
 impl Catalogue {
@@ -110,6 +235,7 @@ impl Catalogue {
             store: store.into(),
             bounds: Bounds::default(),
             remembered: Mutex::new(HashMap::new()),
+            history_owners: Arc::new(Mutex::new(HistoryOwners::default())),
         }
     }
 
@@ -124,6 +250,7 @@ impl Catalogue {
         &self,
         group: &'static str,
         arguments: &Value,
+        caller: &str,
         client: Option<&str>,
     ) -> Result<CallResult, Refusal> {
         let action = arguments
@@ -164,6 +291,8 @@ impl Catalogue {
             self.bounds.call
         };
         let settle = self.bounds.settle.min(bound);
+        let owners = Arc::clone(&self.history_owners);
+        let owner = HistoryOwner::new(caller, client);
 
         let answer = self.queue.submit(bound, move |session| {
             // A person's stroke is not interrupted. Reading is served during
@@ -195,7 +324,37 @@ impl Catalogue {
                 ));
             }
 
-            let applied = session.apply(command)?;
+            let history = session
+                .read(StateQuery {
+                    history: true,
+                    ..StateQuery::default()
+                })
+                .history;
+            let before = history.as_ref().map_or(0, |history| history.depth);
+            let before_revision = session.history_revision();
+            let mut ledger = owners.lock().expect("history owners are not poisoned");
+            ledger.sync(
+                before,
+                history.map_or(0, |history| history.redo_depth),
+                before_revision,
+            );
+            ledger.check(&command, &owner.session)?;
+            let applied = session.apply(command.clone())?;
+            let changed = applied.outcome == "applied";
+            let after_revision = session.history_revision();
+            let new_entry =
+                matches!((before_revision, after_revision), (Some(a), Some(b)) if b > a);
+            ledger.applied(
+                &command,
+                owner,
+                HistoryChange {
+                    before,
+                    after: applied.history_depth,
+                    changed,
+                    new_entry,
+                    revision: after_revision,
+                },
+            );
             let mut value = serde_json::to_value(&applied).unwrap_or(json!({}));
             // What the application brought into range, beside the answer
             // rather than instead of it: the command was applied, at these
@@ -312,8 +471,18 @@ impl Catalogue {
     fn call_state(&self, arguments: &Value) -> Result<CallResult, Refusal> {
         let args = Args::new("state", "read", arguments);
         let query = StateQuery::from_sections(&args.text_list_or_empty("sections")?)?;
+        let owners = Arc::clone(&self.history_owners);
         let answer = self.queue.submit(self.bounds.call, move |session| {
-            let report = session.read(query);
+            let mut report = session.read(query);
+            if let Some(history) = report.history.as_mut() {
+                let mut ledger = owners.lock().expect("history owners are not poisoned");
+                ledger.sync(
+                    history.depth,
+                    history.redo_depth,
+                    session.history_revision(),
+                );
+                history.last_entry_by = ledger.last_entry_by();
+            }
             Ok(Answer::value(
                 serde_json::to_value(&report).unwrap_or(json!({})),
             ))
@@ -336,7 +505,12 @@ impl Catalogue {
         self.answer(answer)
     }
 
-    fn call_measure(&self, arguments: &Value, client: Option<&str>) -> Result<CallResult, Refusal> {
+    fn call_measure(
+        &self,
+        arguments: &Value,
+        caller: &str,
+        client: Option<&str>,
+    ) -> Result<CallResult, Refusal> {
         let group = Args::new("measure", "run", arguments).text("group")?;
         let action = Args::new("measure", "run", arguments).text("action")?;
         let inner = arguments.get("arguments").cloned().unwrap_or(json!({}));
@@ -350,6 +524,9 @@ impl Catalogue {
             self.obtain(gate, &command, client)?;
         }
 
+        let owners = Arc::clone(&self.history_owners);
+        let owner = HistoryOwner::new(caller, client);
+
         let answer = self.queue.submit(self.bounds.capture, move |session| {
             // Either gesture, and for one reason: a figure taken across an
             // open gesture measures the gesture as well. Whose it is changes
@@ -361,7 +538,43 @@ impl Catalogue {
                      measures the stroke as well",
                 ));
             }
-            let measured = session.measure(command)?;
+            let history = session
+                .read(StateQuery {
+                    history: true,
+                    ..StateQuery::default()
+                })
+                .history;
+            let before = history.as_ref().map_or(0, |history| history.depth);
+            let before_revision = session.history_revision();
+            let mut ledger = owners.lock().expect("history owners are not poisoned");
+            ledger.sync(
+                before,
+                history.map_or(0, |history| history.redo_depth),
+                before_revision,
+            );
+            ledger.check(&command, &owner.session)?;
+            let measured = session.measure(command.clone())?;
+            let after = session
+                .read(StateQuery {
+                    history: true,
+                    ..StateQuery::default()
+                })
+                .history
+                .map_or(before, |history| history.depth);
+            let after_revision = session.history_revision();
+            let new_entry =
+                matches!((before_revision, after_revision), (Some(a), Some(b)) if b > a);
+            ledger.applied(
+                &command,
+                owner,
+                HistoryChange {
+                    before,
+                    after,
+                    changed: true,
+                    new_entry,
+                    revision: after_revision,
+                },
+            );
             Ok(Answer::value(
                 serde_json::to_value(&measured).unwrap_or(json!({})),
             ))
@@ -803,9 +1016,9 @@ impl ToolSurface for Catalogue {
             "state" => self.call_state(arguments),
             "viewport" => self.call_viewport(caller, arguments),
             "wait" => self.call_wait(arguments),
-            "measure" => self.call_measure(arguments, client),
+            "measure" => self.call_measure(arguments, caller, client),
             other => match GROUPS.iter().find(|(group, _, _)| *group == other) {
-                Some((group, _, _)) => self.call_group(group, arguments, client),
+                Some((group, _, _)) => self.call_group(group, arguments, caller, client),
                 None => Err(Refusal::new(
                     RefusalCode::UnknownAction,
                     format!(
@@ -996,7 +1209,7 @@ fn not_offered() -> Vec<Value> {
 /// not offered, so a command withheld from agents cannot also be missing from
 /// what `describe` says is withheld — which left a caller unable to tell "not
 /// available" from "does not exist".
-fn not_offered_commands() -> [Command; 14] {
+fn not_offered_commands() -> [Command; 16] {
     [
         Command::OpenDocument,
         Command::SaveAs,
@@ -1009,6 +1222,8 @@ fn not_offered_commands() -> [Command; 14] {
         Command::ChooseBakeDestination,
         Command::RunBake,
         Command::ExportProfile,
+        Command::SetRetopoTool(clayspace_model::RetopoToolState::default()),
+        Command::EditRetopo(clayspace_vm::RetopoEdit::Undo),
         Command::ToggleAgentDoor,
         Command::ShowAgentAccess(false),
         Command::AnswerAgentAsk(clayspace_vm::AgentAnswer::Yes),
@@ -1176,6 +1391,137 @@ mod tests {
 
     fn structured(result: &CallResult) -> Value {
         result.structured.clone().unwrap_or(json!({}))
+    }
+
+    #[test]
+    fn a_client_cannot_undo_another_clients_entry() {
+        let bench = Bench::new();
+        let call = |caller, tool, arguments| {
+            bench
+                .catalogue
+                .call_scoped(caller, Some(caller), tool, &arguments)
+        };
+        call(
+            "first",
+            "layer",
+            json!({"action":"add", "representation":"field"}),
+        )
+        .unwrap();
+        let state = call("second", "state", json!({"sections":["history"]})).unwrap();
+        assert_eq!(structured(&state)["history"]["last_entry_by"], "first");
+
+        let refusal = call("second", "history", json!({"action":"undo"})).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::Unavailable);
+        assert!(refusal.message.contains("first"));
+        assert_eq!(bench.applied().len(), 1);
+
+        call("first", "history", json!({"action":"undo"})).unwrap();
+        let state = call("second", "state", json!({"sections":["history"]})).unwrap();
+        assert!(structured(&state)["history"].get("last_entry_by").is_none());
+    }
+
+    #[test]
+    fn undoing_one_clients_entry_exposes_the_previous_owner() {
+        let bench = Bench::new();
+        let call = |caller, tool, arguments| {
+            bench
+                .catalogue
+                .call_scoped(caller, Some(caller), tool, &arguments)
+        };
+        let add = json!({"action":"add", "representation":"field"});
+        call("first", "layer", add.clone()).unwrap();
+        call("second", "layer", add).unwrap();
+        call("second", "history", json!({"action":"undo"})).unwrap();
+
+        let state = call("second", "state", json!({"sections":["history"]})).unwrap();
+        assert_eq!(structured(&state)["history"]["last_entry_by"], "first");
+        let refusal = call("second", "history", json!({"action":"undo"})).unwrap_err();
+        assert!(refusal.message.contains("first"));
+    }
+
+    #[test]
+    fn an_applied_no_op_at_full_depth_keeps_its_owner() {
+        let mut owners = HistoryOwners::default();
+        let edit = Command::AddLayer(Representation::Sdf);
+        owners.sync(0, 0, Some(0));
+        owners.applied(
+            &edit,
+            HistoryOwner::new("first", None),
+            HistoryChange {
+                before: 0,
+                after: 1,
+                changed: true,
+                new_entry: true,
+                revision: Some(1),
+            },
+        );
+        owners.applied(
+            &edit,
+            HistoryOwner::new("second", None),
+            HistoryChange {
+                before: 1,
+                after: 1,
+                changed: true,
+                new_entry: false,
+                revision: Some(1),
+            },
+        );
+        assert_eq!(owners.last_entry_by().as_deref(), Some("first"));
+
+        owners.applied(
+            &edit,
+            HistoryOwner::new("second", None),
+            HistoryChange {
+                before: 1,
+                after: 1,
+                changed: true,
+                new_entry: true,
+                revision: Some(2),
+            },
+        );
+        assert_eq!(owners.last_entry_by().as_deref(), Some("second"));
+
+        // A window edit can also replace an entry without increasing depth.
+        owners.sync(1, 0, Some(3));
+        assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
+    }
+
+    #[test]
+    fn external_full_stack_eviction_invalidates_every_stored_owner() {
+        let mut owners = HistoryOwners::default();
+        let edit = Command::AddLayer(Representation::Sdf);
+        owners.sync(0, 0, Some(0));
+        for (before, caller) in [(0, "first"), (1, "second")] {
+            owners.applied(
+                &edit,
+                HistoryOwner::new(caller, None),
+                HistoryChange {
+                    before,
+                    after: before + 1,
+                    changed: true,
+                    new_entry: true,
+                    revision: Some(before as u64 + 1),
+                },
+            );
+        }
+        // The window adds an entry at the engine's depth limit: the first
+        // owner's entry fell off, the second moved down, and the top is new.
+        owners.sync(2, 0, Some(3));
+        assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
+        assert!(owners.check(&Command::Undo, "second").is_err());
+        owners.applied(
+            &Command::Undo,
+            HistoryOwner::window(),
+            HistoryChange {
+                before: 2,
+                after: 1,
+                changed: true,
+                new_entry: false,
+                revision: Some(3),
+            },
+        );
+        assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
+        assert!(owners.check(&Command::Undo, "second").is_err());
     }
 
     #[test]

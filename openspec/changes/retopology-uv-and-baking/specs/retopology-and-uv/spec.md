@@ -93,6 +93,14 @@ field as retopology data, independent of sculpt brushes. Guides and density
 SHALL be visible and editable before a job starts and SHALL be passed to the
 remesher only when that job is requested. Their edits SHALL be undoable.
 
+Guides SHALL carry ordered surface points, strength, influence radius and an
+orientation or topology mode. Density SHALL be authored as surface samples and
+translated to per-vertex remesher guidance at the adapter. Both SHALL survive
+document save and reopen. A retopology gesture SHALL NOT be dispatched as a
+sculpt stroke, and authoring either input SHALL leave the sculpt geometry
+unchanged. The same controls SHALL work on Mesh, Dynamic, Multires, Voxel and
+SDF sources through a temporary mesh of the active subtool.
+
 #### Scenario: Density changes the requested topology
 - **WHEN** the same mesh is retopologised with and without a higher-density region
 - **THEN** the accepted mesh has measurably more quads in that region, while the source sculpt is unchanged
@@ -100,6 +108,14 @@ remesher only when that job is requested. Their edits SHALL be undoable.
 #### Scenario: A guide steers flow
 - **WHEN** a flow guide is drawn across a source mesh and the job runs
 - **THEN** the job receives that guide as retopology input rather than modifying the source surface
+
+#### Scenario: Guide and density edits survive a round trip
+- **WHEN** an artist saves and reopens a document with edited guides and density
+- **THEN** the same guides, control points, modes, strengths and density samples are available for the next retopology run
+
+#### Scenario: Retopology mode captures the pointer
+- **WHEN** a pointer gesture begins while guide or density authoring is active
+- **THEN** the retopology guidance changes and the sculpt geometry and sculpt history do not
 
 ### Requirement: Optional UVs survive acceptance
 The retopology workflow SHALL offer optional automatic UV generation for its

@@ -137,6 +137,132 @@ impl RetopoSettings {
     }
 }
 
+/// A curve authored on the source surface to steer the next retopology run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowGuideMode {
+    Orientation,
+    Topology,
+}
+
+/// Which pointer interaction retopology owns. When active, the gesture is
+/// consumed before any sculpt command can be emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RetopoEditMode {
+    #[default]
+    Off,
+    DrawGuide,
+    PaintDensity,
+    EditGuide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetopoToolState {
+    pub mode: RetopoEditMode,
+    pub guide_mode: FlowGuideMode,
+    pub guide_strength: f32,
+    pub guide_radius: f32,
+    pub density_radius: f32,
+    pub density_multiplier: f32,
+}
+
+impl Default for RetopoToolState {
+    fn default() -> Self {
+        Self {
+            mode: RetopoEditMode::Off,
+            guide_mode: FlowGuideMode::Orientation,
+            guide_strength: 0.8,
+            guide_radius: 0.2,
+            density_radius: 0.2,
+            density_multiplier: 2.0,
+        }
+    }
+}
+
+impl RetopoToolState {
+    pub fn sanitized(self) -> Self {
+        Self {
+            guide_strength: self.guide_strength.clamp(0.0, 1.0),
+            guide_radius: self.guide_radius.clamp(0.01, 10.0),
+            density_radius: self.density_radius.clamp(0.01, 10.0),
+            density_multiplier: self.density_multiplier.clamp(0.25, 4.0),
+            ..self
+        }
+    }
+}
+
+/// Retopology input, independent of the sculpt and its brush settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowGuide {
+    pub points: Vec<[f32; 3]>,
+    pub strength: f32,
+    pub radius: f32,
+    pub mode: FlowGuideMode,
+    pub closed: bool,
+}
+
+impl FlowGuide {
+    pub fn valid(&self) -> bool {
+        self.points.len() >= 2
+            && self.points.iter().flatten().all(|value| value.is_finite())
+            && self.strength.is_finite()
+            && (0.0..=1.0).contains(&self.strength)
+            && self.radius.is_finite()
+            && self.radius > 0.0
+    }
+}
+
+/// A surface-local paint dab. The adapter samples these onto each input mesh,
+/// so guidance survives a source representation's vertex-count changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DensityDab {
+    pub position: [f32; 3],
+    pub radius: f32,
+    /// Quads per unit area relative to the global target, in [0.25, 4].
+    pub multiplier: f32,
+}
+
+impl DensityDab {
+    pub fn valid(self) -> bool {
+        self.position.iter().all(|value| value.is_finite())
+            && self.radius.is_finite()
+            && self.radius > 0.0
+            && self.multiplier.is_finite()
+            && (0.25..=4.0).contains(&self.multiplier)
+    }
+
+    pub fn apply(self, point: [f32; 3], current: f32) -> f32 {
+        let squared: f32 = point
+            .iter()
+            .zip(self.position)
+            .map(|(value, centre)| (value - centre).powi(2))
+            .sum();
+        let reach = (1.0 - squared.sqrt() / self.radius).clamp(0.0, 1.0);
+        let weight = reach * reach * (3.0 - 2.0 * reach);
+        current + (self.multiplier - current) * weight
+    }
+}
+
+/// Guidance saved with the retopology session and sent to the remesher only
+/// when the artist starts a run.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RetopoGuidance {
+    pub guides: Vec<FlowGuide>,
+    pub density: Vec<DensityDab>,
+}
+
+impl RetopoGuidance {
+    pub fn valid(&self) -> bool {
+        self.guides.iter().all(FlowGuide::valid)
+            && self.density.iter().copied().all(DensityDab::valid)
+    }
+
+    pub fn density_at(&self, point: [f32; 3]) -> f32 {
+        self.density
+            .iter()
+            .fold(1.0, |value, dab| dab.apply(point, value))
+    }
+}
+
 /// What became of the optional UV step of a retopology.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum RetopoUv {
@@ -173,6 +299,8 @@ pub struct RetopoOutcome {
     pub vertices: usize,
     /// The optional UV layout, and why there is none when one was asked for.
     pub uv: RetopoUv,
+    /// Engine guidance warnings, including any region it could not honor.
+    pub guidance_warnings: Vec<String>,
 }
 
 impl RetopoOutcome {
@@ -221,6 +349,8 @@ pub struct RetopoSource {
     /// while it does, so a result is published only if the source still
     /// stands at this revision — see [`RetopoModel::retopo_source_revision`].
     pub revision: u64,
+    /// Snapshot at job start; later guidance edits affect the next run.
+    pub guidance: RetopoGuidance,
 }
 
 /// What came back, owned and thread-safe, ready to be placed.
@@ -285,6 +415,13 @@ pub trait Retopologiser: Send + Sync {
 
 /// Retopologising a mesh subtool.
 pub trait RetopoModel {
+    /// Current authored guidance. Reading it never touches sculpt geometry.
+    fn retopo_guidance(&self) -> RetopoGuidance;
+
+    /// Replaces the authored guidance after an edit or undo. The implementation
+    /// persists this with the document, independently of sculpt history.
+    fn set_retopo_guidance(&mut self, guidance: RetopoGuidance);
+
     /// Whether the active subtool can be retopologised, and why not if it
     /// cannot.
     fn can_retopologise(&self) -> Result<(), String>;

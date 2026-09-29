@@ -35,6 +35,7 @@ pub struct FakeSession {
     /// A gesture the agent opened itself and has not closed.
     pub agent_gesture: bool,
     pub history_depth: usize,
+    pub history_revision: u64,
     pub outstanding: Vec<Outstanding>,
     /// How many times state was read, so a test can assert reading changed
     /// nothing.
@@ -72,6 +73,7 @@ impl FakeSession {
             gesture: false,
             agent_gesture: false,
             history_depth: 0,
+            history_revision: 0,
             outstanding: Vec::new(),
             reads: std::cell::Cell::new(0),
             captures: 0,
@@ -149,8 +151,11 @@ impl Session for FakeSession {
             Command::BeginStroke { .. } | Command::ContinueStroke { .. } | Command::CancelStroke
         );
         let no_effect = self.no_effects.contains(command.label());
-        if touched && !mid_gesture && !no_effect {
+        if matches!(command, Command::Undo) && self.history_depth > 0 {
+            self.history_depth -= 1;
+        } else if touched && !mid_gesture && !no_effect && !matches!(command, Command::Redo) {
             self.history_depth += 1;
+            self.history_revision += 1;
             self.modified = true;
         }
         // The jobs that run off the interface thread answer at once and keep
@@ -249,6 +254,7 @@ impl Session for FakeSession {
                 undoes: (self.history_depth > 0).then(|| "argila".to_string()),
                 redoes: None,
                 from_agent: self.applied.len(),
+                last_entry_by: None,
             });
         }
         if query.mask {
@@ -305,6 +311,10 @@ impl Session for FakeSession {
             });
         }
         report
+    }
+
+    fn history_revision(&mut self) -> Option<u64> {
+        Some(self.history_revision)
     }
 
     fn capture(&mut self, request: CaptureRequest) -> Result<Frame, Refusal> {
