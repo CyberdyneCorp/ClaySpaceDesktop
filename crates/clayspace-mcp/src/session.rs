@@ -38,6 +38,12 @@ pub trait Session {
     /// sleeps.
     fn read(&mut self, query: StateQuery) -> StateReport;
 
+    /// A monotonic entry ID where the document offers one. This disambiguates
+    /// an edit at the history depth limit from a command that changed nothing.
+    fn history_revision(&mut self) -> Option<u64> {
+        None
+    }
+
     /// Renders one frame and hands back its pixels.
     fn capture(&mut self, request: CaptureRequest) -> Result<Frame, Refusal>;
 

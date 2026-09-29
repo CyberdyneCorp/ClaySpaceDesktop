@@ -111,6 +111,13 @@ struct HistoryOwner {
 }
 
 impl HistoryOwner {
+    fn window() -> Self {
+        Self {
+            session: String::new(),
+            name: "window".into(),
+        }
+    }
+
     fn new(caller: &str, client: Option<&str>) -> Self {
         Self {
             session: caller.to_string(),
@@ -126,20 +133,23 @@ impl HistoryOwner {
 struct HistoryOwners {
     undo: Vec<HistoryOwner>,
     redo: Vec<HistoryOwner>,
+    revision: Option<u64>,
 }
 
 impl HistoryOwners {
-    fn sync(&mut self, depth: usize, redo_depth: usize) {
+    fn sync(&mut self, depth: usize, redo_depth: usize, revision: Option<u64>) {
+        let external_entry =
+            matches!((self.revision, revision), (Some(before), Some(after)) if after > before);
         self.undo.truncate(depth);
         self.redo.truncate(redo_depth);
-        self.undo.resize_with(depth, || HistoryOwner {
-            session: String::new(),
-            name: "window".into(),
-        });
-        self.redo.resize_with(redo_depth, || HistoryOwner {
-            session: String::new(),
-            name: "window".into(),
-        });
+        self.undo.resize_with(depth, HistoryOwner::window);
+        self.redo.resize_with(redo_depth, HistoryOwner::window);
+        if external_entry {
+            if let Some(top) = self.undo.last_mut() {
+                *top = HistoryOwner::window();
+            }
+        }
+        self.revision = revision;
     }
 
     fn check(&self, command: &Command, caller: &str) -> Result<(), Refusal> {
@@ -170,6 +180,8 @@ impl HistoryOwners {
         before: usize,
         after: usize,
         changed: bool,
+        new_entry: bool,
+        revision: Option<u64>,
     ) {
         if !changed {
             return;
@@ -190,14 +202,15 @@ impl HistoryOwners {
                 self.undo.push(owner);
             }
             // A full history evicts its oldest entry when a new one lands.
-            _ if after == before && before > 0 && command.changes_the_document() => {
+            _ if after == before && before > 0 && new_entry => {
                 self.redo.clear();
                 self.undo.remove(0);
                 self.undo.push(owner);
             }
             _ => {}
         }
-        self.sync(after, self.redo.len());
+        self.revision = revision;
+        self.sync(after, self.redo.len(), revision);
     }
 
     fn last_entry_by(&self) -> Option<String> {
@@ -308,12 +321,28 @@ impl Catalogue {
                 })
                 .history;
             let before = history.as_ref().map_or(0, |history| history.depth);
+            let before_revision = session.history_revision();
             let mut ledger = owners.lock().expect("history owners are not poisoned");
-            ledger.sync(before, history.map_or(0, |history| history.redo_depth));
+            ledger.sync(
+                before,
+                history.map_or(0, |history| history.redo_depth),
+                before_revision,
+            );
             ledger.check(&command, &owner.session)?;
             let applied = session.apply(command.clone())?;
             let changed = applied.outcome == "applied";
-            ledger.applied(&command, owner, before, applied.history_depth, changed);
+            let after_revision = session.history_revision();
+            let new_entry =
+                matches!((before_revision, after_revision), (Some(a), Some(b)) if b > a);
+            ledger.applied(
+                &command,
+                owner,
+                before,
+                applied.history_depth,
+                changed,
+                new_entry,
+                after_revision,
+            );
             let mut value = serde_json::to_value(&applied).unwrap_or(json!({}));
             // What the application brought into range, beside the answer
             // rather than instead of it: the command was applied, at these
@@ -435,7 +464,11 @@ impl Catalogue {
             let mut report = session.read(query);
             if let Some(history) = report.history.as_mut() {
                 let mut ledger = owners.lock().expect("history owners are not poisoned");
-                ledger.sync(history.depth, history.redo_depth);
+                ledger.sync(
+                    history.depth,
+                    history.redo_depth,
+                    session.history_revision(),
+                );
                 history.last_entry_by = ledger.last_entry_by();
             }
             Ok(Answer::value(
@@ -500,8 +533,13 @@ impl Catalogue {
                 })
                 .history;
             let before = history.as_ref().map_or(0, |history| history.depth);
+            let before_revision = session.history_revision();
             let mut ledger = owners.lock().expect("history owners are not poisoned");
-            ledger.sync(before, history.map_or(0, |history| history.redo_depth));
+            ledger.sync(
+                before,
+                history.map_or(0, |history| history.redo_depth),
+                before_revision,
+            );
             ledger.check(&command, &owner.session)?;
             let measured = session.measure(command.clone())?;
             let after = session
@@ -511,7 +549,18 @@ impl Catalogue {
                 })
                 .history
                 .map_or(before, |history| history.depth);
-            ledger.applied(&command, owner, before, after, true);
+            let after_revision = session.history_revision();
+            let new_entry =
+                matches!((before_revision, after_revision), (Some(a), Some(b)) if b > a);
+            ledger.applied(
+                &command,
+                owner,
+                before,
+                after,
+                true,
+                new_entry,
+                after_revision,
+            );
             Ok(Answer::value(
                 serde_json::to_value(&measured).unwrap_or(json!({})),
             ))
@@ -1372,6 +1421,47 @@ mod tests {
         assert_eq!(structured(&state)["history"]["last_entry_by"], "first");
         let refusal = call("second", "history", json!({"action":"undo"})).unwrap_err();
         assert!(refusal.message.contains("first"));
+    }
+
+    #[test]
+    fn an_applied_no_op_at_full_depth_keeps_its_owner() {
+        let mut owners = HistoryOwners::default();
+        let edit = Command::AddLayer(Representation::Sdf);
+        owners.sync(0, 0, Some(0));
+        owners.applied(
+            &edit,
+            HistoryOwner::new("first", None),
+            0,
+            1,
+            true,
+            true,
+            Some(1),
+        );
+        owners.applied(
+            &edit,
+            HistoryOwner::new("second", None),
+            1,
+            1,
+            true,
+            false,
+            Some(1),
+        );
+        assert_eq!(owners.last_entry_by().as_deref(), Some("first"));
+
+        owners.applied(
+            &edit,
+            HistoryOwner::new("second", None),
+            1,
+            1,
+            true,
+            true,
+            Some(2),
+        );
+        assert_eq!(owners.last_entry_by().as_deref(), Some("second"));
+
+        // A window edit can also replace an entry without increasing depth.
+        owners.sync(1, 0, Some(3));
+        assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
     }
 
     #[test]

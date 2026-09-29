@@ -2054,7 +2054,9 @@ the operation is available.
 MCP history reports `last_entry_by` for the next undoable entry. The door
 refuses undo and redo from a different MCP session and names the owner. Work
 already in the document when the door starts, or added at the window, is
-reported as `window` when its history depth can be observed.
+reported as `window` when the history change is observed.
+The history revision also identifies a new window edit when the stack is full
+and its depth does not rise.
 
 **A grid is drawn, framed and picked by its own routes**, not by the ones the
 field uses. The engine is explicit that a voxel layer carries no SDF content,
