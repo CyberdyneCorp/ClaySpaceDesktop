@@ -259,8 +259,20 @@ pub struct SubdivisionCost {
     pub faces: u64,
     /// What remains held after the level is built.
     pub persistent_bytes: u64,
-    /// The high-water mark during the build. The number that ends a session.
+    /// The high-water mark during the build.
     pub peak_bytes: u64,
+    /// What the level holds once it is drawn: what remains, plus the
+    /// evaluated positions, frames and normals and the runtime index the
+    /// engine quotes as held while the level is resident.
+    ///
+    /// The figure a level is charged at, because this application draws the
+    /// level it has just built — both numbers move to it — and the engine's
+    /// `peak_bytes` prices the build alone. Measured on a 16×16 quad cage at
+    /// level 4: the build peak is quoted at 3,741,720 bytes, the document
+    /// grew by 20,886,292 once the level was added and drawn, and this figure
+    /// quotes 40,623,342 — an upper bound where the peak understated the
+    /// level about fivefold.
+    pub resident_bytes: u64,
 }
 
 impl SubdivisionCost {
@@ -329,14 +341,43 @@ impl SubdivisionCost {
     /// affordable — the failure [`SubdivisionCost::faces_after`] guards
     /// against, in bytes.
     pub fn within(&self, held_bytes: u64, budget_bytes: u64) -> Result<(), Refusal> {
-        if held_bytes.saturating_add(self.peak_bytes) > budget_bytes {
+        if held_bytes.saturating_add(self.charged_bytes()) > budget_bytes {
             return Err(Refusal::LevelOverBudget {
                 held_bytes,
-                peak_bytes: self.peak_bytes,
+                level_bytes: self.charged_bytes(),
                 budget_bytes,
             });
         }
         Ok(())
+    }
+
+    /// What the level is charged against a budget: the higher of its build
+    /// peak and what it holds once drawn. See [`SubdivisionCost::resident_bytes`]
+    /// for why the peak alone is not the price.
+    pub fn charged_bytes(&self) -> u64 {
+        self.peak_bytes.max(self.resident_bytes)
+    }
+
+    /// The level after this one, projected rather than asked for.
+    ///
+    /// Every step after a cage's first makes four quads of one, and the
+    /// engine's preflight is arithmetic on the level below, so four times
+    /// every figure is the projection. Measured against the engine's own
+    /// preflight of each level once the one below it existed, from level 1 to
+    /// 4 on 8×8, 16×16 and 32×32 quad cages, four times is never below what
+    /// the engine then quoted and at most 7.7% over it (the build peak, whose
+    /// first step is not quite fourfold and is carried up from there) — an
+    /// upper bound, which is the side a price may err on.
+    pub fn projected_next(&self) -> Self {
+        let times = |figure: u64| figure.saturating_mul(Self::FACES_MULTIPLY_BY);
+        Self {
+            level: self.level.saturating_add(1),
+            vertices: times(self.vertices),
+            faces: times(self.faces),
+            persistent_bytes: times(self.persistent_bytes),
+            peak_bytes: times(self.peak_bytes),
+            resident_bytes: times(self.resident_bytes),
+        }
     }
 
     /// How much more the build holds than it leaves behind.
@@ -348,6 +389,151 @@ impl SubdivisionCost {
             return 1.0;
         }
         (self.peak_bytes as f32 / self.persistent_bytes as f32).max(1.0)
+    }
+}
+
+// -- creating a hierarchy from a mesh ------------------------------------------
+
+/// What Create Multires is asked for: how many levels to build over the cage,
+/// and whether the mesh it reads is replaced.
+///
+/// The same choice a crossing offers, plus the depth. Built in one go rather
+/// than as a crossing followed by a click per level, because the price of the
+/// whole is what a sculptor has to see before any of it is allocated — see
+/// [`HierarchyPlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HierarchySettings {
+    /// Levels above the cage. Zero builds the cage alone.
+    pub levels: u32,
+    /// Whether the hierarchy replaces the mesh it was built from. Off by
+    /// default, as for every crossing: the mesh staying is the way back.
+    pub in_place: bool,
+}
+
+impl HierarchySettings {
+    /// The depths Create Multires offers in one go. Deeper levels stay a
+    /// Subdivide click each, priced when they are asked for.
+    pub const LEVELS: std::ops::RangeInclusive<u32> = 0..=4;
+
+    pub fn sanitized(self) -> Self {
+        Self {
+            levels: self
+                .levels
+                .clamp(*Self::LEVELS.start(), *Self::LEVELS.end()),
+            ..self
+        }
+    }
+}
+
+impl Default for HierarchySettings {
+    fn default() -> Self {
+        Self {
+            levels: 2,
+            in_place: false,
+        }
+    }
+}
+
+/// What creating a hierarchy over the active mesh would cost, stated before
+/// anything is built and held against the budget on top of what the document
+/// already holds.
+///
+/// Three kinds of figure, and the plan says which is which. `held_bytes` and
+/// `cage_bytes` are measured: the document's own ledger, and the cage as a
+/// hierarchy, built and dropped to be weighed. The first level is the engine's
+/// preflight of that cage. Every level after it is
+/// [`SubdivisionCost::projected_next`] — the engine prices a level from the one
+/// below it, and the one below does not exist yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HierarchyPlan {
+    /// What the document holds now: every layer and every surface beside it.
+    pub held_bytes: u64,
+    /// What the document may hold with the hierarchy in it.
+    pub budget_bytes: u64,
+    /// The cage as a hierarchy of one level, measured.
+    pub cage_bytes: u64,
+    /// The faces the cage holds, as the engine counts them.
+    pub cage_faces: u64,
+    /// Level 1 and up, as deep as [`HierarchySettings::LEVELS`] offers. The
+    /// first is the engine's; the rest are projected.
+    pub levels: Vec<SubdivisionCost>,
+}
+
+impl HierarchyPlan {
+    /// A plan from the cage's measured size and face count and the engine's
+    /// price of its first level, projected as deep as Create Multires offers.
+    pub fn new(
+        held_bytes: u64,
+        budget_bytes: u64,
+        (cage_bytes, cage_faces): (u64, u64),
+        first: SubdivisionCost,
+    ) -> Self {
+        let deepest = *HierarchySettings::LEVELS.end() as usize;
+        let levels = std::iter::successors(Some(first), |level| Some(level.projected_next()))
+            .take(deepest)
+            .collect();
+        Self {
+            held_bytes,
+            budget_bytes,
+            cage_bytes,
+            cage_faces,
+            levels,
+        }
+    }
+
+    /// What the hierarchy `levels` deep adds to the document: the cage, and
+    /// every level as it is held once drawn.
+    ///
+    /// Every level, not only the top one Create Multires leaves both numbers
+    /// on, for two reasons. A sculptor moves the display level, and a level
+    /// that has been drawn is resident. And it is what makes the plan a bound
+    /// the build can be held to: each level is priced again by the engine as
+    /// it is built, on top of what the hierarchy holds by then, and what it
+    /// holds by then — the levels below with their runtime index — is under
+    /// what this charges for them. So a plan that fits is never refused half
+    /// way up, provided the projection does not undercut the engine, which is
+    /// measured rather than assumed. The cost is that it errs high: measured
+    /// on a 16×16 quad cage at four levels, the document grew by 27,879,079
+    /// bytes once the hierarchy was drawn, against the 55,127,094 this
+    /// charged.
+    pub fn hierarchy_bytes(&self, levels: u32) -> u64 {
+        let levels = (levels as usize).min(self.levels.len());
+        self.levels[..levels]
+            .iter()
+            .fold(self.cage_bytes, |sum, level| {
+                sum.saturating_add(level.charged_bytes())
+            })
+    }
+
+    /// Whether the document with this hierarchy in it fits the budget, or the
+    /// refusal that names what is held now, what the hierarchy adds and the
+    /// limit.
+    pub fn within(&self, levels: u32) -> Result<(), Refusal> {
+        let adds = self.hierarchy_bytes(levels);
+        if self.held_bytes.saturating_add(adds) > self.budget_bytes {
+            return Err(Refusal::HierarchyOverBudget {
+                levels,
+                held_bytes: self.held_bytes,
+                hierarchy_bytes: adds,
+                budget_bytes: self.budget_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    /// The faces the top level would hold: the cage's own at zero, and the
+    /// deepest offered past it.
+    pub fn faces(&self, levels: u32) -> u64 {
+        let deepest = self.levels.len().min(levels as usize);
+        deepest
+            .checked_sub(1)
+            .map_or(self.cage_faces, |index| self.levels[index].faces)
+    }
+
+    /// Whether the figure for `levels` is measured and quoted rather than
+    /// projected. The cage and level 1 are; everything above is not.
+    pub fn is_quoted(levels: u32) -> bool {
+        levels <= 1
     }
 }
 
@@ -1293,6 +1479,7 @@ mod tests {
             persistent_bytes: 400 * 1024 * 1024,
             // ...and does not, while it is being built.
             peak_bytes: 900 * 1024 * 1024,
+            resident_bytes: 0,
         };
         assert!(level.within(0, 1024 * 1024 * 1024).is_ok());
         let error = level
@@ -1302,7 +1489,7 @@ mod tests {
             error,
             Refusal::LevelOverBudget {
                 held_bytes: 0,
-                peak_bytes: level.peak_bytes,
+                level_bytes: level.peak_bytes,
                 budget_bytes: 512 * 1024 * 1024,
             }
         );
@@ -1328,6 +1515,7 @@ mod tests {
             faces: 1_269_760,
             persistent_bytes: 200 * MB,
             peak_bytes: 300 * MB,
+            resident_bytes: 0,
         };
         let budget = 512 * MB;
         assert!(
@@ -1345,7 +1533,7 @@ mod tests {
             refusal,
             Refusal::LevelOverBudget {
                 held_bytes: 465 * MB,
-                peak_bytes: 300 * MB,
+                level_bytes: 300 * MB,
                 budget_bytes: budget,
             }
         );
@@ -1361,6 +1549,142 @@ mod tests {
             level.within(u64::MAX, u64::MAX - 1).is_err(),
             "a sum that wrapped would read as affordable"
         );
+    }
+
+    /// A level is charged at what it holds once drawn where that is more than
+    /// its build peak, because this application draws a level the moment it
+    /// arrives. The figures are the ones measured on a 16×16 quad cage at
+    /// level 4, where the peak alone admitted a level whose arrival grew the
+    /// document by about five times what it was priced at.
+    #[test]
+    fn a_level_is_charged_at_what_it_holds_once_drawn() {
+        let level = SubdivisionCost {
+            level: 4,
+            vertices: 98_817,
+            faces: 98_304,
+            persistent_bytes: 1_966_080,
+            peak_bytes: 3_741_720,
+            resident_bytes: 40_623_342,
+        };
+        assert_eq!(level.charged_bytes(), 40_623_342);
+        assert_eq!(
+            level.within(0, 20_000_000),
+            Err(Refusal::LevelOverBudget {
+                held_bytes: 0,
+                level_bytes: 40_623_342,
+                budget_bytes: 20_000_000,
+            }),
+            "a budget the peak fits and the drawn level does not refuses"
+        );
+        assert!(level.within(0, 40_623_342).is_ok());
+    }
+
+    /// The projection is four times every figure and saturates rather than
+    /// wrapping.
+    #[test]
+    fn the_next_level_is_projected_at_four_times() {
+        let level = SubdivisionCost {
+            level: 1,
+            vertices: 1_601,
+            faces: 1_536,
+            persistent_bytes: 30_720,
+            peak_bytes: 62_232,
+            resident_bytes: 648_302,
+        };
+        let next = level.projected_next();
+        assert_eq!(next.level, 2);
+        assert_eq!(next.faces, 6_144);
+        assert_eq!(next.persistent_bytes, 122_880);
+        assert_eq!(next.resident_bytes, 2_593_208);
+        let huge = SubdivisionCost {
+            peak_bytes: u64::MAX / 2,
+            ..level
+        };
+        assert_eq!(huge.projected_next().peak_bytes, u64::MAX);
+    }
+
+    fn a_plan(held_bytes: u64, budget_bytes: u64) -> HierarchyPlan {
+        HierarchyPlan::new(
+            held_bytes,
+            budget_bytes,
+            (21_424, 512),
+            SubdivisionCost {
+                level: 1,
+                vertices: 1_601,
+                faces: 1_536,
+                persistent_bytes: 30_720,
+                peak_bytes: 62_232,
+                resident_bytes: 648_302,
+            },
+        )
+    }
+
+    /// A plan charges the cage and every level as it is held once drawn, and
+    /// offers as deep as the settings do.
+    #[test]
+    fn a_plan_charges_the_top_level_drawn_and_the_rest_as_they_remain() {
+        let plan = a_plan(0, u64::MAX);
+        assert_eq!(plan.levels.len(), *HierarchySettings::LEVELS.end() as usize);
+        assert_eq!(plan.hierarchy_bytes(0), 21_424, "the cage alone");
+        assert_eq!(plan.hierarchy_bytes(1), 21_424 + 648_302);
+        assert_eq!(
+            plan.hierarchy_bytes(2),
+            21_424 + 648_302 + 2_593_208,
+            "every level as it is held once drawn"
+        );
+        assert_eq!(
+            plan.hierarchy_bytes(4),
+            21_424 + 648_302 * (1 + 4 + 16 + 64),
+            "four levels projected from the first"
+        );
+        assert_eq!(plan.faces(0), 512, "the cage's own");
+        assert_eq!(plan.faces(3), 1_536 * 16);
+        assert!(HierarchyPlan::is_quoted(1) && !HierarchyPlan::is_quoted(2));
+        assert_eq!(
+            plan.hierarchy_bytes(99),
+            plan.hierarchy_bytes(*HierarchySettings::LEVELS.end()),
+            "a depth past the plan is priced at the deepest it offers"
+        );
+    }
+
+    /// Create Multires is refused before anything is built when the document
+    /// and the hierarchy together pass the budget, and the sentence names what
+    /// is held now, what the hierarchy adds and the limit.
+    #[test]
+    fn a_plan_over_budget_names_usage_cost_and_limit() {
+        const MB: u64 = 1024 * 1024;
+        let plan = a_plan(500 * MB, 512 * MB);
+        assert!(plan.within(2).is_ok(), "about 3 MB fits in the 12 left");
+        let refusal = plan.within(3).expect_err("about 13 MB does not");
+        let Refusal::HierarchyOverBudget {
+            levels,
+            held_bytes,
+            hierarchy_bytes,
+            budget_bytes,
+        } = refusal
+        else {
+            panic!("the whole hierarchy is what refused: {refusal}");
+        };
+        assert_eq!(levels, 3);
+        assert_eq!(held_bytes, 500 * MB);
+        assert_eq!(hierarchy_bytes, plan.hierarchy_bytes(3));
+        assert_eq!(budget_bytes, 512 * MB);
+        let sentence = refusal.to_string();
+        for figure in ["500 MB", "512 MB", &format!("{} MB", hierarchy_bytes / MB)] {
+            assert!(sentence.contains(figure), "{figure} in: {sentence}");
+        }
+    }
+
+    #[test]
+    fn create_multires_offers_a_bounded_depth() {
+        let deep = HierarchySettings {
+            levels: 40,
+            in_place: true,
+        };
+        assert_eq!(deep.sanitized().levels, 4);
+        assert!(deep.sanitized().in_place);
+        assert_eq!(HierarchySettings::default().levels, 2);
+        assert!(!HierarchySettings::default().in_place);
     }
 
     /// A triangle cage's first step makes three faces of each, and every step

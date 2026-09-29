@@ -76,9 +76,9 @@ pub use lattice::{
 pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use multires::{
-    CacheRelease, HierarchyBake, LevelSize, MultiresLevelOp, MultiresLevels, MultiresSculptLayer,
-    MultiresSculptLayerCost, MultiresSculptLayerId, MultiresSculptLayerOp, MultiresState,
-    SmoothFrequency, SubdivisionCost, WriteDomain,
+    CacheRelease, HierarchyBake, HierarchyPlan, HierarchySettings, LevelSize, MultiresLevelOp,
+    MultiresLevels, MultiresSculptLayer, MultiresSculptLayerCost, MultiresSculptLayerId,
+    MultiresSculptLayerOp, MultiresState, SmoothFrequency, SubdivisionCost, WriteDomain,
 };
 pub use outline::{
     cells_to_write, coverage_path, lattice_pitch, MaskGesture, MaskOutline, OutlineDraft,

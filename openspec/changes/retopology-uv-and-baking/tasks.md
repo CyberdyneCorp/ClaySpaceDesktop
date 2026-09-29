@@ -227,9 +227,30 @@ field evaluator with no field. We are the first of either.
 
 ## 12. From fixed mesh to hierarchy and bake out (#214)
 
-- [ ] 12.1 Route Create Hierarchy from an accepted retopology result and state
+- [x] 12.1 Route Create Hierarchy from an accepted retopology result and state
       the level cost against current document usage before allocating; refuse
       with current usage, added cost and limit. (#214; depends on #184)
+      **Create Multires** on every mesh layer's inspector section (levels
+      0–4, replace-the-mesh toggle) and as agent `hierarchy create`. Priced by
+      `HierarchyPlan` before anything is built — what the document holds, what
+      the hierarchy adds, the limit — shown beside the button and in agent
+      `state.scene.hierarchy_plan`, and refused with
+      `Refusal::HierarchyOverBudget` naming all three. Built free-standing,
+      each level priced again by the engine, and attached as one crossing and
+      one undo. A level is charged at the higher of its build peak and what it
+      holds once drawn (`SubdivisionCost::resident_bytes`), for Subdivide as
+      well. Held by `create_multires_states_its_price_before_anything_is_built`,
+      `a_hierarchy_over_budget_is_refused_naming_usage_cost_and_limit`,
+      `create_multires_is_one_undo_and_lands_on_the_top_level`,
+      `create_multires_in_place_replaces_the_mesh_and_undoes_to_it`,
+      `a_plan_that_fits_is_built_and_holds_no_more_than_it_quoted`,
+      `the_projection_never_undercuts_the_engine` and
+      `a_level_is_charged_at_what_it_holds_once_drawn` (engine), the plan's
+      model tests, `the_create_multires_price_is_kept_until_the_document_moves`
+      (VM), `a_mesh_layer_offers_create_multires_with_its_price` (view) and
+      `fixed_mesh_to_multires_to_a_two_level_sculpt_and_a_bake` (app: a real
+      retopology, Create Multires, sculpt at levels 2 and 1, a cage edit that
+      keeps the checksum, and a bake).
 - [x] 12.2 Label and control sculpt and display levels independently; report
       level counts and detail checksum in agent state. (#214) The two levels
       were already separate inspector rows; `state` now carries each level's
@@ -244,7 +265,8 @@ field evaluator with no field. We are the first of either.
       total either side and checks the detail checksum did not move —
       `a_cache_release_reports_what_it_freed_and_keeps_the_detail`. Trimming
       at a pressure stays with the memory governor. The three-cage benchmark
-      is not written yet.
+      is `multires.preflight_{8,16,32}` and `multires.create_{8,16,32}` (two
+      levels) in the `multires` bench group.
 - [x] 12.4 Report what a selected-level bake carries and loses, and verify
       coarse edits preserve fine-detail checksum. (#214) `MultiresState::bake`
       states the displayed level, the finer levels lost and the passes that

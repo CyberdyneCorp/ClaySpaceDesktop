@@ -634,6 +634,35 @@ pub trait SceneModel {
         None
     }
 
+    /// What Create Multires would cost on the active mesh layer, stated
+    /// before anything is built. See [`crate::HierarchyPlan`].
+    ///
+    /// `&mut self` because the cage is weighed by building it and dropping
+    /// it, which is also how a mesh that is not a cage is found out before
+    /// anything is pressed. Not for every frame: a caller asks once per change
+    /// to the document and keeps the answer.
+    ///
+    /// Provided, so a double that models no hierarchies refuses in one
+    /// sentence.
+    fn hierarchy_plan(&mut self) -> Result<crate::HierarchyPlan, crate::ModelError> {
+        Err(crate::ModelError::engine(
+            "uma hierarquia de subdivisão é criada a partir de uma malha",
+        ))
+    }
+
+    /// Create Multires: the active mesh layer as a hierarchy as deep as
+    /// `settings` asks, refused from its plan when it would not fit beside
+    /// what the document holds, and one undo step when it does.
+    fn create_hierarchy(
+        &mut self,
+        settings: crate::HierarchySettings,
+    ) -> Result<LayerKey, crate::ModelError> {
+        let _ = settings;
+        Err(crate::ModelError::engine(
+            "uma hierarquia de subdivisão é criada a partir de uma malha",
+        ))
+    }
+
     /// A hash of every level's authoritative detail on a hierarchy layer.
     ///
     /// Asked for rather than carried on the layer summary, because it walks

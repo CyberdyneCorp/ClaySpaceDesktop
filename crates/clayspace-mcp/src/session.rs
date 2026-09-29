@@ -499,6 +499,45 @@ pub struct SceneState {
     /// layer and then read the scene back could not tell that it had.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soloed: Option<u64>,
+    /// What `hierarchy.create` would cost on the active layer, where it is a
+    /// mesh: read before the action rather than discovered from its refusal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hierarchy_plan: Option<HierarchyPlanState>,
+    /// Why the active mesh cannot become a hierarchy — not a cage, most
+    /// often, with the fault named — where it cannot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hierarchy_plan_refused: Option<String>,
+}
+
+/// What Create Multires would add to the document, stated before it runs.
+///
+/// `held_bytes` and `cage_bytes` are measured, level 1 is the engine's own
+/// quote, and deeper levels are projected from it (`quoted` says which).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HierarchyPlanState {
+    /// What the document holds now.
+    pub held_bytes: u64,
+    /// What the document may hold with the hierarchy in it.
+    pub budget_bytes: u64,
+    /// The cage as a hierarchy of one level.
+    pub cage_bytes: u64,
+    /// One entry per depth `hierarchy.create` offers, cage alone first.
+    pub depths: Vec<PlannedDepthState>,
+}
+
+/// One depth Create Multires offers, and what it would add.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PlannedDepthState {
+    /// Levels above the cage.
+    pub levels: u32,
+    /// Faces at the top level.
+    pub faces: u64,
+    /// What the hierarchy this deep adds to the document.
+    pub hierarchy_bytes: u64,
+    /// Whether it fits beside what the document holds.
+    pub fits: bool,
+    /// Whether the figure is quoted rather than projected.
+    pub quoted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1304,6 +1343,8 @@ mod tests {
                 active_layer: None,
                 selected_object: None,
                 soloed: None,
+                hierarchy_plan: None,
+                hierarchy_plan_refused: None,
             }),
             tool: Some(ToolState {
                 tool: "clay".into(),

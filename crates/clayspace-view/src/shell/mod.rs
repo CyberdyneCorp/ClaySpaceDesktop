@@ -60,6 +60,7 @@ use widgets::*;
 use windows::*;
 
 pub use booleans::boolean_op_chip_id;
+pub use inspector::mesh::create_multires_button_id;
 pub use inspector::multires::subdivide_button_id;
 pub use left::{
     layer_convert_id, layer_row_id, left_panel, multires_add_pass_id, multires_bake_id,
@@ -273,6 +274,12 @@ pub struct ShellState<'a> {
     /// is actually stated against. `None` where the active layer is not a
     /// hierarchy.
     pub subdivision_cost: Option<clayspace_model::SubdivisionCost>,
+    /// What Create Multires would cost on the active mesh layer, or why it
+    /// cannot be made — handed in for the reason the subdivision cost is: the
+    /// figures a refusal is stated against are the model's, and a View that
+    /// worked out its own could disagree with them. `None` where the active
+    /// layer is not a mesh.
+    pub hierarchy_plan: Option<Result<clayspace_model::HierarchyPlan, String>>,
     /// What the active hierarchy's stack of passes costs, and whether a stroke
     /// is holding it open right now.
     ///

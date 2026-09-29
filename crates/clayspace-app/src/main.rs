@@ -4972,6 +4972,29 @@ impl App {
         self.after_crossing(settings.direction, settings.in_place, before, outcome);
     }
 
+    /// Create Multires on the active mesh layer: a crossing with levels on it.
+    ///
+    /// On the interface thread behind the busy cursor, as a crossing is. The
+    /// plan refuses before anything is built, naming what the document holds,
+    /// what the hierarchy adds and the limit; and what follows is the
+    /// crossing's own bookkeeping — one undo, the panel's outcome, the
+    /// geometry synced.
+    fn run_create_hierarchy(&mut self, settings: clayspace_model::HierarchySettings) {
+        let before = self.engine_undo_depth();
+        let outcome = self.busy(|app| {
+            app.timed("criar multires", |app| {
+                app.document
+                    .with(|document| document.create_hierarchy(settings))
+            })
+        });
+        self.after_crossing(
+            Direction::MeshToMultires,
+            settings.in_place,
+            before,
+            outcome,
+        );
+    }
+
     /// Reads the active grid and hands its conversion to a worker.
     ///
     /// Refusals are stated here, before anything starts: a source that is not
@@ -5299,6 +5322,7 @@ impl App {
             Command::SetRemeshSettings(settings) => self.remesh = settings.sanitized(),
             Command::RemeshLayer(key) => self.run_remesh(*key),
             Command::RunConversion => self.run_conversion(),
+            Command::CreateHierarchy(settings) => self.run_create_hierarchy(*settings),
             // Straight to the ViewModel that owns the job. Not `busy()` and
             // not `timed()`, unlike a conversion: this one runs off the
             // interface thread, so a busy cursor over it would be a lie about
@@ -5594,6 +5618,7 @@ impl App {
         let mut queue = CommandQueue::new();
         let mut viewport = None;
         let mut input = ViewportInput::default();
+        let hierarchy_plan = self.scene.hierarchy_plan();
         let status_sources = ToolStatusSources {
             document: self.document_vm.notice().get().as_deref(),
             operation: self.operation_refusal.get().as_deref(),
@@ -5761,6 +5786,9 @@ impl App {
             // The engine's own preflight, asked per frame because it costs
             // microseconds and moves with every level added or removed.
             subdivision_cost: self.scene.subdivision_cost(),
+            // Kept between frames by the ViewModel and asked again when the
+            // document moves: the plan walks the ledger and weighs the cage.
+            hierarchy_plan,
             // The stack's own figures, and whether the pointer is still down.
             // The engine refuses a composition change while a gesture is open,
             // so the controls read that rather than discovering it.
@@ -7126,6 +7154,14 @@ impl App {
                 // layer summary: the hash walks every coefficient.
                 |key| self.scene.hierarchy_checksum(key),
             ));
+            // What `hierarchy.create` would cost on the active mesh, so an
+            // agent reads the price before acting rather than from a refusal.
+            if let (Some(scene), Some(plan)) = (state.scene.as_mut(), self.scene.hierarchy_plan()) {
+                match plan {
+                    Ok(plan) => scene.hierarchy_plan = Some(report::hierarchy_plan_state(&plan)),
+                    Err(why) => scene.hierarchy_plan_refused = Some(why),
+                }
+            }
         }
         if query.objects {
             state.objects = Some(report::object_state(

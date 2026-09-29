@@ -41,6 +41,16 @@
 //! move the surface and what a sculptor pays for a slider is the surface
 //! arriving.
 //!
+//! # Create Multires at three cage sizes
+//!
+//! `multires.preflight_{8,16,32}` is what pricing Create Multires costs — the
+//! document's ledger walked and the cage built, weighed and dropped — on a
+//! cage of that many quads a side, and `multires.create_{8,16,32}` is the
+//! creation itself, [`CREATE_LEVELS`] levels deep. The three sizes are the
+//! only difference between the three figures, so they say how both scale
+//! with the cage. The preflight is asked whenever the document moves while a
+//! mesh layer is active, so it is the one a sculptor pays for without asking.
+//!
 //! `multires.drop_caches` is the release **and the dab after it**, together.
 //! The release on its own is close to free; what it costs is the level the
 //! next stamp has to rebuild before it can write into it, and a figure for the
@@ -52,8 +62,8 @@ use std::time::Instant;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     BrushSettings, ConversionSettings, Direction, DocumentModel, ExchangeModel, GestureSample,
-    ImportSettings, LayerKey, MultiresLevelOp, MultiresSculptLayerId, MultiresSculptLayerOp,
-    Representation, SceneModel, SculptModel, ToolKind,
+    HierarchySettings, ImportSettings, LayerKey, MultiresLevelOp, MultiresSculptLayerId,
+    MultiresSculptLayerOp, Representation, SceneModel, SculptModel, ToolKind,
 };
 use clayspace_view::Gpu;
 
@@ -77,6 +87,13 @@ const HALF: f32 = 2.0;
 /// one and the one a sculptor hesitates over.
 const LEVELS: u32 = 4;
 
+/// The cage sizes Create Multires is measured at, in quads a side.
+const CREATE_CAGES: [usize; 3] = [8, 16, 32];
+
+/// How deep Create Multires builds in its figure: the default the inspector
+/// offers.
+const CREATE_LEVELS: u32 = 2;
+
 /// A dab wide enough to reach a few thousand vertices at the finest level, and
 /// narrow enough that it is a dab rather than a whole-form deformation.
 const DAB_RADIUS: f32 = 0.6;
@@ -85,7 +102,7 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
     let Some(gpu) = headless_gpu() else {
         return run.skip("multires", Skip::NoHeadlessGpu);
     };
-    let cage = match write_cage() {
+    let cage = match write_cage(DIVISIONS) {
         Ok(cage) => cage,
         Err(_) => return run.skip("multires", Skip::SceneWouldNotBuild),
     };
@@ -98,24 +115,29 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
     fold(&gpu, &cage, policy, run);
     serialize(&gpu, &cage, policy, run);
     drop_caches(&gpu, &cage, policy, run);
-
     let _ = std::fs::remove_file(&cage);
+
+    for divisions in CREATE_CAGES {
+        create(divisions, policy, run);
+    }
 }
 
 // -- the fixture -------------------------------------------------------------
 
-/// Writes the cage this group builds every hierarchy from.
+/// Writes a cage `divisions` quads a side for this group to build from.
 ///
-/// Once, and reused: the file is the same every time, and rewriting it per
-/// sample would put a disk in the middle of a benchmark that is not measuring
-/// one.
-fn write_cage() -> std::io::Result<std::path::PathBuf> {
-    let path =
-        std::env::temp_dir().join(format!("clayspace-bench-cage-{}.obj", std::process::id()));
+/// Once per size, and reused: the file is the same every time, and rewriting
+/// it per sample would put a disk in the middle of a benchmark that is not
+/// measuring one.
+fn write_cage(divisions: usize) -> std::io::Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "clayspace-bench-cage-{divisions}-{}.obj",
+        std::process::id()
+    ));
     let mut text = String::new();
-    let step = 2.0 * HALF / DIVISIONS as f32;
-    for z in 0..=DIVISIONS {
-        for x in 0..=DIVISIONS {
+    let step = 2.0 * HALF / divisions as f32;
+    for z in 0..=divisions {
+        for x in 0..=divisions {
             text.push_str(&format!(
                 "v {} 0 {}\n",
                 -HALF + step * x as f32,
@@ -123,9 +145,9 @@ fn write_cage() -> std::io::Result<std::path::PathBuf> {
             ));
         }
     }
-    let stride = DIVISIONS + 1;
-    for z in 0..DIVISIONS {
-        for x in 0..DIVISIONS {
+    let stride = divisions + 1;
+    for z in 0..divisions {
+        for x in 0..divisions {
             // Wound so the sheet faces +y, which makes a Draw stamp read as a
             // bump rather than a dent.
             let a = z * stride + x + 1;
@@ -295,6 +317,58 @@ fn add_level(cage: &std::path::Path, policy: &BackendPolicy, run: &mut Run) {
         Ok(samples) => run.timings("multires.add_level", Record::OneShot, samples),
         Err(why) => run.skip("multires.add_level", why),
     }
+}
+
+/// Pricing Create Multires, and then running it, on a cage `divisions` quads
+/// a side.
+///
+/// One-shot on a document rebuilt per sample, as `from_mesh` is: a creation
+/// leaves the hierarchy standing, and the next preflight would be priced on
+/// top of it.
+fn create(divisions: usize, policy: &BackendPolicy, run: &mut Run) {
+    let (preflight, created) = (
+        format!("multires.preflight_{divisions}"),
+        format!("multires.create_{divisions}"),
+    );
+    if !run.wants_group(&preflight) && !run.wants_group(&created) {
+        return;
+    }
+    let Ok(cage) = write_cage(divisions) else {
+        run.skip(preflight, Skip::SceneWouldNotBuild);
+        return run.skip(created, Skip::SceneWouldNotBuild);
+    };
+    let samples: Result<Vec<(f64, f64)>, Skip> = (0..Record::OneShot.samples())
+        .map(|_| priced_then_created(&cage, policy))
+        .collect();
+    let _ = std::fs::remove_file(&cage);
+    match samples {
+        Ok(samples) => {
+            let (priced, made) = samples.into_iter().unzip();
+            run.timings(&preflight, Record::OneShot, priced);
+            run.timings(&created, Record::OneShot, made);
+        }
+        Err(why) => {
+            run.skip(preflight, why);
+            run.skip(created, why);
+        }
+    }
+}
+
+/// How long the plan took, and how long the creation it priced took.
+fn priced_then_created(cage: &std::path::Path, policy: &BackendPolicy) -> Result<(f64, f64), Skip> {
+    let mut document = with_the_cage(cage, policy)?;
+    let started = Instant::now();
+    let plan = document.hierarchy_plan().map_err(|_| Skip::EditRefused)?;
+    let priced = ms(started.elapsed());
+    plan.within(CREATE_LEVELS).map_err(|_| Skip::EditRefused)?;
+    let started = Instant::now();
+    document
+        .create_hierarchy(HierarchySettings {
+            levels: CREATE_LEVELS,
+            in_place: false,
+        })
+        .map_err(|_| Skip::EditRefused)?;
+    Ok((priced, ms(started.elapsed())))
 }
 
 // -- sculpting ---------------------------------------------------------------
@@ -595,7 +669,7 @@ mod tests {
     /// one and `clay_multires_from_mesh` refuses rather than repairs.
     #[test]
     fn the_cage_is_a_closed_grid_of_quads() {
-        let path = write_cage().expect("the cage is written");
+        let path = write_cage(DIVISIONS).expect("the cage is written");
         let text = std::fs::read_to_string(&path).expect("the cage is read back");
         let _ = std::fs::remove_file(&path);
         let vertices = text.lines().filter(|line| line.starts_with("v ")).count();

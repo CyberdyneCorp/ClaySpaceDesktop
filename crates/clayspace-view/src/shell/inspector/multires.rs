@@ -97,18 +97,18 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         if button.clicked() {
             queue.push(Command::MultiresLevel(MultiresLevelOp::AddLevel));
         }
-        // What it would cost, beside the button that would spend it. The
-        // **peak** rather than what remains: a level that fits once it is
-        // built and does not fit while it is being built is a level that
-        // cannot be added, and on a constrained machine the high-water mark is
-        // what ends the session.
+        // What it would cost, beside the button that would spend it: what
+        // the level is charged, the build peak or the level drawn, whichever
+        // is more. Not what remains after the build: the level is drawn the
+        // moment it arrives, and measured, drawing it cost several times the
+        // peak.
         if let Some(cost) = state.subdivision_cost {
             ui.label(
                 egui::RichText::new(format!(
                     "{} · {} {}",
                     thousands(cost.faces as usize),
-                    megabytes(cost.peak_bytes),
-                    s.multires_peak
+                    megabytes(cost.charged_bytes()),
+                    s.multires_charged
                 ))
                 .size(type_scale::LABEL)
                 .color(Tokens::text_dim()),
@@ -192,6 +192,6 @@ fn bake_report(
 
 /// A byte count as whole megabytes, which is the size a subdivision is
 /// discussed in.
-fn megabytes(bytes: u64) -> String {
+pub(super) fn megabytes(bytes: u64) -> String {
     format!("{} MB", bytes / (1024 * 1024))
 }

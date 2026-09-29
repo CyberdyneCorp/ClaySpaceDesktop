@@ -338,6 +338,17 @@ impl SceneModel for SharedDocument {
         self.document.borrow().subdivision_cost()
     }
 
+    fn hierarchy_plan(&mut self) -> Result<clayspace_model::HierarchyPlan, ModelError> {
+        self.document.borrow_mut().hierarchy_plan()
+    }
+
+    fn create_hierarchy(
+        &mut self,
+        settings: clayspace_model::HierarchySettings,
+    ) -> Result<LayerKey, ModelError> {
+        self.document.borrow_mut().create_hierarchy(settings)
+    }
+
     fn hierarchy_checksum(&self, key: LayerKey) -> Option<u64> {
         self.document.borrow().hierarchy_checksum(key)
     }
