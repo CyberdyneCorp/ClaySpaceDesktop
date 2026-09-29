@@ -22,6 +22,19 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, Drag, GestureSample, SceneModel, SculptModel, ToolKind};
 
 const MIRRORED: [bool; 3] = [true, false, false];
+
+/// Held by the timing tripwires so they never measure while the other one
+/// sculpts: the harness runs a file's tests in parallel, and on a small shared
+/// runner that contention has inverted a ratio that idle hosts measure the
+/// other way round.
+static TIMING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Takes both timing tripwires hold, whatever a panicking one left behind.
+fn timing() -> std::sync::MutexGuard<'static, ()> {
+    TIMING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 const UNMIRRORED: [bool; 3] = [false; 3];
 
 fn sphere() -> ClayDocument {
@@ -393,10 +406,15 @@ fn undo_newest(document: &mut ClayDocument, entries: usize) -> (f64, usize) {
 /// a brick over the chain against 38–74 µs over the baked patch, 1.7–2.3x.
 /// The bound is the other tripwire's 0.6x, for the same reason: loaded runners
 /// have shown near parity where an idle host shows a clear loss, and only a
-/// decisive win is worth re-measuring for. When this fails, re-run
+/// decisive win is worth re-measuring for. The fastest of fifteen takes per
+/// side is kept, and the other timing tripwire is held off meanwhile: a Linux
+/// runner once measured 127 µs over the chain against 74 µs over the patch
+/// (0.58x) with five takes while the rest of the file ran beside it, where the
+/// same build measures 1.7–2.0x on an idle host. When this fails, re-run
 /// `undo_series` and this file on an idle host before turning the floor on.
 #[test]
 fn a_baked_patch_has_no_decisive_per_brick_win() {
+    let _timing = timing();
     let mut plain = sphere();
     let mut compacted = compacting_sphere();
     let small = |document: &mut ClayDocument, index: usize| {
@@ -434,7 +452,7 @@ fn a_baked_patch_has_no_decisive_per_brick_win() {
         "a bake landed in the timed gesture"
     );
     let (mut chain, mut baked) = (f64::MAX, f64::MAX);
-    for _ in 0..5 {
+    for _ in 0..15 {
         let (took, bricks) = undo_newest(&mut plain, plain_entries);
         chain = chain.min(took / bricks.max(1) as f64);
         let (took, bricks) = undo_newest(&mut compacted, baked_entries);
@@ -470,6 +488,7 @@ fn a_baked_patch_has_no_decisive_per_brick_win() {
 /// collapse floor can be enabled.
 #[test]
 fn a_baked_patch_has_no_decisive_undo_win() {
+    let _timing = timing();
     // The fastest of three, each taken back and put again: a shared machine
     // only ever adds time, so the minimum is the figure closest to the work.
     let undo_last = |document: &mut ClayDocument, index: usize| {
