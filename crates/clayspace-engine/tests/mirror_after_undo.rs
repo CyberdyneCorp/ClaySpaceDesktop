@@ -17,6 +17,10 @@
 //!
 //! Measured before the fix: a dab made with symmetry **off** moved the far
 //! side of the form by 0.28 units.
+//!
+//! Symmetry off no longer writes the mirror at all — a stroke made with it off
+//! stays out of whatever mirror the layer keeps (#170) — so the change these
+//! tests drive is to another axis, which still does.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SceneModel, SculptModel, ToolKind};
@@ -60,15 +64,17 @@ fn dab(document: &mut ClayDocument, symmetry: [bool; 3]) {
         .expect("a dab");
 }
 
-/// The far side stays put when the sculptor has turned symmetry off, even
+/// The far side stays put when the sculptor has moved symmetry off x, even
 /// after an undo has taken back the stroke that wrote the mirror.
 #[test]
 fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
     let mut document = sphere();
     // The starting form carries `Layer::STARTING_SYMMETRY`, which is x. Asking
-    // for none is therefore a real change, and the first stroke is what writes
-    // it — putting a `clay_set_layer_mirror` inside that stroke's gesture.
-    let off = [false; 3];
+    // for y is therefore a real change, and the first stroke is what writes
+    // it — putting a `clay_set_layer_mirror` inside that stroke's gesture. A
+    // dab on the +x pole reflected across y stays on the +x pole, so the far
+    // (-x) pole feels it only through an x mirror.
+    let off = [false, true, false];
     SculptModel::set_symmetry(&mut document, off).expect("record the setting");
 
     let rested = radius_along(&document, [-1.0, 0.0, 0.0]).expect("the far pole");
@@ -103,9 +109,9 @@ fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
     assert!(
         moved < 1e-3,
         "the far side moved by {moved} on a dab the sculptor asked to be \
-         unmirrored. The undo took the engine's mirror back and this side went \
-         on believing its own record of it, so `point_the_mirror` skipped the \
-         call that would have turned it off"
+         mirrored across y only. The undo took the engine's mirror back to x \
+         and this side went on believing its own record of it, so \
+         `point_the_mirror` skipped the call that would have moved it"
     );
 }
 
@@ -117,9 +123,11 @@ fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
 fn a_stroke_after_an_undone_mirror_edit_is_still_mirrored_when_asked() {
     let mut document = sphere();
     let on = [true, false, false];
-    // Off first, so that asking for it back is a change the stroke must write.
-    SculptModel::set_symmetry(&mut document, [false; 3]).expect("record");
-    dab(&mut document, [false; 3]);
+    // Across y first, so that asking for x back is a change the stroke must
+    // write.
+    let y = [false, true, false];
+    SculptModel::set_symmetry(&mut document, y).expect("record");
+    dab(&mut document, y);
 
     SculptModel::set_symmetry(&mut document, on).expect("record");
     let before = document.history().depth;
@@ -175,17 +183,18 @@ fn a_forgotten_mirror_is_read_back_rather_than_assumed() {
     let key = document.scene().active_layer().expect("a layer").key;
     let layer = document.layer_id(key).expect("its engine id");
 
-    // An unmirrored stroke, which writes the layer's mirror as "off".
-    document.set_symmetry([false; 3]).expect("symmetry off");
-    dab(&mut document, [false; 3]);
+    // A stroke mirrored across y, which writes the layer's mirror as y.
+    let y = [false, true, false];
+    document.set_symmetry(y).expect("symmetry across y");
+    dab(&mut document, y);
 
     let (carried, _) = document
         .document()
         .layer_mirror(layer)
         .expect("an SDF layer answers what mirror it carries");
     assert_eq!(
-        carried, [false; 3],
-        "the stroke asked for no mirror and the engine says it has one"
+        carried, y,
+        "the stroke asked for a mirror across y and the engine says it has another"
     );
 
     // A history step, which is what forgets this side's account of it.

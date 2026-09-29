@@ -488,8 +488,10 @@ fn a_gesture_that_changes_the_mirror_takes_it_back_when_abandoned() {
 
     // Symmetry the layer does not already have, so opening the gesture points
     // the mirror — an edit, and one made *before* the transaction begins
-    // because an edit after it begins is one the commit refuses.
-    assert!(document.open_live_gesture(ToolKind::Suavizar, [false; 3]));
+    // because an edit after it begins is one the commit refuses. Another axis
+    // rather than none: a smooth with symmetry off leaves the mirror as it
+    // stands (#170).
+    assert!(document.open_live_gesture(ToolKind::Suavizar, [false, true, false]));
     assert_eq!(
         document.history().depth,
         before + 1,

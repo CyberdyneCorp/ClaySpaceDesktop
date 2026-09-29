@@ -16,6 +16,13 @@ symmetry off SHALL stay out of any mirror the layer is given later. A curve and
 a placed object made with symmetry on SHALL be mirrored from the moment they
 are made, in the same undo step as the item.
 
+Symmetry turned off SHALL NOT take the reflections away from items made while
+it was on. A stroke, a pull, a curve, a placed object or a bake made with
+symmetry off SHALL leave the layer's mirror as it stands, since what it makes
+stays out of that mirror. A Move or Pinch drag made with symmetry off SHALL
+move one side only; while the engine reflects a drag into every image of an
+item that takes part, that drag turns the layer's mirror off.
+
 An armature SHALL stay out of its layer's mirror, since it mirrors itself: a
 stroke made with symmetry on on a rig's subtool SHALL NOT give a sphere added
 one-sided a twin.
@@ -45,6 +52,16 @@ against each other — only against an unmirrored gesture.
 - **WHEN** the user disables symmetry
 - **THEN** existing geometry is unchanged and only subsequent edits are asymmetric
 
+#### Scenario: Turning symmetry off keeps the twins
+- **WHEN** a lump is sculpted with X symmetry on, symmetry is turned off and
+  the user sculpts, pulls, smooths or flattens on one side
+- **THEN** the lump still has its twin, and the new edit has none
+
+#### Scenario: A drag with symmetry off moves one side
+- **WHEN** symmetry is off and the user drags one side of a form made under X
+  symmetry with Move
+- **THEN** the far side of the plane does not move
+
 #### Scenario: Turning symmetry on leaves prior work untouched
 - **WHEN** a lump is sculpted with symmetry off, symmetry is turned on and the
   user sculpts again
@@ -64,7 +81,8 @@ against each other — only against an unmirrored gesture.
 - **THEN** the sphere has no twin, before and after a later rig edit
 
 #### Scenario: A mirror change leaves no ghost
-- **WHEN** a stroke changes a layer's mirror, and the layer is then hidden
+- **WHEN** a stroke changes a layer's mirror to another axis, and the layer is
+  then hidden
 - **THEN** the viewport draws neither the reflections the old mirror made nor
   anything of the hidden layer
 

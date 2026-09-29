@@ -616,11 +616,22 @@ sphere (whose reflection is itself) costs nothing extra; marking the whole
 layer re-meshed all 1043 of its keys on the next dab. The gap is a node whose
 box is symmetric about the plane while its shape is not.
 
-Still open on #170, both waiting on the engine: turning symmetry *off*, or
-moving it to another axis, re-points the layer's mirror and so still changes
-items made under the old one, because an item's participation is one bool and
-a host cannot express a reflected copy to bake it (ClayCore #664); and a Move
-drag exactly on the mirror plane is applied once per image, 1.58x the
+**Turning symmetry off keeps the twins.** A verb whose whole effect is items
+it adds — a stamping stroke, a Puxar pull, a curve, a placed object — and the
+bake verbs (Suavizar, Planar, Mover Topológico, whose bakes the layer mirror
+never reaches) leave the layer's mirror where it stands when symmetry is off:
+what they make stays out of it anyway, and writing the mirror off took the far
+side away from every lump sculpted while it was on (#170). Move and Pinçar
+still write it off, because the engine reflects a drag or a magnify into every
+image of an item that takes part: with the mirror kept, a one-sided drag on the
+starting sphere moved both sides. So the first Move or Pinçar with symmetry off
+still turns a mirrored lump one-sided.
+
+Still open on #170, all waiting on the engine: that Move/Pinçar exception, and
+moving symmetry to another axis, re-point the layer's mirror and so still
+change items made under the old one, because an item's participation is one
+bool and a host cannot express a reflected copy to bake it (ClayCore #664); and
+a Move drag exactly on the mirror plane is applied once per image, 1.58x the
 unmirrored pull, because on the plane the reflected image is the drag itself
 (ClayCore #663, pinned by the ignored `a_move_on_the_plane_is_applied_once`).
 

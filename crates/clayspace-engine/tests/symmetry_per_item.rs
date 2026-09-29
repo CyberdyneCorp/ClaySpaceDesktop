@@ -23,6 +23,7 @@ use clayspace_model::{
 
 const OFF: [bool; 3] = [false; 3];
 const X: [bool; 3] = [true, false, false];
+const Z: [bool; 3] = [false, false, true];
 
 fn document() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -148,11 +149,16 @@ fn a_mirror_change_dirties_both_images() {
     assert!(solid(&document, [-1.8, 0.0, 0.0]), "no twin to take away");
     assert_drawn_as_it_is(&document, -1.8, "before the change");
 
-    // Symmetry off: the next stroke writes the mirror as off, which takes the
-    // twin out of the field.
-    dab(&mut document, [0.0, 0.0, -1.0], OFF);
+    // Switched to Z: the next stroke writes the mirror across z, which takes
+    // the twin across x out of the field. (Turning symmetry off no longer
+    // changes the mirror a stroke leaves behind.)
+    dab(&mut document, [0.0, 0.0, -1.0], Z);
+    assert!(
+        !solid(&document, [-1.8, 0.0, 0.0]),
+        "the mirror did not change"
+    );
 
-    assert_drawn_as_it_is(&document, -1.8, "after the mirror went off");
+    assert_drawn_as_it_is(&document, -1.8, "after the mirror changed");
     assert_drawn_as_it_is(&document, 1.8, "the stroke's own side");
 }
 
@@ -164,7 +170,7 @@ fn a_hidden_layer_draws_nothing_after_a_mirror_change() {
         .add_layer("Lado", Representation::Sdf)
         .expect("a second subtool");
     dab(&mut document, [1.8, 0.0, 0.0], X);
-    dab(&mut document, [1.8, 0.0, 0.4], OFF);
+    dab(&mut document, [1.8, 0.0, 0.4], Z);
 
     document
         .set_layer_visible(key, false)
@@ -255,10 +261,10 @@ fn undoing_a_mirror_change_draws_the_old_images_again() {
     let mut document = document();
     dab(&mut document, [1.8, 0.0, 0.0], X);
     let before = document.history().depth;
-    dab(&mut document, [0.0, 0.0, -1.0], OFF);
+    dab(&mut document, [0.0, 0.0, -1.0], Z);
     assert!(
         !solid(&document, [-1.8, 0.0, 0.0]),
-        "the mirror is still on"
+        "the mirror is still across x"
     );
 
     let recorded = document.history().depth.saturating_sub(before);
@@ -388,4 +394,155 @@ fn a_rig_edit_keeps_the_strokes_on_the_rig_layer() {
         "undo did not move it back"
     );
     assert!(!solid(&document, carve), "undo filled in the carve");
+}
+
+/// A stroke of `tool` along `path`, with the symmetry the sculptor asked for.
+fn stroke(
+    document: &mut ClayDocument,
+    tool: ToolKind,
+    path: &[[f32; 3]],
+    size: f32,
+    symmetry: [bool; 3],
+) {
+    SculptModel::set_symmetry(document, symmetry).expect("record the setting");
+    let samples: Vec<GestureSample> = path
+        .iter()
+        .enumerate()
+        .map(|(i, at)| GestureSample {
+            position: *at,
+            pressure: 1.0,
+            time: i as f32,
+        })
+        .collect();
+    document
+        .apply_stroke(
+            tool,
+            BrushSettings {
+                size,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            symmetry,
+        )
+        .expect("a stroke");
+}
+
+/// The field's value at `at`.
+fn field(document: &ClayDocument, at: [f32; 3]) -> f32 {
+    document
+        .document()
+        .eval_points(None, &[at])
+        .expect("the field answers")[0]
+}
+
+/// A lump sculpted with symmetry on keeps its twin when symmetry is turned
+/// off and the next stroke is made one-sided (#170).
+#[test]
+fn turning_symmetry_off_leaves_mirrored_items_alone() {
+    let mut document = document();
+    let (lump, twin) = ([1.8, 0.0, 0.0], [-1.8, 0.0, 0.0]);
+    dab(&mut document, lump, X);
+    assert!(
+        solid(&document, twin),
+        "a dab made with symmetry on has no twin"
+    );
+
+    // Clear of the starting sphere, and off the plane so it could have one.
+    let one_sided = [1.0, 1.5, 0.0];
+    dab(&mut document, one_sided, OFF);
+
+    assert!(
+        solid(&document, twin),
+        "turning symmetry off took the twin away from a lump made while it was on"
+    );
+    assert!(
+        solid(&document, one_sided),
+        "the one-sided dab deposited nothing"
+    );
+    assert!(
+        !solid(&document, [-1.0, 1.5, 0.0]),
+        "a dab made with symmetry off was mirrored by the mirror the layer kept"
+    );
+    assert_drawn_as_it_is(&document, twin[0], "the kept twin");
+    assert_drawn_as_it_is(&document, lump[0], "the lump");
+}
+
+/// The same for a pull: a tendril is items, and one pulled with symmetry off
+/// stays out of the mirror rather than writing it off.
+#[test]
+fn a_pull_with_symmetry_off_leaves_mirrored_items_alone() {
+    let mut document = document();
+    dab(&mut document, [1.8, 0.0, 0.0], X);
+
+    let path: Vec<[f32; 3]> = (0..8).map(|i| [0.8 + i as f32 * 0.05, 1.5, 0.0]).collect();
+    stroke(&mut document, ToolKind::Puxar, &path, 0.2, OFF);
+
+    assert!(
+        solid(&document, [-1.8, 0.0, 0.0]),
+        "a pull with symmetry off took the twin away"
+    );
+    assert!(solid(&document, [1.0, 1.5, 0.0]), "the pull placed nothing");
+    assert!(
+        !solid(&document, [-1.0, 1.5, 0.0]),
+        "a pull with symmetry off was mirrored"
+    );
+    assert_drawn_as_it_is(&document, -1.8, "the kept twin");
+}
+
+/// A smooth or a flatten with symmetry off keeps the twins made under X, and
+/// its bake stays one-sided on the layer that keeps its mirror: nothing on the
+/// far side of the plane moves, and the one-sided detail is not copied there.
+#[test]
+fn a_bake_with_symmetry_off_is_not_copied_across_a_kept_mirror() {
+    for tool in [ToolKind::Suavizar, ToolKind::Planar] {
+        let mut document = document();
+        // Symmetry on first, so the layer carries X.
+        dab(&mut document, [1.8, 0.0, 0.0], X);
+        SculptModel::set_symmetry(&mut document, OFF).expect("symmetry off");
+        place_sphere(&mut document, [0.7, 0.0, 0.8]);
+        let far = [-0.7, 0.0, 1.0];
+        let before = field(&document, far);
+        assert!(!solid(&document, far), "the detail was placed with a twin");
+
+        let path: Vec<[f32; 3]> = (0..6).map(|i| [0.6 + i as f32 * 0.04, 0.0, 1.05]).collect();
+        stroke(&mut document, tool, &path, 0.4, OFF);
+
+        let after = field(&document, far);
+        assert!(
+            (after - before).abs() < 1e-3,
+            "a {tool:?} stroke with symmetry off changed the far side of the \
+             plane from {before} to {after}"
+        );
+        assert!(solid(&document, [-1.8, 0.0, 0.0]), "{tool:?} took the twin");
+        assert_drawn_as_it_is(&document, -0.7, "the far side of the bake");
+    }
+}
+
+/// A Move drag with symmetry off still moves one side only. Its drag images
+/// follow the layer's mirror, so it is the verb that still writes the mirror
+/// off — the price, until the engine has per-item axes (ClayCore #664), is
+/// the twin of a lump made under X.
+#[test]
+fn a_drag_with_symmetry_off_moves_one_side() {
+    let mut document = document();
+    dab(&mut document, [1.8, 0.0, 0.0], X);
+    dab(&mut document, [1.0, 1.5, 0.0], OFF);
+
+    let near = [0.6, 0.0, 0.95];
+    let far = [-0.6, 0.0, 0.95];
+    let (near_before, far_before) = (field(&document, near), field(&document, far));
+    let path: Vec<[f32; 3]> = (0..5).map(|i| [0.6, 0.0, 0.8 + i as f32 * 0.05]).collect();
+    stroke(&mut document, ToolKind::Mover, &path, 0.35, OFF);
+
+    assert!(
+        field(&document, near) < near_before - 1e-3,
+        "the drag did not move its own side"
+    );
+    let far_after = field(&document, far);
+    assert!(
+        (far_after - far_before).abs() < 1e-3,
+        "a drag with symmetry off moved the far side from {far_before} to {far_after}"
+    );
+    assert_drawn_as_it_is(&document, -0.6, "the far side of the drag");
 }
