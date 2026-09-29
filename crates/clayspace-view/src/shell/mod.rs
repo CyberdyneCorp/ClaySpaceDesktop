@@ -846,8 +846,8 @@ pub fn retopo_overlay(
         })
     };
     let painter = ui.painter().with_clip_rect(rect);
-    let guide_color = egui::Color32::from_rgb(72, 220, 236);
-    let density_color = egui::Color32::from_rgb(248, 179, 62);
+    let guide_color = Tokens::text();
+    let density_color = Tokens::accent();
     for guide in &state.retopo_guidance.guides {
         let points: Vec<_> = guide
             .points

@@ -996,7 +996,7 @@ fn not_offered() -> Vec<Value> {
 /// not offered, so a command withheld from agents cannot also be missing from
 /// what `describe` says is withheld — which left a caller unable to tell "not
 /// available" from "does not exist".
-fn not_offered_commands() -> [Command; 14] {
+fn not_offered_commands() -> [Command; 16] {
     [
         Command::OpenDocument,
         Command::SaveAs,
@@ -1009,6 +1009,8 @@ fn not_offered_commands() -> [Command; 14] {
         Command::ChooseBakeDestination,
         Command::RunBake,
         Command::ExportProfile,
+        Command::SetRetopoTool(clayspace_model::RetopoToolState::default()),
+        Command::EditRetopo(clayspace_vm::RetopoEdit::Undo),
         Command::ToggleAgentDoor,
         Command::ShowAgentAccess(false),
         Command::AnswerAgentAsk(clayspace_vm::AgentAnswer::Yes),

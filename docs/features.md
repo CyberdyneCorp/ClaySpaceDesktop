@@ -2926,7 +2926,7 @@ separate from sculpt strokes and mask attributes. The retopology panel selects
 draw, edit or density mode; a primary drag then belongs to that mode and cannot
 sculpt. Curves have editable control points, orientation or topology mode,
 strength and radius. Density painting changes the target density sampled on
-the next retopology run. Cyan curves and amber dabs appear as a viewport overlay.
+the next retopology run. Light curves and warm accent dabs appear as a viewport overlay.
 Guidance is saved in a versioned `.clayspace.retopo` companion file and restored
 when the sculpt is reopened. A missing companion file means no guidance.
 
