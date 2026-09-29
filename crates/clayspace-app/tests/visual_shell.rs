@@ -175,6 +175,8 @@ fn diagnostics() -> clayspace_model::Diagnostics {
         hierarchies: Some(clayspace_model::MultiresDiagnostics {
             held: 2,
             lost: vec!["Cabeça · hierarquia".into()],
+            history_steps: 3,
+            history_bytes: 2 * 1024 * 1024,
         }),
         adaptive: None,
         // A document whose surfaces carry rather more than its edit list does,

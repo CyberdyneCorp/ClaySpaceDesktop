@@ -91,6 +91,7 @@ descriptors! {
     sys::clay_dynamic_surface_stats,
     sys::clay_dynamic_topology_desc,
     sys::clay_dynamic_stamp_report,
+    sys::clay_dynamic_delta_stats,
     sys::clay_dynamic_chunk_info,
     sys::clay_surface_revision,
     sys::clay_index_quality,

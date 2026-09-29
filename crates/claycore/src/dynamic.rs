@@ -1076,6 +1076,46 @@ impl<'s> DynamicSculptor<'s> {
         topology: Option<&DynamicTopology>,
         mask: Option<&MaskField>,
     ) -> Result<(usize, DynamicStampReport)> {
+        self.stroke(samples, preset, stamp, topology, mask, None)
+    }
+
+    /// [`apply_stroke`](Self::apply_stroke), captured into `record` as one
+    /// undo step.
+    ///
+    /// The surface ends bit-identical to the unrecorded stroke's. An empty
+    /// record binds to the surface as it stands; a non-empty one is
+    /// *continued* when the surface is still where it left it — which is how
+    /// every segment and every mirror of one gesture lands in one record —
+    /// and refused with [`ErrorKind::SnapshotMismatch`] otherwise, stamping
+    /// nothing. [`DynamicDelta::revert`] and [`DynamicDelta::apply`] then put
+    /// the surface back to either end of it exactly.
+    ///
+    /// A host loop of recorded stamps is not this: for Grab and Snakehook it
+    /// records a faithful undo of a different stroke, which is why the engine
+    /// offers the whole stroke recorded.
+    pub fn apply_stroke_recorded(
+        &mut self,
+        samples: &[[f32; 5]],
+        preset: &crate::StrokePreset,
+        stamp: MeshStamp<'_>,
+        topology: Option<&DynamicTopology>,
+        mask: Option<&MaskField>,
+        record: &mut DynamicDelta,
+    ) -> Result<(usize, DynamicStampReport)> {
+        self.stroke(samples, preset, stamp, topology, mask, Some(record))
+    }
+
+    /// The one assembly behind both stroke entry points: the unrecorded call
+    /// for `None`, the recorded one otherwise.
+    fn stroke(
+        &mut self,
+        samples: &[[f32; 5]],
+        preset: &crate::StrokePreset,
+        stamp: MeshStamp<'_>,
+        topology: Option<&DynamicTopology>,
+        mask: Option<&MaskField>,
+        record: Option<&mut DynamicDelta>,
+    ) -> Result<(usize, DynamicStampReport)> {
         if samples.is_empty() {
             return Ok((0, DynamicStampReport::default()));
         }
@@ -1093,33 +1133,52 @@ impl<'s> DynamicSculptor<'s> {
         let brush = stamp.as_raw();
         let raw_preset = preset.to_raw();
         let topology = topology.map(|t| t.to_raw());
+        let topology = topology
+            .as_ref()
+            .map_or(std::ptr::null(), |t| t as *const _);
+        let mask = mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
         let mut applied = 0usize;
         let mut report = sys::clay_dynamic_stamp_report::sized();
-        // SAFETY: `full` is `full.len()` initialised samples, read and not
-        // retained. Both descriptors carry their own size and the brush
-        // borrows its alpha from `stamp`, which outlives the call. The
-        // topology descriptor and the mask are each either valid or null, as
-        // the entry point allows, and both out-parameters are valid for the
-        // whole call.
-        check(
-            unsafe {
+        let code = match record {
+            // SAFETY: `full` is `full.len()` initialised samples, read and not
+            // retained. Both descriptors carry their own size and the brush
+            // borrows its alpha from `stamp`, which outlives the call. The
+            // topology descriptor and the mask are each either valid or null,
+            // as the entry point allows, and both out-parameters are valid for
+            // the whole call.
+            None => unsafe {
                 sys::clay_dynamic_sculptor_apply_stroke(
                     self.raw.as_ptr(),
                     full.as_ptr(),
                     full.len(),
                     &raw_preset,
                     &brush,
-                    topology
-                        .as_ref()
-                        .map_or(std::ptr::null(), |t| t as *const _),
-                    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
+                    topology,
+                    mask,
                     0,
                     &mut applied,
                     &mut report,
                 )
             },
-            "clay_dynamic_sculptor_apply_stroke",
-        )?;
+            // SAFETY: as above, and the record is a valid owned handle
+            // borrowed exclusively for the call, the ABI's rule for a capture.
+            Some(record) => unsafe {
+                sys::clay_dynamic_sculptor_apply_stroke_recorded(
+                    self.raw.as_ptr(),
+                    full.as_ptr(),
+                    full.len(),
+                    &raw_preset,
+                    &brush,
+                    topology,
+                    mask,
+                    0,
+                    record.raw.as_ptr(),
+                    &mut applied,
+                    &mut report,
+                )
+            },
+        };
+        check(code, "clay_dynamic_sculptor_apply_stroke")?;
         Ok((applied, DynamicStampReport::from_raw(report)))
     }
 
@@ -1521,6 +1580,146 @@ impl<'s> DynamicSculptor<'s> {
     /// The raw handle, for sibling modules in this crate only.
     pub(crate) fn as_ptr(&mut self) -> *mut sys::clay_dynamic_sculptor {
         self.raw.as_ptr()
+    }
+}
+
+// -- the undo record ---------------------------------------------------------
+
+/// What one record holds, by element kind and in bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DynamicDeltaStats {
+    pub vertices: u64,
+    pub halfedges: u64,
+    pub edges: u64,
+    pub faces: u64,
+    /// The exact, platform-independent size of the record's encoding: the
+    /// figure to assert a count against.
+    pub encoded_bytes: u64,
+    /// What the record holds in memory, capacities included. It follows the
+    /// allocator's growth policy, so it is the figure to **budget** against
+    /// and the wrong one to assert.
+    pub resident_bytes: u64,
+}
+
+impl DynamicDeltaStats {
+    fn from_raw(raw: sys::clay_dynamic_delta_stats) -> Self {
+        Self {
+            vertices: raw.vertices,
+            halfedges: raw.halfedges,
+            edges: raw.edges,
+            faces: raw.faces,
+            encoded_bytes: raw.encoded_bytes,
+            resident_bytes: raw.resident_bytes,
+        }
+    }
+
+    /// Whether the record reached nothing.
+    pub fn is_empty(&self) -> bool {
+        self.vertices == 0 && self.halfedges == 0 && self.edges == 0 && self.faces == 0
+    }
+}
+
+/// The reversible record of one adaptive gesture: every vertex, half-edge,
+/// edge and face it created, deleted or rewrote, with the state at both ends.
+///
+/// Captured by [`DynamicSculptor::apply_stroke_recorded`] and replayed by
+/// [`revert`](Self::revert) and [`apply`](Self::apply), bit-exact over live
+/// elements: `to_mesh` after a revert is byte-identical to the export taken
+/// before the stroke. Coalesced, so its size follows what the stroke reached
+/// rather than how many stamps it took.
+///
+/// **What the engine does not promise**, and a host has to hold to:
+///
+/// - *Last in, first out.* A replay requires the surface to be exactly at the
+///   record's other end, and is refused with [`ErrorKind::SnapshotMismatch`]
+///   before anything is written otherwise — spatially separate strokes share
+///   freed slots, so no reordering is safe.
+/// - *A record never outlives its surface handle.* A surface from
+///   [`DynamicSurface::deserialize`] or [`DynamicSurface::from_mesh`] is a new
+///   identity, and no earlier record replays onto it.
+/// - *The serialized surface is not byte-identical after an undo*: slots a
+///   stroke created stay allocated. Check a restore through `to_mesh` and
+///   [`DynamicSurface::validate`], not through bytes.
+/// - *The engine's memory ledger does not count records.* The host budgets
+///   them with [`DynamicDeltaStats::resident_bytes`].
+pub struct DynamicDelta {
+    raw: NonNull<sys::clay_dynamic_delta>,
+}
+
+// SAFETY: an owning pointer into the engine's own allocation with no interior
+// pointers handed out, so moving one between threads moves all of it. The
+// engine's rule is one call at a time on a record, which `&mut` for a capture
+// already enforces — hence `Send` and no `Sync`.
+unsafe impl Send for DynamicDelta {}
+
+impl DynamicDelta {
+    /// An empty, unbound record.
+    pub fn new() -> Result<Self> {
+        // SAFETY: takes nothing and returns an owned handle or null.
+        let raw = unsafe { sys::clay_dynamic_delta_create() };
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure("clay_dynamic_delta_create", ErrorKind::Backend))
+    }
+
+    /// Empties the record and unbinds it, keeping its capacity, so the next
+    /// capture starts a new gesture.
+    pub fn clear(&mut self) -> Result<()> {
+        // SAFETY: valid owned handle, written exclusively.
+        check(
+            unsafe { sys::clay_dynamic_delta_clear(self.raw.as_ptr()) },
+            "clay_dynamic_delta_clear",
+        )
+    }
+
+    /// What the record holds.
+    pub fn stats(&self) -> Result<DynamicDeltaStats> {
+        let mut raw = sys::clay_dynamic_delta_stats::sized();
+        // SAFETY: valid handle and a versioned out-descriptor.
+        check(
+            unsafe { sys::clay_dynamic_delta_stats_get(self.raw.as_ptr(), &mut raw) },
+            "clay_dynamic_delta_stats_get",
+        )?;
+        Ok(DynamicDeltaStats::from_raw(raw))
+    }
+
+    /// Puts the surface back as the record found it — the undo half.
+    ///
+    /// Through the sculptor, which owns the chunked index and the dirty-chunk
+    /// stream that follow the surface: the replay marks the chunks it touched,
+    /// and no index rebuild is owed.
+    pub fn revert(&self, sculptor: &mut DynamicSculptor<'_>) -> Result<()> {
+        // SAFETY: both handles are valid; the record is read and the
+        // sculptor written, and the engine checks the record matches the
+        // surface before writing anything.
+        check(
+            unsafe { sys::clay_dynamic_delta_revert(self.raw.as_ptr(), sculptor.raw.as_ptr()) },
+            "clay_dynamic_delta_revert",
+        )
+    }
+
+    /// Puts the surface back as the record left it — the redo half.
+    pub fn apply(&self, sculptor: &mut DynamicSculptor<'_>) -> Result<()> {
+        // SAFETY: as above.
+        check(
+            unsafe { sys::clay_dynamic_delta_apply(self.raw.as_ptr(), sculptor.raw.as_ptr()) },
+            "clay_dynamic_delta_apply",
+        )
+    }
+}
+
+impl Drop for DynamicDelta {
+    fn drop(&mut self) {
+        // SAFETY: owned handle, released exactly once.
+        unsafe { sys::clay_dynamic_delta_destroy(self.raw.as_ptr()) };
+    }
+}
+
+impl std::fmt::Debug for DynamicDelta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicDelta")
+            .field("stats", &self.stats().ok())
+            .finish()
     }
 }
 

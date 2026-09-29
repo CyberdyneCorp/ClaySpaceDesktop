@@ -1010,3 +1010,202 @@ fn a_mesh_prices_its_own_conversion_into_a_surface() {
         predicted.persistent_bytes
     );
 }
+
+// -- the undo record --------------------------------------------------------
+
+/// A closed octahedron split four times onto the unit sphere: every edge is
+/// interior, so no stroke reaches a boundary.
+fn ball() -> claycore::Mesh {
+    let mut positions: Vec<[f32; 3]> = vec![
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+    ];
+    let mut triangles: Vec<[u32; 3]> = vec![
+        [0, 2, 4],
+        [2, 1, 4],
+        [1, 3, 4],
+        [3, 0, 4],
+        [2, 0, 5],
+        [1, 2, 5],
+        [3, 1, 5],
+        [0, 3, 5],
+    ];
+    for _ in 0..4 {
+        let mut midpoints = std::collections::HashMap::new();
+        let mut midpoint = |a: u32, b: u32, positions: &mut Vec<[f32; 3]>| {
+            *midpoints.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                let (p, q) = (positions[a as usize], positions[b as usize]);
+                let m: [f32; 3] = std::array::from_fn(|i| (p[i] + q[i]) * 0.5);
+                let length = m.iter().map(|v| v * v).sum::<f32>().sqrt();
+                positions.push(m.map(|v| v / length));
+                positions.len() as u32 - 1
+            })
+        };
+        triangles = triangles
+            .iter()
+            .flat_map(|&[a, b, c]| {
+                let ab = midpoint(a, b, &mut positions);
+                let bc = midpoint(b, c, &mut positions);
+                let ca = midpoint(c, a, &mut positions);
+                [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]
+            })
+            .collect();
+    }
+    let indices: Vec<u32> = triangles.into_iter().flatten().collect();
+    claycore::Mesh::from_triangles(&positions, &indices).expect("the ball is a mesh")
+}
+
+/// The exported triangles and position bits: what a replay promises to give
+/// back byte for byte.
+fn export(surface: &DynamicSurface) -> (Vec<u32>, Vec<u32>) {
+    let mesh = surface.to_mesh().expect("to_mesh");
+    let bits = mesh
+        .positions()
+        .iter()
+        .flatten()
+        .map(|v| v.to_bits())
+        .collect();
+    (mesh.indices().to_vec(), bits)
+}
+
+/// A Draw stroke over the top of the ball, recorded or not.
+fn stroke_over(surface: &mut DynamicSurface, record: Option<&mut claycore::DynamicDelta>) -> usize {
+    let path: Vec<[f32; 5]> = (0..=8)
+        .map(|step| {
+            let x = (step as f32 / 8.0 - 0.5) * 0.8;
+            [x, (1.0 - x * x).sqrt(), 0.0, 1.0, step as f32]
+        })
+        .collect();
+    let preset = claycore::StrokePreset {
+        radius: 0.3,
+        strength: 0.5,
+        ..claycore::StrokePreset::default()
+    };
+    let topology = splitting_topology();
+    let mut sculptor = surface.sculptor().expect("sculptor");
+    match record {
+        Some(record) => {
+            sculptor.apply_stroke_recorded(&path, &preset, draw(), Some(&topology), None, record)
+        }
+        None => sculptor.apply_stroke(&path, &preset, draw(), Some(&topology), None),
+    }
+    .expect("a stroke onto an adaptive surface")
+    .0
+}
+
+fn a_ball() -> DynamicSurface {
+    DynamicSurface::from_mesh(&ball(), DynamicDesc::default()).expect("a ball")
+}
+
+/// Recording a stroke leaves the surface as the unrecorded stroke leaves it,
+/// and the record reverts and re-applies it exactly, however many times.
+#[test]
+fn a_recorded_stroke_reverts_and_reapplies_bit_exactly() {
+    let mut plain = a_ball();
+    let mut recorded = a_ball();
+    let before = export(&recorded);
+    let mut record = claycore::DynamicDelta::new().expect("a record");
+    assert!(record.stats().expect("stats").is_empty());
+
+    assert!(stroke_over(&mut plain, None) > 0);
+    assert!(stroke_over(&mut recorded, Some(&mut record)) > 0);
+    let after = export(&recorded);
+    assert_eq!(after, export(&plain), "recording changed the stroke");
+    assert_ne!(
+        after.0.len(),
+        before.0.len(),
+        "the stroke changed the topology"
+    );
+
+    let stats = record.stats().expect("stats");
+    assert!(!stats.is_empty());
+    assert_eq!(
+        stats.encoded_bytes,
+        56 + 122 * stats.vertices + 114 * stats.halfedges + 42 * stats.edges + 66 * stats.faces,
+        "the encoding is the header's own arithmetic"
+    );
+    assert!(stats.resident_bytes > 0);
+
+    for _ in 0..3 {
+        let mut sculptor = recorded.sculptor().expect("sculptor");
+        record.revert(&mut sculptor).expect("revert");
+        drop(sculptor);
+        assert_eq!(export(&recorded), before);
+        assert!(recorded.validate().expect("validate").ok);
+        let mut sculptor = recorded.sculptor().expect("sculptor");
+        record.apply(&mut sculptor).expect("apply");
+        drop(sculptor);
+        assert_eq!(export(&recorded), after);
+        assert!(recorded.validate().expect("validate").ok);
+    }
+
+    record.clear().expect("clear");
+    assert!(record.stats().expect("stats").is_empty());
+}
+
+/// A record does not replay onto a surface it was not taken on, and the
+/// refusal writes nothing.
+#[test]
+fn a_record_from_another_surface_is_refused_before_anything_is_written() {
+    let mut taken = a_ball();
+    let mut record = claycore::DynamicDelta::new().expect("a record");
+    assert!(stroke_over(&mut taken, Some(&mut record)) > 0);
+
+    let mut other = a_ball();
+    let untouched = export(&other);
+    let revision = other.revision().expect("revision");
+    let mut sculptor = other.sculptor().expect("sculptor");
+    let refused = record.revert(&mut sculptor).expect_err("another surface");
+    drop(sculptor);
+    assert_eq!(refused.kind(), claycore::ErrorKind::SnapshotMismatch);
+    assert_eq!(export(&other), untouched);
+    assert_eq!(other.revision().expect("revision"), revision);
+}
+
+/// **The engine defect the application works around.** On the pinned engine
+/// a revert of a stroke that reached an open boundary gives back the right
+/// triangles and leaves a live boundary half-edge whose `next` is a dead
+/// slot. `clayspace_engine::adaptive` records a snapshot on a surface with an
+/// open boundary for this reason. When this test fails, the engine records
+/// boundary links: lift that fallback and delete this test.
+#[test]
+fn a_revert_at_an_open_boundary_leaves_a_dead_next() {
+    let mut surface = adaptive(8);
+    let before = export(&surface);
+    let mut record = claycore::DynamicDelta::new().expect("a record");
+    let path: Vec<[f32; 5]> = (0..=8)
+        .map(|step| [1.9, 0.0, (step as f32 / 8.0 - 0.5) * 2.0, 1.0, step as f32])
+        .collect();
+    let preset = claycore::StrokePreset {
+        radius: 0.6,
+        strength: 0.5,
+        ..claycore::StrokePreset::default()
+    };
+    let mut sculptor = surface.sculptor().expect("sculptor");
+    let (applied, _) = sculptor
+        .apply_stroke_recorded(
+            &path,
+            &preset,
+            draw(),
+            Some(&splitting_topology()),
+            None,
+            &mut record,
+        )
+        .expect("a stroke along the edge");
+    assert!(applied > 0);
+    assert!(sculptor.surface().validate().expect("validate").ok);
+    record.revert(&mut sculptor).expect("revert");
+    drop(sculptor);
+    assert_eq!(export(&surface), before, "the triangles come back");
+    let validation = surface.validate().expect("validate");
+    assert!(
+        !validation.ok && validation.message.contains("dead next"),
+        "the engine now reverts a boundary stroke to a sound structure \
+         ({}): lift the snapshot fallback in clayspace_engine::adaptive",
+        validation.message
+    );
+}
