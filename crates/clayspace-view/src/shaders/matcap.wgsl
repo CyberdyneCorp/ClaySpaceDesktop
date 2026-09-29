@@ -455,3 +455,59 @@ fn reference_fs(input: ReferenceOutput) -> @location(0) vec4<f32> {
     // cut-out and a photograph fades evenly.
     return vec4<f32>(texel.rgb, texel.a * input.opacity);
 }
+
+// A mesh layer's UV layout, as a checker over its material.
+//
+// The one thing drawn that carries a UV, so it has a vertex type of its own
+// (`UvVertex` on the Rust side) rather than a UV on every vertex of every
+// surface in the scene. The first three attributes sit at the surface's
+// locations; the UV takes 4, since 3 is the surface's mask.
+//
+// Equal squares in UV space: where the layout stretches, the squares on the
+// surface stretch with it, and a seam shows as the squares failing to line up
+// across it. `tint` is white for the plain checker and the island's colour
+// when islands are shown.
+struct UvVertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) tint: vec3<f32>,
+    @location(4) uv: vec2<f32>,
+};
+
+struct UvOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) view_normal: vec3<f32>,
+    @location(1) tint: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
+/// How many squares cross the unit square each way.
+///
+/// Sixteen: enough that a stretch across a quarter of a chart shows as a
+/// visibly different square, few enough that one square still covers several
+/// quads of a retopologised head at the default target count.
+const CHECKER_CELLS: f32 = 16.0;
+
+/// What the dark squares keep of the material. Short of black so the form
+/// still reads through the pattern.
+const CHECKER_DARK: f32 = 0.42;
+
+@vertex
+fn uv_vs(input: UvVertexInput) -> UvOutput {
+    var out: UvOutput;
+    let world = camera.surface_preview * vec4<f32>(input.position, 1.0);
+    out.clip_position = camera.view_projection * world;
+    out.view_normal = (camera.view_rotation * camera.surface_normal * vec4<f32>(input.normal, 0.0)).xyz;
+    out.tint = input.tint;
+    out.uv = input.uv;
+    return out;
+}
+
+@fragment
+fn uv_checker_fs(input: UvOutput) -> @location(0) vec4<f32> {
+    let shaded = material_shading(normalize(input.view_normal), vec3<f32>(1.0));
+    let cell = vec2<i32>(floor(input.uv * CHECKER_CELLS));
+    let dark = ((cell.x + cell.y) & 1) == 1;
+    let square = select(1.0, CHECKER_DARK, dark);
+    return vec4<f32>(shaded * input.tint * square, 1.0);
+}

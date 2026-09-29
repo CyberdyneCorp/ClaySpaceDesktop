@@ -519,6 +519,7 @@ impl SculptViewModel {
             | Command::SetUvSettings(_)
             | Command::RunUvAtlas
             | Command::CancelUvAtlas
+            | Command::SetUvDisplay(_)
             | Command::SetConformSettings(_)
             | Command::RunConform
             | Command::CancelConform

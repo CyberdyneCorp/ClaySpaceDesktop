@@ -219,9 +219,24 @@ field evaluator with no field. We are the first of either.
       is mesh layers alone exports them (the engine's combined call refuses an
       empty field, ClayCore#662), and an export that dropped a visible layer's
       UVs says so. (#213)
-- [ ] 11.8 A checker preview and a seam/island display for a result carrying
-      UVs. The data is on the layer; the renderer has no UV attribute or
-      checker material yet. (#213)
+- [x] 11.8 A checker preview and a seam/island display for a result carrying
+      UVs. (#213) `UvDisplay` (`Off` default, `Checker`, `Islands`) on the UV
+      ViewModel, offered in the mesh inspector only where the active layer
+      carries UVs, and to the agent as `view set_uv_display` with
+      `state.presentation.uv_display` reporting what is shown. The renderer
+      draws the layer's span through a pipeline of its own over a `UvVertex`
+      with a UV attribute (location 4) — the carried `Vertex` stays at 40
+      bytes — a 16×16 checker over the MatCap, tinted per island, and the
+      seams as depth-biased red lines. Islands and seams are found from the
+      per-vertex layout alone (`uv_islands`): measured on the starting form,
+      6 islands for the 6 charts reported and 133 seams for 133 seam edges.
+      Held by `the_uv_preview_is_the_accepted_layout_where_the_layer_is_drawn`
+      (engine), `the_uv_checker_islands_and_seams_draw_on_the_result` and
+      `a_hidden_layer_shows_no_uv_preview` (visual),
+      `a_chosen_display_is_shown_only_on_a_layer_carrying_uvs` (VM), the
+      model's island/seam tests, and the agent end-to-end
+      `a_retopology_asked_for_uvs_reports_its_layout`. The 2D layout view
+      (6.4) is still not drawn.
 - [ ] 11.5 Pin the workflow with UI, VM and agent regression tests; update
       `docs/features.md` to describe the accepted-result lifecycle. (#211–#213)
 

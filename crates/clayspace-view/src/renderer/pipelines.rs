@@ -208,6 +208,24 @@ pub(super) fn make_pipeline(
     fs: &str,
     state: PipelineState,
 ) -> wgpu::RenderPipeline {
+    make_pipeline_for(gpu, layout, shader, format, vs, fs, state, Vertex::layout())
+}
+
+/// The same, over a vertex type other than the surface's.
+///
+/// Only the UV preview takes one: it is the one thing drawn that carries an
+/// attribute the surface does not.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn make_pipeline_for(
+    gpu: &Gpu,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    vs: &str,
+    fs: &str,
+    state: PipelineState,
+    vertices: wgpu::VertexBufferLayout<'static>,
+) -> wgpu::RenderPipeline {
     // Read from the same place the framebuffer reads it, so the two cannot
     // disagree — a pipeline whose sample count differs from its attachment's
     // is a validation error at draw time rather than at creation.
@@ -223,7 +241,7 @@ pub(super) fn make_pipeline(
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some(vs),
-                buffers: &[Vertex::layout()],
+                buffers: &[vertices],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {

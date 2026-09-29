@@ -381,6 +381,9 @@ pub enum Command {
     RunUvAtlas,
     /// Asks a running layout to stop between stages.
     CancelUvAtlas,
+    /// How a layer carrying UVs is drawn: its material, a checker, or a
+    /// checker tinted by island — the seams drawn over either.
+    SetUvDisplay(clayspace_model::UvDisplay),
     /// What the conform panel is set to.
     SetConformSettings(clayspace_model::ConformSettings),
     /// Re-snaps the active mesh subtool onto the field as it is now, keeping
@@ -651,6 +654,8 @@ impl Command {
                 | Self::SetUvSettings(_)
                 | Self::RunUvAtlas
                 | Self::CancelUvAtlas
+                // A picture of the layout, not a change to it.
+                | Self::SetUvDisplay(_)
                 | Self::SetConformSettings(_)
                 | Self::RunConform
                 | Self::CancelConform
@@ -900,6 +905,7 @@ impl Command {
             Self::SetUvSettings(_) => "UV",
             Self::RunUvAtlas => "desdobrar UV",
             Self::CancelUvAtlas => "cancelar desdobramento",
+            Self::SetUvDisplay(_) => "exibição UV",
             Self::SetRetopoSettings(_) => "retopologia",
             Self::SetRetopoTool(_) => "modo de retopologia",
             Self::EditRetopo(_) => "editar orientação da retopologia",

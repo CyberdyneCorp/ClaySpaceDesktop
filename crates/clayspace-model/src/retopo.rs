@@ -582,6 +582,11 @@ pub trait UvModel {
     /// ([`RetopoSettings::uv`]) is where a layout is kept: its result is a new
     /// mesh, and the layer carries the UVs it was laid out with.
     fn record_uv(&mut self, result: &UvResult) -> Result<(), crate::ModelError>;
+
+    /// Whether the active subtool carries a UV layout of its own — a
+    /// retopology asked for UVs placed one — and so has something for the
+    /// checker and seam display to draw.
+    fn active_layer_carries_uvs(&mut self) -> bool;
 }
 
 /// A polygon mesh whose UVs were per face corner, re-expressed with one UV per

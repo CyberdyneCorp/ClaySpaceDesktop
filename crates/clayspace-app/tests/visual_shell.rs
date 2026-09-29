@@ -332,6 +332,8 @@ fn state<'a>(
         curve: clayspace_model::CurveState::default(),
         curve_radius: 0.12,
         voxel_display: clayspace_model::VoxelDisplay::default(),
+        uv_display: clayspace_model::UvDisplay::default(),
+        carries_uvs: false,
         voxel_blur: clayspace_model::SmoothBlur::default(),
         lattice: clayspace_model::LatticeState::default(),
         lattice_divisions: [3; 3],
@@ -4568,6 +4570,50 @@ fn a_mesh_layer_offers_create_multires_with_its_price() {
                 if *settings == clayspace_model::HierarchySettings::default()
         )),
         "Create Multires asked for nothing: {:?}",
+        queue.commands()
+    );
+}
+
+/// A mesh layer carrying UVs offers the UV display, and a chip asks for the
+/// display rather than drawing it; a layer without a layout offers nothing.
+#[test]
+fn a_mesh_layer_carrying_uvs_offers_the_uv_display() {
+    use clayspace_model::UvDisplay;
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Mesh;
+    let bare = egui::Context::default();
+    shell::apply_theme(&bare);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&bare, &set, &mut queue, Vec::new());
+    }
+    assert!(
+        UvDisplay::ALL
+            .iter()
+            .all(|&display| shell_rect(&bare, shell::uv_display_chip_id(display)).is_none()),
+        "a layer with no UVs offered a UV display"
+    );
+
+    set.carries_uvs = true;
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    let checker = shell_rect(&ctx, shell::uv_display_chip_id(UvDisplay::Checker))
+        .expect("no checker chip on a layer carrying UVs");
+    queue.drain();
+    run_shell_frame(&ctx, &set, &mut queue, left_click(checker.center()));
+    assert!(
+        queue
+            .commands()
+            .contains(&Command::SetUvDisplay(UvDisplay::Checker)),
+        "the checker chip asked for nothing: {:?}",
         queue.commands()
     );
 }

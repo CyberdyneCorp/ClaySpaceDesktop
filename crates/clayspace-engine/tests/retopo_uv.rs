@@ -220,3 +220,85 @@ fn an_in_place_retopology_with_uvs_carries_them_on_the_source() {
     let uvs = document.layer_uvs(source).expect("readable");
     assert_eq!(uvs.map(|uvs| uvs.len()), Some(outcome.vertices));
 }
+
+/// The checker and seam display draw the layout the layer holds, on the
+/// triangles the viewport draws for it, where its layer transform puts them.
+///
+/// Compared against `visible_mesh_geometry` with every other layer hidden, so
+/// "where the viewport draws it" is the carried buffer itself rather than a
+/// second account of the placement.
+#[test]
+fn the_uv_preview_is_the_accepted_layout_where_the_layer_is_drawn() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let source = active_key(&document);
+    let outcome = document
+        .retopologise(with_uvs())
+        .expect("the retopology runs");
+    let RetopoUv::Laid(report) = outcome.uv else {
+        panic!("UVs were asked for and the outcome is {:?}", outcome.uv);
+    };
+    let placed = active_key(&document);
+    assert!(
+        document.active_layer_carries_uvs(),
+        "the result is active and carries a layout"
+    );
+    assert_eq!(
+        document.uv_preview(source).expect("readable"),
+        None,
+        "the sculpt carries no layout to preview"
+    );
+
+    document
+        .set_layer_transform(placed, [0.5, -0.25, 0.0], 1.5)
+        .expect("the result moves");
+    let others: Vec<LayerKey> = document
+        .scene()
+        .layers
+        .iter()
+        .map(|layer| layer.key)
+        .filter(|&key| key != placed)
+        .collect();
+    for key in others {
+        document.set_layer_visible(key, false).expect("hides");
+    }
+
+    let preview = document
+        .uv_preview(placed)
+        .expect("readable")
+        .expect("a layer carrying UVs has a preview");
+    assert_eq!(preview.layer, placed);
+    assert_eq!(
+        Some(preview.uvs.clone()),
+        document.layer_uvs(placed).expect("readable"),
+        "the preview draws a different layout from the one the layer holds"
+    );
+    let (positions, normals, _, indices, _) = document.visible_mesh_geometry();
+    assert_eq!(
+        preview.positions, positions,
+        "the preview does not stand where the layer is drawn"
+    );
+    assert_eq!(preview.normals, normals);
+    assert_eq!(preview.indices, indices);
+
+    let islands = clayspace_model::uv_islands(&preview.positions, &preview.indices);
+    println!(
+        "{} charts reported, {} islands and {} seam edges found",
+        report.charts,
+        islands.count,
+        islands.seams.len()
+    );
+    // What the display finds from the per-vertex layout alone is what the
+    // engine reported laying out: one island per chart and one drawn seam per
+    // seam edge. Measured on the starting form: 6 and 6, 133 and 133.
+    assert_eq!(
+        islands.count, report.charts as usize,
+        "the island display disagrees with the layout's chart count"
+    );
+    assert_eq!(
+        islands.seams.len(),
+        report.seam_edges,
+        "the seam display disagrees with the layout's seam count"
+    );
+}

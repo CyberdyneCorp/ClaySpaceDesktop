@@ -576,6 +576,19 @@ pub fn presentation_state(
         surface_opacity: surface_opacity.get(),
         rigging,
         skin_preview,
+        uv_display: tags::tag_of(tags::UV_DISPLAYS, clayspace_model::UvDisplay::Off).to_string(),
+    }
+}
+
+impl PresentationState {
+    /// The same, saying how the active layer's UVs are drawn.
+    ///
+    /// `display` is what the viewport shows, not what was last chosen: `off`
+    /// wherever the active layer carries no layout, since that is what a
+    /// capture of it looks like.
+    pub fn with_uv_display(mut self, display: clayspace_model::UvDisplay) -> Self {
+        self.uv_display = tags::tag_of(tags::UV_DISPLAYS, display).to_string();
+        self
     }
 }
 
@@ -1755,6 +1768,9 @@ mod tests {
         assert_eq!(state.view_preset, "front");
         assert!((state.surface_opacity - 0.5).abs() < 0.001);
         assert!(state.rigging && !state.skin_preview);
+        assert_eq!(state.uv_display, "off");
+        let state = state.with_uv_display(clayspace_model::UvDisplay::Islands);
+        assert_eq!(state.uv_display, "islands");
     }
 
     /// Every plane, including the ones carrying nothing: "there is no side

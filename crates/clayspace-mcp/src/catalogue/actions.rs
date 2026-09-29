@@ -308,6 +308,7 @@ pub fn home_of(command: &Command) -> Home {
         ToggleCavity => Home::In("view", "toggle_cavity"),
         ToggleShadows => Home::In("view", "toggle_shadows"),
         SetVoxelDisplay(..) => Home::In("view", "set_grid_display"),
+        SetUvDisplay(_) => Home::In("view", "set_uv_display"),
         SetSurfaceOpacity(_) => Home::In("view", "set_surface_opacity"),
 
         // -- reference ------------------------------------------------------
@@ -882,6 +883,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
             smooth_blur(args)?,
         ),
         ("view", "set_surface_opacity") => C::SetSurfaceOpacity(surface_opacity(args)?),
+        ("view", "set_uv_display") => C::SetUvDisplay(args.choice("display", tags::UV_DISPLAYS)?),
 
         // -- reference ------------------------------------------------------
         ("reference", "toggle_panel") => C::ToggleReferences,

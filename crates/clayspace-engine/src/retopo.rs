@@ -396,6 +396,10 @@ impl UvModel for ClayDocument {
         let _ = result;
         Ok(())
     }
+
+    fn active_layer_carries_uvs(&mut self) -> bool {
+        ClayDocument::active_layer_carries_uvs(self)
+    }
 }
 
 /// The UV stage, off the interface thread.

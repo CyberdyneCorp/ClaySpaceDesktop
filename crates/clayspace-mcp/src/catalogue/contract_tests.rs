@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use super::actions;
 use super::args::Args;
 use super::table::{ActionSpec, Kind, GROUPS, TABLE};
+use super::tags;
 use crate::session::RefusalCode;
 
 /// The two quoted names at a route. `home` and `build` both spell their
@@ -355,6 +356,23 @@ fn an_azimuth_in_degrees_reaches_the_brush_in_radians() {
         other => panic!("built {other:?}"),
     }
     assert!(args.clamped().is_empty(), "{:?}", args.clamped());
+}
+
+/// Every UV display the inspector offers is one an agent can ask for, by the
+/// same word the presentation state reports it with.
+#[test]
+fn a_uv_display_reaches_the_command_by_its_tag() {
+    for (tag, display) in tags::UV_DISPLAYS {
+        let call = json!({ "display": tag });
+        let args = Args::new("view", "set_uv_display", &call);
+        assert_eq!(
+            actions::build("view", "set_uv_display", &args).unwrap(),
+            clayspace_vm::Command::SetUvDisplay(*display)
+        );
+    }
+    let call = json!({ "display": "wireframe" });
+    let args = Args::new("view", "set_uv_display", &call);
+    assert!(actions::build("view", "set_uv_display", &args).is_err());
 }
 
 #[test]

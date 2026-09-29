@@ -60,7 +60,7 @@ use widgets::*;
 use windows::*;
 
 pub use booleans::boolean_op_chip_id;
-pub use inspector::mesh::create_multires_button_id;
+pub use inspector::mesh::{create_multires_button_id, uv_display_chip_id};
 pub use inspector::multires::subdivide_button_id;
 pub use left::{
     layer_convert_id, layer_row_id, left_panel, multires_add_pass_id, multires_bake_id,
@@ -232,6 +232,10 @@ pub struct ShellState<'a> {
     /// occupancy is filtered before the smooth one is taken.
     pub voxel_display: clayspace_model::VoxelDisplay,
     pub voxel_blur: clayspace_model::SmoothBlur,
+    /// How a mesh layer carrying UVs is drawn, and whether the active one
+    /// carries any — the choice is offered only where there is a layout.
+    pub uv_display: clayspace_model::UvDisplay,
+    pub carries_uvs: bool,
     /// The curve being placed, while one is up, and the thickness a new point
     /// would be given.
     pub curve: clayspace_model::CurveState,

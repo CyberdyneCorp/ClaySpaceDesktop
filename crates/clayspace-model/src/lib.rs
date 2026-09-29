@@ -40,6 +40,7 @@ pub mod shape;
 pub mod surface;
 pub mod tools;
 pub mod units;
+pub mod uv_preview;
 pub mod voxel_display;
 
 pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
@@ -118,4 +119,5 @@ pub use tools::{
     SemanticIntent, Shaping, Substitution, ToolKind, ToolNote, Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
+pub use uv_preview::{uv_islands, UvDisplay, UvIslands, UvPreview};
 pub use voxel_display::{SmoothBlur, VoxelDisplay};
