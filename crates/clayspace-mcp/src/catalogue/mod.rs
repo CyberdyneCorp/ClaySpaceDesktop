@@ -136,6 +136,14 @@ struct HistoryOwners {
     revision: Option<u64>,
 }
 
+struct HistoryChange {
+    before: usize,
+    after: usize,
+    changed: bool,
+    new_entry: bool,
+    revision: Option<u64>,
+}
+
 impl HistoryOwners {
     fn sync(&mut self, depth: usize, redo_depth: usize, revision: Option<u64>) {
         let external_entry =
@@ -173,16 +181,14 @@ impl HistoryOwners {
         Ok(())
     }
 
-    fn applied(
-        &mut self,
-        command: &Command,
-        owner: HistoryOwner,
-        before: usize,
-        after: usize,
-        changed: bool,
-        new_entry: bool,
-        revision: Option<u64>,
-    ) {
+    fn applied(&mut self, command: &Command, owner: HistoryOwner, change: HistoryChange) {
+        let HistoryChange {
+            before,
+            after,
+            changed,
+            new_entry,
+            revision,
+        } = change;
         if !changed {
             return;
         }
@@ -337,11 +343,13 @@ impl Catalogue {
             ledger.applied(
                 &command,
                 owner,
-                before,
-                applied.history_depth,
-                changed,
-                new_entry,
-                after_revision,
+                HistoryChange {
+                    before,
+                    after: applied.history_depth,
+                    changed,
+                    new_entry,
+                    revision: after_revision,
+                },
             );
             let mut value = serde_json::to_value(&applied).unwrap_or(json!({}));
             // What the application brought into range, beside the answer
@@ -555,11 +563,13 @@ impl Catalogue {
             ledger.applied(
                 &command,
                 owner,
-                before,
-                after,
-                true,
-                new_entry,
-                after_revision,
+                HistoryChange {
+                    before,
+                    after,
+                    changed: true,
+                    new_entry,
+                    revision: after_revision,
+                },
             );
             Ok(Answer::value(
                 serde_json::to_value(&measured).unwrap_or(json!({})),
@@ -1431,31 +1441,37 @@ mod tests {
         owners.applied(
             &edit,
             HistoryOwner::new("first", None),
-            0,
-            1,
-            true,
-            true,
-            Some(1),
+            HistoryChange {
+                before: 0,
+                after: 1,
+                changed: true,
+                new_entry: true,
+                revision: Some(1),
+            },
         );
         owners.applied(
             &edit,
             HistoryOwner::new("second", None),
-            1,
-            1,
-            true,
-            false,
-            Some(1),
+            HistoryChange {
+                before: 1,
+                after: 1,
+                changed: true,
+                new_entry: false,
+                revision: Some(1),
+            },
         );
         assert_eq!(owners.last_entry_by().as_deref(), Some("first"));
 
         owners.applied(
             &edit,
             HistoryOwner::new("second", None),
-            1,
-            1,
-            true,
-            true,
-            Some(2),
+            HistoryChange {
+                before: 1,
+                after: 1,
+                changed: true,
+                new_entry: true,
+                revision: Some(2),
+            },
         );
         assert_eq!(owners.last_entry_by().as_deref(), Some("second"));
 
