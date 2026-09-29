@@ -148,15 +148,19 @@ impl HistoryOwners {
     fn sync(&mut self, depth: usize, redo_depth: usize, revision: Option<u64>) {
         let external_entry =
             matches!((self.revision, revision), (Some(before), Some(after)) if after > before);
+        // The window can add entries while the stack is full, evicting the
+        // oldest entry without changing its depth. It may also have made
+        // several edits and undos since our last read. We cannot infer which
+        // stored owner belongs at each index from the final depths, so make
+        // the whole stack window-owned rather than authorize a wrong undo.
+        if external_entry {
+            self.undo.clear();
+            self.redo.clear();
+        }
         self.undo.truncate(depth);
         self.redo.truncate(redo_depth);
         self.undo.resize_with(depth, HistoryOwner::window);
         self.redo.resize_with(redo_depth, HistoryOwner::window);
-        if external_entry {
-            if let Some(top) = self.undo.last_mut() {
-                *top = HistoryOwner::window();
-            }
-        }
         self.revision = revision;
     }
 
@@ -1478,6 +1482,44 @@ mod tests {
         // A window edit can also replace an entry without increasing depth.
         owners.sync(1, 0, Some(3));
         assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
+    }
+
+    #[test]
+    fn external_full_stack_eviction_invalidates_every_stored_owner() {
+        let mut owners = HistoryOwners::default();
+        let edit = Command::AddLayer(Representation::Sdf);
+        owners.sync(0, 0, Some(0));
+        for (before, caller) in [(0, "first"), (1, "second")] {
+            owners.applied(
+                &edit,
+                HistoryOwner::new(caller, None),
+                HistoryChange {
+                    before,
+                    after: before + 1,
+                    changed: true,
+                    new_entry: true,
+                    revision: Some(before as u64 + 1),
+                },
+            );
+        }
+        // The window adds an entry at the engine's depth limit: the first
+        // owner's entry fell off, the second moved down, and the top is new.
+        owners.sync(2, 0, Some(3));
+        assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
+        assert!(owners.check(&Command::Undo, "second").is_err());
+        owners.applied(
+            &Command::Undo,
+            HistoryOwner::window(),
+            HistoryChange {
+                before: 2,
+                after: 1,
+                changed: true,
+                new_entry: false,
+                revision: Some(3),
+            },
+        );
+        assert_eq!(owners.last_entry_by().as_deref(), Some("window"));
+        assert!(owners.check(&Command::Undo, "second").is_err());
     }
 
     #[test]

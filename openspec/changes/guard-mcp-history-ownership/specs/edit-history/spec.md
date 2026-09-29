@@ -10,3 +10,7 @@ The MCP door SHALL attribute each undoable entry to the session that made it. It
 #### Scenario: Ownership follows the history stack
 - **WHEN** a client undoes its own entry above another client's entry
 - **THEN** the next undo is reported as belonging to the other client
+
+#### Scenario: External edit evicts a full history entry
+- **WHEN** the window adds an entry while history is at its depth limit and the catalogue cannot observe which older entry was evicted
+- **THEN** the catalogue treats the whole observed stack as window-owned and refuses an MCP session's undo until it owns a new entry
