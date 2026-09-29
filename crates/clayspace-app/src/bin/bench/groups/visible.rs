@@ -127,7 +127,9 @@ impl Screen {
             .collect();
         let spans: Vec<clayspace_view::MeshSpan> = spans
             .into_iter()
-            .map(|span| clayspace_view::MeshSpan::new(span.layer, span.indices))
+            .map(|span| {
+                clayspace_view::MeshSpan::new(span.layer, span.indices).chunked(span.chunked)
+            })
             .collect();
         self.renderer
             .set_mesh_layers(gpu, &vertices, &indices, &spans);
