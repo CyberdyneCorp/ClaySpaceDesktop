@@ -3071,6 +3071,17 @@ landed beside the drawn form. A drag on a placed object or a whole subtool now
 re-meshes what it dirtied as it goes, and marks the document unsaved once, when
 the gesture ends.
 
+**Moving a carried subtool leaves the field alone.** Mesh, grid, hierarchy and
+adaptive-surface subtools hold no field content. Their triangles are placed
+when the carried buffer is built, and that buffer is rebuilt whenever a layer
+transform changes. So a whole-subtool drag on one of them dirties no brick.
+Before this change it refilled the subtool's box. That re-meshed whatever field
+shared the box, such as the source a crossing leaves under its result, on the
+first frame and on every frame after it. On the mesh reference scene the first
+drag frame took 56.9 ms, 47.3 ms of it re-meshing 1,049 unchanged bricks. It
+now takes 4.7 ms, almost all of it the carried rebuild (#196, D14). A field
+subtool still refills where it stood and where it went.
+
 **The three modes are one row of chips wherever the widget can be worked** —
 under the object list, in the shapes panel beside the selected object, and in
 the cage section — each chip carrying the shape its handle has in the viewport:

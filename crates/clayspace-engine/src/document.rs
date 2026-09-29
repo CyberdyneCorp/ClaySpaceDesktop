@@ -16711,8 +16711,21 @@ impl ClayDocument {
         // re-meshed a handful of bricks around the pointer into a second form
         // with holes in it beside the first. The object path had learnt the
         // same lesson (`set_object_transform`); this is the layer's turn.
-        let before = self.layer_bounds(key);
         let previous = self.layers[index].transform;
+        // A carried layer — mesh, grid, hierarchy, adaptive surface — holds no
+        // field content, so moving it leaves every brick as it was. Its
+        // triangles are placed on the way out (`carried_placement`), and the
+        // carried buffer follows the layout revision the transform moves.
+        // Refilling its box here re-meshed whatever field shared that region
+        // on every drag frame: on the mesh reference scene, whose source
+        // field sits under the mesh, 45 ms a frame for bricks that had not
+        // changed.
+        if self.layers[index].representation != Representation::Sdf {
+            self.write_layer_transform(id, transform)?;
+            self.layers[index].transform = transform;
+            return Ok(());
+        }
+        let before = self.layer_bounds(key);
         self.write_layer_transform(id, transform)?;
         self.layers[index].transform = transform;
         let after = self.layer_bounds(key);
