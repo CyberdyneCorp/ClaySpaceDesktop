@@ -2898,6 +2898,7 @@ impl BrushSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DeformSettings, DeformVerb};
 
     #[test]
     fn every_falloff_has_a_distinct_label() {
@@ -2936,23 +2937,34 @@ mod tests {
     }
 
     #[test]
-    fn every_layer_operation_has_a_history_policy() {
-        for operation in LayerOperation::all() {
-            let expected = match operation {
-                LayerOperation::Taper { .. }
-                | LayerOperation::Twist { .. }
-                | LayerOperation::LatticeDrag { .. }
-                | LayerOperation::CloseHoles { .. }
-                | LayerOperation::FillVoids => OperationHistory::Undoable,
-                LayerOperation::RefineRegion { .. } => OperationHistory::ConsentRequired,
-            };
-            assert_eq!(
-                operation.history_policy(),
-                expected,
-                "{}",
-                operation.label()
-            );
+    fn routed_destructive_operations_are_undoable() {
+        // These are the operations `RunDeform`, `CloseHoles`, and `FillVoids`
+        // offer. The default and Twist settings are taken from the same
+        // settings type the app dispatches, so this holds the routes' actual
+        // inputs rather than re-stating history_policy's match arms.
+        let deform = |verb| {
+            DeformSettings {
+                verb,
+                ..DeformSettings::default()
+            }
+            .operation()
+        };
+        for operation in [
+            deform(DeformVerb::Taper),
+            deform(DeformVerb::Twist),
+            LayerOperation::CloseHoles { passes: 1 },
+            LayerOperation::FillVoids,
+        ] {
+            assert_eq!(operation.history_policy(), OperationHistory::Undoable);
         }
+
+        // The document implements this binding, but no UI or MCP route
+        // offers it. Opening a route before adding undo must require consent.
+        let region = LayerOperation::RefineRegion {
+            min: [-0.3; 3],
+            max: [0.3; 3],
+        };
+        assert_eq!(region.history_policy(), OperationHistory::ConsentRequired);
     }
 
     #[test]
