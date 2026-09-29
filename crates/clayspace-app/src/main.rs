@@ -6244,7 +6244,15 @@ impl App {
         let graphics = self.graphics.as_mut().expect("graphics");
         let frame = match graphics.surface.acquire(&graphics.gpu) {
             Ok(frame) => frame,
-            Err(SurfaceLoss::Skip | SurfaceLoss::Reconfigure) => return,
+            Err(SurfaceLoss::Skip | SurfaceLoss::Reconfigure) => {
+                // The frame's uploads are already written, and without the
+                // submission this frame would have made wgpu holds their
+                // staging until one comes. A window whose image keeps timing
+                // out — occluded, or behind another app while an agent drives
+                // a cage drag — would stack a copy of every upload (#176).
+                graphics.gpu.flush_writes();
+                return;
+            }
             Err(SurfaceLoss::DeviceLost) => {
                 eprintln!("the graphics device was lost; rebuilding rendering");
                 self.graphics = None;

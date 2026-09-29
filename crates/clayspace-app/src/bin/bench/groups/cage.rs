@@ -25,6 +25,15 @@
 //! what it held before it: the per-frame upload goes into the buffers the
 //! surface already has, so a drag should leave nothing behind.
 //!
+//! `cage.footprint` is the same question asked of the operating system: what
+//! the process is charged after the drag over what it was charged before. The
+//! device gauge alone read 1.00× while the process went from 133 MB to 1.15 GB
+//! over the same 100 frames — every frame's upload staging was held by wgpu
+//! until a submission that this harness, having no window, never made, and
+//! the gauge called it released after a wait. The gauge now counts it, the
+//! carried upload hands its writes over itself, and this figure is the check
+//! that does not depend on the gauge being right.
+//!
 //! One-shot sampling for every size, even though a frame is repeatable. Three
 //! frames of a 32³ drag on the old engine is already the longest measurement
 //! in the harness, and the same record for all three sizes keeps their figures
@@ -62,7 +71,8 @@ const SCALING_BUDGET: f64 = 3.0;
 /// own count.
 const LONG_DRAG: usize = 100;
 
-/// How far a long drag may leave the device's holding above where it started.
+/// How far a long drag may leave the device's holding, or the process's
+/// footprint, above where it started — the acceptance criterion's 20%.
 const MEMORY_BUDGET: f64 = 1.2;
 
 pub fn measure(policy: &BackendPolicy, run: &mut Run) {
@@ -88,11 +98,29 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
         );
     }
     match long_drag_memory(&gpu, policy) {
-        Ok(ratio) => run.insert(
-            "cage.memory",
+        Ok(held) => record_memory(run, held),
+        Err(why) => run.skip("cage.memory", why),
+    }
+}
+
+/// What a long drag left behind: on the device, and in the process where the
+/// operating system says.
+struct LeftBehind {
+    device: f64,
+    footprint: Option<f64>,
+}
+
+fn record_memory(run: &mut Run, held: LeftBehind) {
+    run.insert(
+        "cage.memory",
+        Figure::ratio(held.device, Some(MEMORY_BUDGET), 1.1),
+    );
+    match held.footprint {
+        Some(ratio) => run.insert(
+            "cage.footprint",
             Figure::ratio(ratio, Some(MEMORY_BUDGET), 1.1),
         ),
-        Err(why) => run.skip("cage.memory", why),
+        None => run.skip("cage.footprint", Skip::NoFootprint),
     }
 }
 
@@ -163,14 +191,16 @@ fn drag_frames(
         .collect()
 }
 
-/// What the device holds after a long drag on the smallest cage, released,
-/// over what it held before the first frame.
+/// What the device and the process hold after a long drag on the smallest
+/// cage, released, over what they held before the first frame.
 ///
-/// The device is waited on at both ends so staging — writes the device may
-/// not have finished with — is not counted as held on either side.
-fn long_drag_memory(gpu: &Gpu, policy: &BackendPolicy) -> Result<f64, Skip> {
+/// The device is waited on at both ends so staging the device may not have
+/// finished with is not counted as held on either side. Staging no submission
+/// has carried yet is, because a wait does not release it.
+fn long_drag_memory(gpu: &Gpu, policy: &BackendPolicy) -> Result<LeftBehind, Skip> {
     let (mut document, mut screen, start) = caged(gpu, policy, SIZES[0])?;
     let before = settled_memory(gpu);
+    let footprint_before = clayspace_app::memory::footprint();
     for frame in 1..=LONG_DRAG {
         document
             .drag_lattice_point(step(start, frame % 10 + 1))
@@ -180,7 +210,13 @@ fn long_drag_memory(gpu: &Gpu, policy: &BackendPolicy) -> Result<f64, Skip> {
     document.cancel_lattice();
     screen.refresh(gpu, &mut document)?;
     let after = settled_memory(gpu);
-    Ok(after as f64 / before.max(1) as f64)
+    let footprint_after = clayspace_app::memory::footprint();
+    Ok(LeftBehind {
+        device: after as f64 / before.max(1) as f64,
+        footprint: footprint_before
+            .zip(footprint_after)
+            .map(|(before, after)| after as f64 / before.max(1) as f64),
+    })
 }
 
 fn settled_memory(gpu: &Gpu) -> u64 {
@@ -203,6 +239,32 @@ mod tests {
         assert_eq!(figure.value, 20.0);
         assert_eq!(figure.budget, Some(FRAME_BUDGET_MS));
         assert!(run.spreads().contains_key("cage.drag_3.ms"));
+    }
+
+    /// The footprint is judged against the same 20% as the device, and a
+    /// platform that cannot read it says so rather than dropping the figure.
+    #[test]
+    fn the_footprint_is_reported_beside_the_device_or_skipped() {
+        let mut run = Run::new(None);
+        record_memory(
+            &mut run,
+            LeftBehind {
+                device: 1.0,
+                footprint: Some(1.05),
+            },
+        );
+        assert_eq!(run.figures()["cage.footprint"].budget, Some(MEMORY_BUDGET));
+        assert_eq!(run.figures()["cage.memory"].value, 1.0);
+
+        let mut unread = Run::new(None);
+        record_memory(
+            &mut unread,
+            LeftBehind {
+                device: 1.0,
+                footprint: None,
+            },
+        );
+        assert!(!unread.figures().contains_key("cage.footprint"));
     }
 
     /// A frame that put the corner back at rest would make the cage the

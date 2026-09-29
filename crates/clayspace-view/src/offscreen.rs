@@ -169,6 +169,7 @@ impl OffscreenTarget {
             },
         );
         gpu.queue.submit(Some(encoder.finish()));
+        gpu.note_submitted();
 
         let slice = self.readback.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();

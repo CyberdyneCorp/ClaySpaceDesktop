@@ -265,9 +265,34 @@ impl Gpu {
     }
 
     /// Records that the device was waited on until idle, which releases the
-    /// staging of everything submitted before the wait.
+    /// staging of everything submitted before the wait — and nothing written
+    /// since the last submission, which wgpu is still holding.
     pub fn note_device_idle(&self) {
         self.memory.device_idle();
+    }
+
+    /// Records that the caller just submitted a command buffer of its own
+    /// outside a frame, which carries every write made before it.
+    pub fn note_submitted(&self) {
+        self.memory.submitted();
+    }
+
+    /// Hands every write made so far to the device, in an empty submission.
+    ///
+    /// wgpu keeps the staging of a `write_buffer` in its pending writes until
+    /// a submission carries it, and frees it only once the device has done
+    /// with that submission. An upload whose frame then never submits — a
+    /// frame skipped because the window's image could not be acquired, or a
+    /// caller with no window at all — held a whole copy of what it wrote for
+    /// as long as no frame followed. A cage drag uploads the whole mesh on
+    /// every pointer move, so that was a mesh's worth of memory per frame,
+    /// kept after the drag (#176).
+    ///
+    /// Cheap: an empty submission carries only the pending writes, which the
+    /// next frame's submission would have sent anyway.
+    pub fn flush_writes(&self) {
+        self.queue.submit(std::iter::empty());
+        self.memory.submitted();
     }
 
     /// Counts `bytes` of geometry buffer for as long as the result is alive.

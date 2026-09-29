@@ -57,6 +57,9 @@ pub enum Skip {
     /// It is a property of the code and not of the machine, so it fails the
     /// gate the moment a baseline recorded *with* the member goes missing it.
     NoReferenceScene,
+    /// The operating system's charge for the process cannot be read on this
+    /// platform (see `clayspace_app::memory::footprint`).
+    NoFootprint,
 }
 
 impl Skip {
@@ -76,7 +79,11 @@ impl Skip {
     pub const fn is_the_machine(self) -> bool {
         matches!(
             self,
-            Self::NoHeadlessGpu | Self::NoBackends | Self::NoGpuTimestamps | Self::ViewportTooLarge
+            Self::NoHeadlessGpu
+                | Self::NoBackends
+                | Self::NoGpuTimestamps
+                | Self::ViewportTooLarge
+                | Self::NoFootprint
         )
     }
 
@@ -95,6 +102,7 @@ impl Skip {
             Self::NoGpuTimestamps => "the adapter reports no GPU timestamps",
             Self::ViewportTooLarge => "the device will not allocate a target this large",
             Self::NoRegionToConvertInto => "the source layer states no bounds to convert within",
+            Self::NoFootprint => "the process footprint cannot be read on this platform",
         }
     }
 }
