@@ -952,6 +952,31 @@ impl crate::Document {
             })?;
         DynamicSurface::from_mesh(&borrowed, desc)
     }
+
+    /// What [`Document::dynamic_from_mesh_layer`] would cost, asked before it
+    /// is paid: [`Mesh::preflight_to_dynamic`] over the layer's own mesh.
+    ///
+    /// Fused for the same reason the conversion is, and read-only: the mesh is
+    /// borrowed for the length of the call and nothing is built.
+    ///
+    /// [`Document::dynamic_from_mesh_layer`]: crate::Document::dynamic_from_mesh_layer
+    pub fn preflight_mesh_layer_to_dynamic(
+        &self,
+        layer: crate::LayerId,
+        budget: u64,
+    ) -> Result<SurfacePreflight> {
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: as `dynamic_from_mesh_layer` — a valid document and one
+        // out-parameter written only on success, borrowed for this call.
+        check(
+            unsafe { sys::clay_document_mesh_layer_by_id(self.as_ptr(), layer.0, &mut mesh) },
+            "clay_document_mesh_layer_by_id",
+        )?;
+        // `ManuallyDrop` because the layer owns the mesh.
+        let borrowed = Mesh::from_raw(mesh, "clay_document_mesh_layer_by_id")
+            .map(std::mem::ManuallyDrop::new)?;
+        borrowed.preflight_to_dynamic(budget)
+    }
 }
 
 // -- the sculptor -----------------------------------------------------------

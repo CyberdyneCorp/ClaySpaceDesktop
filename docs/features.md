@@ -1998,6 +1998,36 @@ Argila, Vinco, Inflar) refine *before*, so a deposit onto coarse triangles is
 not a smooth bump where the brush promised an edge; Puxar does both, because it
 re-anchors between stamps. `ToolKind::remesh_timing` states the same table.
 
+**Converting is a decision the sculptor makes, never one a brush makes.**
+Convert to Dynamic and Freeze to Fixed Mesh are the two crossings in the
+conversion panel (and `convert` with `mesh-to-dynamic` / `dynamic-to-mesh`
+over MCP); nothing else changes a layer's representation. A brush with no
+binding on the active layer is refused with the reason — a Standard stroke on a
+mesh that stretches its triangles stretches them, because that is what
+preserved topology means. Each crossing:
+
+- **is priced first by the engine** — `clay_mesh_preflight_to_dynamic` going
+  in, `clay_dynamic_surface_preflight_to_mesh` coming out — and the panel shows
+  the peak beside the budget. A crossing whose peak, on top of what the
+  document already holds, passes the budget (2 GB by default, the same figure a
+  hierarchy's level is held to) is refused with both figures and the limit,
+  and nothing changes;
+- **is one undo step**, and undo puts back the representation it left with its
+  geometry intact — the mesh and its selection after Convert, the adaptive
+  surface as the last stroke left it after Freeze;
+- **keeps where the layer stands and whether it shows.** Nothing is resampled,
+  so the result carries the source's transform and visibility; a freeze in
+  place also takes the name back, so `Forma → Forma · Dinâmica → Forma`;
+- **adds a layer by default**, keeping the original sculpt beside the result;
+  *in place* replaces the layer read, still as one undo;
+- **keeps colour and UVs as corner attributes and loses quads**: the surface is
+  triangles, and nothing re-pairs them on the way back — the panel says so
+  before the crossing.
+
+A Mesh → Dynamic → Mesh round trip with no stroke between gives back the same
+vertices within 1e-5 and the same triangle count
+(`mesh_to_dynamic_and_back_preserves_the_form`).
+
 **One gesture is one undo, and it restores connectivity.** The record is the
 surface's own bytes before the gesture — a bounded snapshot, exact, in the one
 ordered history every other edit is in. **The surface is saved beside the

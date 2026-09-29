@@ -49,7 +49,7 @@ pub use colour::{Colour, ColourState};
 pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
     CageFault, ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal,
-    RepairKind, RepairOutcome, RepairReport,
+    RepairKind, RepairOutcome, RepairReport, SurfacePrice,
 };
 pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEWEST_POINTS};
 pub use cut::{lasso_keeps_inside, side_of, CutGesture, CutModel, DrawnCut, TrimSide};

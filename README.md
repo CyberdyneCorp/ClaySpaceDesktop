@@ -693,6 +693,10 @@ level back out. See [subdivision hierarchies](#subdivision-hierarchies).
 A fifth, the adaptive surface, arrives the same way — `mesh → dynamic` refuses
 a mesh with degenerate or non-manifold faces rather than repairing it, and
 `dynamic → mesh` bakes it back to fixed topology — for ten crossings in all.
+Both are priced by the engine's preflight before they run and refused past the
+memory budget with the estimate and the limit named; each is one undo, and the
+result keeps the source's transform and visibility. No brush ever crosses a
+layer on its own.
 
 ```mermaid
 graph LR
@@ -738,7 +742,10 @@ cell size rather than written down, so the figures move as the slider moves:
 how far the surface can travel, what thickness of feature vanishes, how many
 cells the region holds, and whether sharp edges, colour and the parametric
 history survive. A crossing into a mesh states one more — the topology is the
-sampling lattice's and nothing here re-flows it.
+sampling lattice's and nothing here re-flows it, or, for an exact crossing, the
+source's own, frozen. The adaptive crossings state what the engine says they
+will peak at beside the budget, and the crossing in says quads become
+triangles.
 
 A card converts nothing. Crossing costs work and is not always reversible, so
 it stays behind the panel where the cost is stated and confirmed.

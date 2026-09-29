@@ -12,8 +12,8 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     BrushSettings, ConversionSettings, Direction, DocumentModel, ExchangeModel, GestureSample,
-    ImportSettings, LayerKey, ModelError, Representation, SceneModel, SculptModel, ToolKind,
-    ToolNote, Unavailable,
+    ImportSettings, LayerKey, ModelError, Refusal, Representation, SceneModel, SculptModel,
+    ToolKind, ToolNote, Unavailable,
 };
 
 // -- fixtures ---------------------------------------------------------------
@@ -432,4 +432,281 @@ fn paint_colours_a_coloured_surface() {
     assert_eq!(grey(&mut surface), 0, "the sheet came across grey");
     assert!(dab(&mut surface, ToolKind::Pintar), "the paint lands");
     assert!(grey(&mut surface) > 0, "and wrote colour");
+}
+
+// -- the explicit crossing (#208) -------------------------------------------
+
+/// How far a vertex may move across Mesh → Dynamic → Mesh: neither crossing
+/// samples anything, so the only movement is float round-off in the weld.
+const ROUND_TRIP_TOLERANCE: f32 = 1e-5;
+
+/// The distinct vertex positions a drawing holds, in a stable order, so two
+/// drawings of the same form compare equal whatever the vertex numbering.
+fn form(document: &mut ClayDocument) -> Vec<[f32; 3]> {
+    let (mut positions, _) = drawn(document);
+    positions.sort_by(|a, b| a.partial_cmp(b).expect("finite positions"));
+    positions.dedup();
+    positions
+}
+
+fn assert_same_form(before: &[[f32; 3]], after: &[[f32; 3]]) {
+    assert_eq!(before.len(), after.len(), "the vertex count moved");
+    for (a, b) in before.iter().zip(after) {
+        let moved = (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0, f32::max);
+        assert!(
+            moved <= ROUND_TRIP_TOLERANCE,
+            "a vertex moved {moved} across the round trip: {a:?} became {b:?}"
+        );
+    }
+}
+
+fn in_place(document: &mut ClayDocument, direction: Direction) -> Result<LayerKey, ModelError> {
+    let settings = ConversionSettings::default();
+    document.convert_layer_in_place(direction, settings.cell_size, settings.blur)
+}
+
+fn beside(document: &mut ClayDocument, direction: Direction) -> Result<LayerKey, ModelError> {
+    let settings = ConversionSettings::default();
+    document.convert_layer(direction, settings.cell_size, settings.blur)
+}
+
+fn rows(document: &ClayDocument) -> Vec<(LayerKey, Representation)> {
+    document
+        .scene()
+        .layers
+        .iter()
+        .map(|layer| (layer.key, layer.representation))
+        .collect()
+}
+
+/// Mesh → Dynamic → Mesh gives back the form it was given, within
+/// [`ROUND_TRIP_TOLERANCE`], with the triangle count it had.
+#[test]
+fn mesh_to_dynamic_and_back_preserves_the_form() {
+    let (mut document, _) = with_a_mesh("round-trip-form");
+    let (_, triangles) = drawn(&mut document);
+    let before = form(&mut document);
+
+    in_place(&mut document, Direction::MeshToDynamic).expect("into Dynamic");
+    assert_same_form(&before, &form(&mut document));
+    let key = in_place(&mut document, Direction::DynamicToMesh).expect("frozen");
+
+    assert_eq!(representation_of(&document, key), Representation::Mesh);
+    assert_eq!(drawn(&mut document).1, triangles);
+    assert_same_form(&before, &form(&mut document));
+}
+
+/// Each crossing is one undo step, and undo puts back the representation it
+/// left with its geometry intact — never an empty layer of the new one.
+#[test]
+fn a_conversion_is_one_undo_step() {
+    let (mut document, mesh) = with_a_mesh("one-step");
+    let fixed = drawn(&mut document);
+    let depth = document.history().depth;
+
+    let surface = in_place(&mut document, Direction::MeshToDynamic).expect("into Dynamic");
+    assert_eq!(document.history().depth, depth + 1);
+    assert!(dab(&mut document, ToolKind::Padrao), "the sculpt lands");
+    let sculpted = drawn(&mut document);
+    let frozen = in_place(&mut document, Direction::DynamicToMesh).expect("frozen");
+    assert_eq!(document.history().depth, depth + 3);
+    assert_eq!(
+        drawn(&mut document),
+        sculpted,
+        "the freeze keeps the sculpt"
+    );
+
+    // Back through the freeze: the adaptive surface, as the stroke left it.
+    assert!(document.undo().expect("undo the freeze"));
+    assert_eq!(
+        representation_of(&document, surface),
+        Representation::Dynamic
+    );
+    assert!(document.scene().layer(frozen).is_none());
+    assert_eq!(document.dynamic_diagnostics().held, 1);
+    assert_eq!(drawn(&mut document), sculpted);
+
+    // Back through the stroke and the crossing: the mesh, exactly.
+    assert!(document.undo().expect("undo the stroke"));
+    assert!(document.undo().expect("undo the crossing"));
+    assert_eq!(document.history().depth, depth);
+    assert_eq!(representation_of(&document, mesh), Representation::Mesh);
+    assert!(document.scene().layer(surface).is_none());
+    assert_eq!(document.scene().active, Some(mesh));
+    assert_eq!(document.dynamic_diagnostics().held, 0);
+    assert_eq!(drawn(&mut document), fixed);
+
+    // And forward again, one step per crossing.
+    assert!(document.redo().expect("redo the crossing"));
+    assert_eq!(
+        representation_of(&document, surface),
+        Representation::Dynamic
+    );
+    assert!(document.redo().expect("redo the stroke"));
+    assert!(document.redo().expect("redo the freeze"));
+    assert_eq!(representation_of(&document, frozen), Representation::Mesh);
+    assert_eq!(drawn(&mut document), sculpted);
+}
+
+/// A crossing past the budget is refused with the engine's estimate and the
+/// limit, and changes nothing: not the rows, not the selection, not the
+/// history.
+#[test]
+fn an_over_budget_conversion_is_refused() {
+    for direction in [Direction::MeshToDynamic, Direction::DynamicToMesh] {
+        let (mut document, key) = match direction {
+            Direction::MeshToDynamic => with_a_mesh("over-budget-in"),
+            _ => with_a_surface("over-budget-out"),
+        };
+        let settings = ConversionSettings::default();
+        let price = document
+            .conversion_cost(direction, settings.cell_size)
+            .and_then(|cost| cost.surface)
+            .expect("an adaptive crossing is priced by the engine");
+        assert!(price.peak_bytes > 0);
+        assert_eq!(
+            price.budget_bytes,
+            clayspace_engine::adaptive::CROSSING_BUDGET
+        );
+
+        let (before, depth) = (rows(&document), document.history().depth);
+        let geometry = drawn(&mut document);
+        document.set_surface_budget(price.peak_bytes / 2);
+
+        for run in [in_place, beside] {
+            let refused = run(&mut document, direction).expect_err("past the budget");
+            match refused {
+                ModelError::Conversion(Refusal::CrossingOverBudget {
+                    direction: said,
+                    peak_bytes,
+                    budget_bytes,
+                    ..
+                }) => {
+                    assert_eq!(said, direction);
+                    assert_eq!(peak_bytes, price.peak_bytes, "the engine's estimate");
+                    assert_eq!(budget_bytes, price.peak_bytes / 2, "the limit");
+                }
+                other => panic!("{direction:?} refused for the wrong reason: {other}"),
+            }
+            assert_eq!(rows(&document), before, "{direction:?} changed the rows");
+            assert_eq!(document.scene().active, Some(key));
+            assert_eq!(document.history().depth, depth);
+            assert_eq!(drawn(&mut document), geometry);
+        }
+
+        // The same crossing at the default budget runs.
+        document.set_surface_budget(clayspace_engine::adaptive::CROSSING_BUDGET);
+        assert!(in_place(&mut document, direction).is_ok());
+    }
+}
+
+/// Transform, name and visibility survive Mesh → Dynamic → Mesh in place.
+#[test]
+fn transform_name_and_visibility_survive_the_round_trip() {
+    use clayspace_model::{GizmoTarget, ObjectModel};
+    let (mut document, mesh) = with_a_mesh("identity");
+    let name = document.scene().layer(mesh).expect("the row").name.clone();
+    document
+        .set_layer_transform(mesh, [1.0, 2.0, 3.0], 1.5)
+        .expect("place the sheet");
+    document.set_layer_visible(mesh, false).expect("hide it");
+    let placed = document
+        .target_transform(GizmoTarget::Layer(mesh))
+        .expect("a placed layer");
+
+    let surface = in_place(&mut document, Direction::MeshToDynamic).expect("into Dynamic");
+    let row = document.scene().layer(surface).expect("the row").clone();
+    assert!(!row.visible, "a hidden layer stays hidden");
+    assert_eq!(
+        document.target_transform(GizmoTarget::Layer(surface)),
+        Some(placed),
+        "the surface stands where the mesh stood"
+    );
+
+    let frozen = in_place(&mut document, Direction::DynamicToMesh).expect("frozen");
+    let row = document.scene().layer(frozen).expect("the row").clone();
+    assert_eq!(row.name, name, "the round trip gives the name back");
+    assert!(!row.visible);
+    assert_eq!(
+        document.target_transform(GizmoTarget::Layer(frozen)),
+        Some(placed)
+    );
+}
+
+/// The default crossing adds a layer and keeps the original sculpt beside
+/// it, standing where the original stands.
+#[test]
+fn the_default_crossing_keeps_the_original() {
+    use clayspace_model::{GizmoTarget, ObjectModel};
+    let (mut document, mesh) = with_a_mesh("beside");
+    document
+        .set_layer_transform(mesh, [0.5, 0.0, -0.5], 2.0)
+        .expect("place the sheet");
+    let placed = document.target_transform(GizmoTarget::Layer(mesh));
+    let surface = beside(&mut document, Direction::MeshToDynamic).expect("into Dynamic");
+    assert_eq!(representation_of(&document, mesh), Representation::Mesh);
+    assert_eq!(
+        representation_of(&document, surface),
+        Representation::Dynamic
+    );
+    assert_eq!(
+        document.target_transform(GizmoTarget::Layer(surface)),
+        placed
+    );
+}
+
+/// No brush changes what a layer is: every tool, stroked on every
+/// representation the document holds, leaves each row the representation it
+/// was — a tool with no binding is refused, never satisfied by a crossing.
+#[test]
+fn no_tool_converts_a_layer() {
+    let (mut document, mesh) = with_a_mesh("no-tool-converts");
+    for direction in [
+        Direction::MeshToVoxel,
+        Direction::MeshToMultires,
+        Direction::MeshToDynamic,
+    ] {
+        document.set_active_layer(mesh).expect("back to the mesh");
+        beside(&mut document, direction).expect("a crossing beside the mesh");
+    }
+    let before = rows(&document);
+    let held: std::collections::BTreeSet<&str> = before
+        .iter()
+        .map(|(_, representation)| representation.label())
+        .collect();
+    assert_eq!(held.len(), Representation::ALL.len(), "one row of each");
+
+    let brush = BrushSettings {
+        size: 0.6,
+        intensity: 0.5,
+        ..BrushSettings::default()
+    };
+    let samples = [
+        GestureSample {
+            position: [-0.2, 0.0, 0.0],
+            pressure: 1.0,
+            time: 0.0,
+        },
+        GestureSample {
+            position: [0.2, 0.0, 0.0],
+            pressure: 1.0,
+            time: 0.1,
+        },
+    ];
+    for (key, representation) in before.clone() {
+        document.set_active_layer(key).expect("activate");
+        for tool in ToolKind::ALL {
+            document.begin_gesture();
+            let _ = document.apply_stroke(tool, brush, &samples, [false; 3]);
+            document.end_gesture();
+            assert_eq!(
+                document.active_representation(),
+                representation,
+                "{} changed a {} layer",
+                tool.label(),
+                representation.label()
+            );
+        }
+    }
+    assert_eq!(rows(&document), before, "no stroke added or crossed a row");
 }

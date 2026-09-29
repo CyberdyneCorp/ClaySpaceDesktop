@@ -1587,6 +1587,9 @@ pub struct ClayDocument {
     /// Surface guidance for the next retopology, separate from sculpt history.
     pub(crate) retopo_guidance: clayspace_model::RetopoGuidance,
     crossing_redo: Vec<Crossing>,
+    /// What an adaptive crossing may peak at, on top of what the document
+    /// already holds. See [`crate::adaptive::CROSSING_BUDGET`].
+    surface_budget: u64,
     /// Layers an undone crossing has taken off the scene.
     ///
     /// Hidden rather than removed, and the difference is forced by the
@@ -1794,6 +1797,7 @@ impl ClayDocument {
             retopo_target: None,
             retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
+            surface_budget: crate::adaptive::CROSSING_BUDGET,
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),
@@ -2386,7 +2390,7 @@ impl ClayDocument {
             None if direction.needs_region() => return None,
             None => [0.0; 3],
         };
-        Some(Cost::of(direction, cell_size, extent))
+        Some(Cost::of(direction, cell_size, extent).priced(self.surface_price(direction)))
     }
 
     /// Crosses the active layer to another representation, as a new layer.
@@ -2468,7 +2472,63 @@ impl ClayDocument {
                 .unwrap_or(u64::MAX),
             Self::BYTES_PER_CELL,
         )
-        .map_err(ModelError::Conversion)
+        .map_err(ModelError::Conversion)?;
+        // An adaptive crossing samples nothing and so has no cells to price;
+        // what it spends is memory, and the engine prices that before anything
+        // is built. Priced on top of what the document holds, and asked only
+        // here, when the crossing is about to run: the ledger walks every
+        // layer, which is too much to ask every frame the panel is open.
+        if let Some(price) = self.surface_price(direction) {
+            let held = self.memory().map_or(0, |report| report.total);
+            price
+                .within(direction, held)
+                .map_err(ModelError::Conversion)?;
+        }
+        Ok(())
+    }
+
+    /// What the engine's preflight says an adaptive crossing of the active
+    /// layer would cost, or `None` for a crossing that is not adaptive, a
+    /// source it does not start from, or an engine that would not answer.
+    ///
+    /// A budget of zero to the engine, which answers with the figures and no
+    /// verdict; the verdict is this document's, against
+    /// [`Self::surface_budget`], so the refusal can name the budget it used.
+    fn surface_price(&self, direction: Direction) -> Option<clayspace_model::SurfacePrice> {
+        let source = self.active_layer();
+        if source.representation != direction.from() {
+            return None;
+        }
+        let preflight = match direction {
+            Direction::MeshToDynamic => self
+                .document
+                .preflight_mesh_layer_to_dynamic(source.id, 0)
+                .ok()?,
+            Direction::DynamicToMesh => source
+                .dynamic
+                .as_ref()?
+                .surface()
+                .preflight_to_mesh(0)
+                .ok()?,
+            _ => return None,
+        };
+        Some(clayspace_model::SurfacePrice {
+            peak_bytes: preflight.peak_bytes,
+            persistent_bytes: preflight.persistent_bytes,
+            budget_bytes: self.surface_budget,
+        })
+    }
+
+    /// What an adaptive crossing may peak at, on top of what the document
+    /// already holds.
+    pub fn surface_budget(&self) -> u64 {
+        self.surface_budget
+    }
+
+    /// Sets it: the lever a host on a constrained device pulls, and what a
+    /// test pulls to reach the refusal without building a surface that large.
+    pub fn set_surface_budget(&mut self, bytes: u64) {
+        self.surface_budget = bytes;
     }
 
     /// Runs a crossing of the active layer whose new layer `fill` makes.
@@ -2491,14 +2551,14 @@ impl ClayDocument {
         // grid — so a stroke aimed at the second wrote into the first, the
         // chunks were meshed from the wrong grid, and `rename_layer` refused to
         // untangle it because the name it would set was already taken.
-        let suffix = match direction.to() {
-            Representation::Sdf => "Campo",
-            Representation::Voxel => "voxel",
-            Representation::Mesh => "Malha",
-            Representation::Multires => "Hierarquia",
-            Representation::Dynamic => "Dinâmica",
-        };
-        let name = self.unique_layer_name(&format!("{} · {suffix}", source.name));
+        let name = self.unique_layer_name(&crossing_name(direction, &source.name));
+        // What an exact crossing carries across: where the layer stands and
+        // whether it shows. Nothing is resampled on the way, so the vertices
+        // come out in the coordinates they went in with, and a result standing
+        // at the origin would have moved the form.
+        let placement = direction
+            .is_exact()
+            .then_some((source.transform, source.visible));
         // Where the source stands, so the result can take its place, and its
         // key, so it can be removed once the result is filled from it.
         let (replacing, at) = (source.key, self.active);
@@ -2524,6 +2584,11 @@ impl ClayDocument {
                 .and_then(|()| self.move_layer(*made, at)),
             _ => Ok(()),
         };
+        // Inside the group too, so the placement is taken back with the rest.
+        let placed = match (placement, &made) {
+            (Some(placement), Ok(made)) => self.carry_placement(*made, placement),
+            _ => Ok(()),
+        };
         // Closed on the failing path too: a group left open swallows every
         // edit after it into one undo step, which is a worse bug than the one
         // that opened it.
@@ -2531,6 +2596,7 @@ impl ClayDocument {
         let made = made?;
         closed?;
         replaced?;
+        placed?;
         if in_place {
             self.reconcile_live_objects();
             self.remember_objects_after();
@@ -2539,6 +2605,23 @@ impl ClayDocument {
         // the layer it just made. See `crossing_undo`.
         self.record_crossing(made, depth_before);
         Ok(made)
+    }
+
+    /// Stands a crossing's result where its source stood, shown or hidden as
+    /// the source was.
+    fn carry_placement(
+        &mut self,
+        made: LayerKey,
+        (transform, visible): (clayspace_model::Transform, bool),
+    ) -> Result<(), ModelError> {
+        let index = self.index_of(made)?;
+        if self.layers[index].transform != transform {
+            self.place_layer(made, transform)?;
+        }
+        if self.layers[index].visible != visible {
+            self.write_layer_visible(made, visible)?;
+        }
+        Ok(())
     }
 
     /// Makes the new layer for one direction, named `name`.
@@ -11412,6 +11495,34 @@ fn hierarchy_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
     }
 }
 
+/// What a crossing of a layer called `source` names its result, before it is
+/// made unique.
+///
+/// The representation it now holds, after the source's name — except on the
+/// way back into a mesh from a representation a mesh was read into exactly: a
+/// suffix the crossing in added comes off again, so a mesh crossed to Dynamic
+/// and frozen back is called what it was called. Only the exact crossings,
+/// because only they are a round trip: a grid baked to a mesh is not the mesh
+/// it was rasterized from, and its name should not say it is.
+fn crossing_name(direction: Direction, source: &str) -> String {
+    let suffix = |representation: Representation| match representation {
+        Representation::Sdf => "Campo",
+        Representation::Voxel => "voxel",
+        Representation::Mesh => "Malha",
+        Representation::Multires => "Hierarquia",
+        Representation::Dynamic => "Dinâmica",
+    };
+    let returning = direction.is_exact() && direction.to() == Representation::Mesh;
+    let stem = source
+        .strip_suffix(suffix(direction.from()))
+        .and_then(|rest| rest.strip_suffix(" · "))
+        .filter(|stem| returning && !stem.trim().is_empty());
+    match stem {
+        Some(stem) => stem.to_string(),
+        None => format!("{source} · {}", suffix(direction.to())),
+    }
+}
+
 /// The same, narrowed by the one verb an adaptive surface declines.
 ///
 /// Layer deposits up to a ceiling measured against where each vertex stood
@@ -12971,12 +13082,15 @@ impl DocumentModel for ClayDocument {
         // have got the wrong answer.
         opened.object_states.clear();
         opened.remember_objects_after();
+        // A host setting rather than part of the file, like the policy.
+        opened.surface_budget = self.surface_budget;
         *self = opened;
         Ok(())
     }
 
     fn reset(&mut self) -> Result<(), ModelError> {
-        let fresh = Self::new(self.policy.clone()).and_then(Self::with_starting_form)?;
+        let mut fresh = Self::new(self.policy.clone()).and_then(Self::with_starting_form)?;
+        fresh.surface_budget = self.surface_budget;
         *self = fresh;
         Ok(())
     }
@@ -13132,6 +13246,7 @@ impl ClayDocument {
             retopo_target: None,
             retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
+            surface_budget: crate::adaptive::CROSSING_BUDGET,
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),

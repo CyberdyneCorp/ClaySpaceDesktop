@@ -29,6 +29,18 @@
 use claycore::{DynamicDesc, DynamicSurface, DynamicTopology};
 use clayspace_model::{CageFault, ModelError, Refusal};
 
+/// What a crossing into or out of an adaptive surface may peak at, on top of
+/// what the document already holds.
+///
+/// The hierarchy's figure, for the hierarchy's reason: zero would be "no
+/// budget", and then there is no refusal to offer — a host finds out what a
+/// crossing costs by running out of memory during it. Two gigabytes is past
+/// what a crossing of any mesh this application imports reaches, so the
+/// refusal is for the model that genuinely does not fit rather than a limit a
+/// sculptor meets in ordinary work. A host on a constrained device lowers it
+/// through `ClayDocument::set_surface_budget`.
+pub const CROSSING_BUDGET: u64 = crate::multires::LEVEL_BUDGET;
+
 /// The triangles the viewport is drawing, and the surface state they were
 /// copied at.
 struct Drawn {

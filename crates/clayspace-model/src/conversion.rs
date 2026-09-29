@@ -408,6 +408,18 @@ pub enum Refusal {
     },
     /// The hierarchy is already as deep as this build will take it.
     DepthLimit { levels: u32 },
+    /// An adaptive crossing would peak past the budget.
+    ///
+    /// Priced by the engine's own preflight for the crossing — the peak, on
+    /// top of what the document already holds, for the reason
+    /// [`Refusal::LevelOverBudget`] gives. Nothing has been built when this is
+    /// returned, so the source, the selection and the history are as they were.
+    CrossingOverBudget {
+        direction: Direction,
+        held_bytes: u64,
+        peak_bytes: u64,
+        budget_bytes: u64,
+    },
     /// The source changed, or went, while its crossing ran off the interface
     /// thread, so the result describes a grid that is no longer there.
     ///
@@ -470,6 +482,20 @@ impl std::fmt::Display for Refusal {
                 held_bytes / (1024 * 1024),
                 budget_bytes / (1024 * 1024)
             ),
+            Self::CrossingOverBudget {
+                direction,
+                held_bytes,
+                peak_bytes,
+                budget_bytes,
+            } => write!(
+                f,
+                "a crossing to {} peaks at {} on top of the {} the document \
+                 already holds, past the {} budget",
+                direction.to().label(),
+                megabytes(*peak_bytes),
+                megabytes(*held_bytes),
+                megabytes(*budget_bytes)
+            ),
             Self::DepthLimit { levels } => write!(
                 f,
                 "this hierarchy is {levels} levels deep, which is as far as it goes"
@@ -479,6 +505,59 @@ impl std::fmt::Display for Refusal {
                  was dropped; run the crossing again",
             ),
         }
+    }
+}
+
+/// Bytes as a sculptor reads them: whole megabytes, and never a bare zero
+/// for a figure that is not nothing.
+fn megabytes(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes > 0 && bytes < MB {
+        return "under 1 MB".to_string();
+    }
+    format!("{} MB", bytes / MB)
+}
+
+/// What the engine's preflight says an adaptive crossing will cost.
+///
+/// The adaptive crossings sample nothing, so they have no cell count to price;
+/// what they spend is memory, and the engine answers that before anything is
+/// built — `clay_mesh_preflight_to_dynamic` going in and
+/// `clay_dynamic_surface_preflight_to_mesh` coming out. The peak is the figure
+/// checked, since the source and the result are live at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfacePrice {
+    /// The high-water mark during the crossing.
+    pub peak_bytes: u64,
+    /// What the result holds once the crossing is done.
+    pub persistent_bytes: u64,
+    /// What the crossing may peak at, with the document's holdings under it.
+    pub budget_bytes: u64,
+}
+
+impl SurfacePrice {
+    /// Whether the crossing fits on top of `held_bytes`, or the refusal that
+    /// names the estimate and the limit.
+    pub fn within(&self, direction: Direction, held_bytes: u64) -> Result<(), Refusal> {
+        if held_bytes.saturating_add(self.peak_bytes) > self.budget_bytes {
+            return Err(Refusal::CrossingOverBudget {
+                direction,
+                held_bytes,
+                peak_bytes: self.peak_bytes,
+                budget_bytes: self.budget_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    /// The peak, as the conversion panel states it.
+    pub fn peak_label(&self) -> String {
+        megabytes(self.peak_bytes)
+    }
+
+    /// The budget, likewise.
+    pub fn budget_label(&self) -> String {
+        megabytes(self.budget_bytes)
     }
 }
 
@@ -509,6 +588,12 @@ pub struct Cost {
     pub keeps_colour: bool,
     /// Whether what comes out has a topology nothing here will change again.
     pub fixed_topology: bool,
+    /// Whether the quads that went in come out as triangles.
+    pub loses_quads: bool,
+    /// The engine's memory price for an adaptive crossing, where the document
+    /// could ask for one. `None` from [`Cost::of`], which knows the direction
+    /// and not the surface.
+    pub surface: Option<SurfacePrice>,
 }
 
 impl Cost {
@@ -556,7 +641,14 @@ impl Cost {
             // mesh-to-voxel is direct rather than a detour.
             keeps_colour: true,
             fixed_topology: direction.ends_in_fixed_topology(),
+            loses_quads: direction.loses_quads(),
+            surface: None,
         }
+    }
+
+    /// The same cost with the engine's memory price beside it.
+    pub fn priced(self, surface: Option<SurfacePrice>) -> Self {
+        Self { surface, ..self }
     }
 
     /// Whether this many cells fits a byte budget, at `bytes_per_cell`.
@@ -1049,5 +1141,57 @@ mod deform_tests {
         assert!(!DeformVerb::Taper.takes_an_angle());
         assert!(DeformVerb::Twist.takes_an_angle());
         assert!(!DeformVerb::Twist.takes_a_scale());
+    }
+
+    /// An adaptive crossing is priced on top of what the document holds, and
+    /// the refusal names both figures and the limit.
+    #[test]
+    fn an_adaptive_crossing_past_the_budget_names_the_estimate_and_the_limit() {
+        const MB: u64 = 1024 * 1024;
+        let price = SurfacePrice {
+            peak_bytes: 300 * MB,
+            persistent_bytes: 100 * MB,
+            budget_bytes: 1024 * MB,
+        };
+        assert!(price.within(Direction::MeshToDynamic, 700 * MB).is_ok());
+        let refused = price
+            .within(Direction::MeshToDynamic, 800 * MB)
+            .expect_err("300 MB on top of 800 MB is past 1024 MB");
+        assert_eq!(
+            refused,
+            Refusal::CrossingOverBudget {
+                direction: Direction::MeshToDynamic,
+                held_bytes: 800 * MB,
+                peak_bytes: 300 * MB,
+                budget_bytes: 1024 * MB,
+            }
+        );
+        let said = refused.to_string();
+        for figure in ["300 MB", "800 MB", "1024 MB", "dynamic"] {
+            assert!(said.contains(figure), "{figure} missing from: {said}");
+        }
+    }
+
+    /// A small surface is not described as costing nothing.
+    #[test]
+    fn a_price_under_a_megabyte_is_not_read_as_zero() {
+        let price = SurfacePrice {
+            peak_bytes: 4096,
+            persistent_bytes: 2048,
+            budget_bytes: 2048 * 1024 * 1024,
+        };
+        assert_eq!(price.peak_label(), "under 1 MB");
+        assert_eq!(price.budget_label(), "2048 MB");
+    }
+
+    /// Only the crossing into an adaptive surface says it loses quads, and
+    /// the directional cost carries no engine price until a document adds one.
+    #[test]
+    fn the_quad_loss_is_stated_and_the_price_is_the_documents_to_add() {
+        for direction in Direction::ALL {
+            let cost = Cost::of(direction, 0.02, [1.0; 3]);
+            assert_eq!(cost.loses_quads, direction == Direction::MeshToDynamic);
+            assert!(cost.surface.is_none());
+        }
     }
 }
