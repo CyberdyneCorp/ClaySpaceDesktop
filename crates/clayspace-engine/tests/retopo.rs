@@ -167,11 +167,12 @@ fn authored_guidance_changes_the_retopology_result_without_changing_the_source()
     let plain = EngineRetopologiser
         .run(&source, settings, &|_, _| {}, &|| false)
         .expect("plain retopology");
+    let guide_points = [
+        source.positions[0],
+        source.positions[source.positions.len() / 3],
+    ];
     source.guidance.guides.push(FlowGuide {
-        points: vec![
-            source.positions[0],
-            source.positions[source.positions.len() / 3],
-        ],
+        points: guide_points.to_vec(),
         strength: 1.0,
         radius: 1.0,
         mode: FlowGuideMode::Topology,
@@ -183,6 +184,13 @@ fn authored_guidance_changes_the_retopology_result_without_changing_the_source()
     assert_ne!(
         guide_only.edges, plain.edges,
         "flow guide left edge layout unchanged"
+    );
+    let local_plain = edge_flow_near(&plain, guide_points, 0.4);
+    let local_guided = edge_flow_near(&guide_only, guide_points, 0.4);
+    assert!(!local_plain.is_empty() && !local_guided.is_empty());
+    assert_ne!(
+        local_guided, local_plain,
+        "the guide changed edges elsewhere, but not the flow near its curve"
     );
     source.guidance.guides.clear();
     source.guidance.density.push(DensityDab {
@@ -201,6 +209,53 @@ fn authored_guidance_changes_the_retopology_result_without_changing_the_source()
         density_only.edges, plain.edges,
         "density paint left the edge layout unchanged"
     );
+}
+
+/// Quantized edge positions and unsigned directions inside the guide's
+/// neighborhood. The comparison ignores vertex numbering and edge ordering.
+fn edge_flow_near(
+    result: &clayspace_model::RetopoResult,
+    guide: [[f32; 3]; 2],
+    radius: f32,
+) -> Vec<[i32; 6]> {
+    let start = guide[0];
+    let along: [f32; 3] = std::array::from_fn(|axis| guide[1][axis] - start[axis]);
+    let length_squared: f32 = along.iter().map(|value| value * value).sum();
+    let mut nearby = Vec::new();
+    for edge in result.edges.chunks_exact(2) {
+        let a = result.positions[edge[0] as usize];
+        let b = result.positions[edge[1] as usize];
+        let midpoint: [f32; 3] = std::array::from_fn(|axis| (a[axis] + b[axis]) * 0.5);
+        let dot: f32 = (0..3)
+            .map(|axis| (midpoint[axis] - start[axis]) * along[axis])
+            .sum();
+        let fraction = (dot / length_squared).clamp(0.0, 1.0);
+        let distance_squared: f32 = (0..3)
+            .map(|axis| (midpoint[axis] - start[axis] - along[axis] * fraction).powi(2))
+            .sum();
+        if distance_squared > radius * radius {
+            continue;
+        }
+        let direction: [f32; 3] = std::array::from_fn(|axis| b[axis] - a[axis]);
+        let length = direction
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
+        if length == 0.0 {
+            continue;
+        }
+        nearby.push([
+            (midpoint[0] * 100.0).round() as i32,
+            (midpoint[1] * 100.0).round() as i32,
+            (midpoint[2] * 100.0).round() as i32,
+            (direction[0].abs() / length * 100.0).round() as i32,
+            (direction[1].abs() / length * 100.0).round() as i32,
+            (direction[2].abs() / length * 100.0).round() as i32,
+        ]);
+    }
+    nearby.sort_unstable();
+    nearby
 }
 
 #[test]
