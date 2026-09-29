@@ -410,9 +410,15 @@ impl ObjectViewModel {
         self.model.target_transform(GizmoTarget::Layer(key))
     }
 
-    /// Whether the surface is behind the hand, so the viewport can say so.
+    /// Whether the document transform is pending while the hand moves.
     pub fn settling(&self) -> bool {
         self.settling
+    }
+
+    /// The retained surface can follow this drag while the SDF waits for release.
+    pub fn preview_transform(&self) -> Option<(Transform, Transform)> {
+        let (_, started) = self.drag?;
+        Some((started, self.pending?))
     }
 
     /// How long a drag frame may take before the rest of the gesture is drawn
@@ -613,7 +619,7 @@ impl ObjectViewModel {
                 self.mode.set_if_changed(*mode);
             }
             Command::BeginGizmoDrag(handle, anchor, view_axis) => {
-                self.begin(*handle, *anchor, *view_axis)
+                self.begin(*handle, *anchor, *view_axis, representation)
             }
             Command::DragGizmo(to, snap) => self.drag_to(*to, *snap),
             Command::EndGizmoDrag => self.end(),
@@ -727,7 +733,13 @@ impl ObjectViewModel {
         }
     }
 
-    fn begin(&mut self, handle: GizmoHandle, anchor: [f32; 3], view_axis: [f32; 3]) {
+    fn begin(
+        &mut self,
+        handle: GizmoHandle,
+        anchor: [f32; 3],
+        view_axis: [f32; 3],
+        representation: Representation,
+    ) {
         let Some(target) = *self.target.get() else {
             return;
         };
@@ -744,7 +756,10 @@ impl ObjectViewModel {
         }
         self.model.begin_target_drag(target);
         self.pending = None;
-        self.settling = false;
+        // Filling an SDF layer and settling its surface exceeded one frame on
+        // the reference scene. Keep the hand live and evaluate once on release.
+        self.settling =
+            representation == Representation::Sdf && matches!(target, GizmoTarget::Layer(_));
         self.drag = Some((
             GizmoDrag {
                 mode: *self.mode.get(),

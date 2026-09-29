@@ -1203,6 +1203,32 @@ fn an_operand_that_disappears_stops_being_quoted() {
 /// the clay catches up once, when the pointer comes up — the same answer the
 /// region-based brushes already give.
 #[test]
+fn the_first_sdf_layer_drag_defers_the_engine_until_release() {
+    let (mut vm, calls) = viewmodel();
+    send(
+        &mut vm,
+        Command::SetGizmoTarget(Some(GizmoTarget::Layer(HIT_LAYER))),
+    );
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    assert!(vm.settling());
+    assert_eq!(
+        calls.borrow().transforms.len(),
+        0,
+        "first frame evaluated the field"
+    );
+    let (from, to) = vm.preview_transform().expect("surface follows the hand");
+    assert_eq!(from.position, [0.0; 3]);
+    assert_eq!(to.position, [0.2, 0.0, 0.0]);
+    send(&mut vm, Command::EndGizmoDrag);
+    assert_eq!(calls.borrow().transforms.len(), 1);
+    assert_eq!(calls.borrow().transforms[0].position, to.position);
+}
+
+#[test]
 fn a_drag_that_overruns_settles_when_the_pointer_comes_up() {
     let calls = Rc::new(RefCell::new(Calls::default()));
     let mut model = FakeObjects::new(calls.clone());

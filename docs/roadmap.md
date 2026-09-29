@@ -624,14 +624,14 @@ blocked, and what is not*:
 
 **The layer placement gesture** — `clay_layer_placement_begin` / `_update` /
 `_commit`. `place_layer` writes a transform and refills the union of the old and
-new bounds on **every frame of a gizmo drag**, and this application pays a second
-time to hide it: an SDF drag rebuilds the whole layer per frame so the mesher's
-artifacts never reach the screen. Upstream measures the engine's half at 12.4 ms
-a frame at 100 items and **95.7 ms** at 1000, against 0.30 ms of matrix
-multiply, and the gesture makes sixty refills one. It is a *layer* drag and
-therefore not the fix for the item case in
-[#471](https://github.com/CyberdyneCorp/ClayCore/issues/471) — two different
-drags with two different fixes, and only one of them has a fix today.
+new bounds. The viewport now defers this work to pointer-up for SDF layer drags
+and previews a single visible layer by transforming its retained mesh in the
+vertex shader. With multiple visible layers, the widget moves while the clay
+waits for release; a native layer gesture could preview the composition itself.
+Upstream measures the engine's half at 12.4 ms a frame at 100 items and
+**95.7 ms** at 1000, against 0.30 ms of matrix multiply. The native gesture
+would also avoid the release-time refill. It is a *layer* drag and does not
+address the item case in [#471](https://github.com/CyberdyneCorp/ClayCore/issues/471).
 
 **The SDF prefix cache** — `clay_sdf_prefix_cache` with
 `clay_brick_cache_eval_requests_seeded`, which takes a cold brick from 14.65 ms

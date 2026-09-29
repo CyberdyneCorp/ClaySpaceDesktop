@@ -33,6 +33,9 @@ struct Camera {
     // The rotation part of the view matrix, used to take normals into view
     // space for the MatCap lookup.
     view_rotation: mat4x4<f32>,
+    // Retained surface preview. Identity outside a whole-layer drag.
+    surface_preview: mat4x4<f32>,
+    surface_normal: mat4x4<f32>,
 };
 
 /// One vertex, as `Vertex::layout` describes it on the Rust side.

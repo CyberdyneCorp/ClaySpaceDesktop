@@ -204,14 +204,15 @@ enum Drag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GizmoGeometryUpdate {
     None,
+    Preview,
     Incremental,
     Settle,
 }
 
 /// How the SDF viewport catches up with a manipulator command.
 ///
-/// A whole SDF layer is rebuilt from the document during its move so that the
-/// brick mesher's artifacts never reach the screen.
+/// An SDF layer previews the retained surface during its move, then evaluates
+/// and settles the document once on release.
 fn gizmo_geometry_update(
     command: &Command,
     manipulating_clay: bool,
@@ -221,7 +222,10 @@ fn gizmo_geometry_update(
         return GizmoGeometryUpdate::None;
     }
     match command {
-        Command::DragGizmo(..) | Command::EndGizmoDrag if representation == Representation::Sdf => {
+        Command::DragGizmo(..) if representation == Representation::Sdf => {
+            GizmoGeometryUpdate::Preview
+        }
+        Command::EndGizmoDrag if representation == Representation::Sdf => {
             GizmoGeometryUpdate::Settle
         }
         Command::DragGizmo(..) | Command::EndGizmoDrag => GizmoGeometryUpdate::Incremental,
@@ -2209,6 +2213,30 @@ impl App {
         // well would only put a sentence in a terminal nobody has open beside
         // the one the sculptor is reading.
         self.request_redraw();
+    }
+
+    /// Keeps a whole SDF layer visible while its expensive field move waits.
+    /// A combined surface cannot be transformed as one without also moving
+    /// other layers, so its widget alone follows the hand until release.
+    fn preview_gizmo_geometry(&mut self) {
+        let Some(clayspace_model::GizmoTarget::Layer(target)) = *self.objects.target().get() else {
+            self.settle_geometry();
+            return;
+        };
+        let mut visible = self
+            .scene
+            .scene()
+            .get()
+            .layers
+            .iter()
+            .filter(|layer| layer.visible);
+        if visible.next().is_some_and(|layer| layer.key == target) && visible.next().is_none() {
+            if let Some(graphics) = self.graphics.as_mut() {
+                graphics
+                    .renderer
+                    .set_surface_preview(self.objects.preview_transform());
+            }
+        }
     }
 
     /// Re-meshes the whole surface after a gesture, clearing the seams the
@@ -5261,18 +5289,23 @@ impl App {
         // the surface. Left there, the field moved under a picture that did
         // not — the arrow was dragged and nothing happened on screen, and the
         // next stroke, aimed by a ray through the moved field, landed beside
-        // the drawn form. So the surface is re-meshed on every frame of such a
-        // drag here, and the document is marked unsaved once, when it ends.
+        // the drawn form. A single visible SDF layer follows the hand in the
+        // vertex shader; other SDF compositions wait for the final settle.
+        // The document is marked unsaved once, when the gesture ends.
         match gizmo_geometry_update(
             command,
             self.manipulating_the_clay(),
             self.sculpt.active_representation(),
         ) {
             GizmoGeometryUpdate::None => {}
+            GizmoGeometryUpdate::Preview => self.preview_gizmo_geometry(),
             GizmoGeometryUpdate::Incremental => {
                 self.sync_geometry();
             }
             GizmoGeometryUpdate::Settle => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.renderer.set_surface_preview(None);
+                }
                 self.settle_geometry();
             }
         }
@@ -8637,14 +8670,14 @@ mod tests {
     }
 
     #[test]
-    fn an_sdf_gizmo_settles_while_it_is_moving() {
+    fn an_sdf_gizmo_previews_while_it_is_moving() {
         assert_eq!(
             gizmo_geometry_update(
                 &Command::DragGizmo([1.0, 0.0, 0.0], false),
                 true,
                 Representation::Sdf,
             ),
-            GizmoGeometryUpdate::Settle
+            GizmoGeometryUpdate::Preview
         );
     }
 
