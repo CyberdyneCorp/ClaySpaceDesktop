@@ -14,7 +14,8 @@ use clayspace_model::{
     BrushSettings, ConversionSettings, Direction, ExchangeModel, GestureSample, ImportSettings,
     Representation, SceneModel, SculptModel, ToolKind,
 };
-use clayspace_view::{MeshSpan, Vertex};
+use clayspace_view::renderer::polyframe;
+use clayspace_view::MeshSpan;
 
 // -- fixtures ---------------------------------------------------------------
 
@@ -110,18 +111,24 @@ fn stroke(document: &mut ClayDocument, size: f32) {
 struct Built {
     positions: Vec<[f32; 3]>,
     indices: Vec<u32>,
+    spans: Vec<MeshSpan>,
     build: u64,
     bytes: u64,
     chunks: usize,
 }
 
 fn build(document: &mut ClayDocument) -> Built {
-    let (positions, _, _, indices, _) = document.visible_mesh_geometry();
+    let (positions, _, _, indices, spans) = document.visible_mesh_geometry();
     let upload = document.dynamic_upload();
     assert!(upload.rebuilt);
+    let spans = spans
+        .into_iter()
+        .map(|span| MeshSpan::new(span.layer, span.indices).chunked(span.chunked))
+        .collect();
     Built {
         positions,
         indices,
+        spans,
         build: document.carried_build(),
         bytes: rebuilt_bytes(upload),
         chunks: upload.chunks,
@@ -158,6 +165,29 @@ impl Built {
             .collect();
         triangles.sort_unstable();
         triangles
+    }
+
+    /// The polyframe's lines for this buffer, as the renderer derives them.
+    fn lines(&self) -> polyframe::Lines {
+        polyframe::lines(&self.indices, &self.spans)
+    }
+
+    /// Lines drawn, zero-length ones left out, as position pairs in a
+    /// canonical order — duplicates kept, since an edge drawn twice reads
+    /// darker than one drawn once.
+    fn edges(&self, lines: &[u32]) -> Vec<[[u32; 3]; 2]> {
+        let mut edges: Vec<[[u32; 3]; 2]> = lines
+            .chunks_exact(2)
+            .filter(|line| line[0] != line[1])
+            .map(|line| {
+                let mut ends =
+                    [line[0], line[1]].map(|i| self.positions[i as usize].map(f32::to_bits));
+                ends.sort_unstable();
+                ends
+            })
+            .collect();
+        edges.sort_unstable();
+        edges
     }
 }
 
@@ -278,31 +308,62 @@ fn upload_volume_is_independent_of_model_size() {
 
 // -- the renderer ------------------------------------------------------------
 
-/// The renderer writes a patch in place, counting exactly its bytes, and
-/// declines — writing nothing — where the polyframe would go stale.
+// -- the polyframe -----------------------------------------------------------
+
+/// A stroke's patch carries the polyframe with it: every index run it sends
+/// has its lines in the same slots, and the patched line list draws exactly
+/// the edges a fresh derivation over a rebuild draws.
 #[test]
-fn the_renderer_writes_a_patch_in_place_and_declines_under_the_polyframe() {
+fn a_patched_polyframe_draws_what_a_rebuild_draws() {
+    let mut document = surface("polyframe", 96, 4.0 / 96.0);
+    let mut drawn = build(&mut document);
+    assert!(
+        drawn.spans.iter().all(|span| span.chunked),
+        "an uncoloured surface is laid out in slots"
+    );
+    let polyframe::Lines {
+        indices: mut lines,
+        layout,
+    } = drawn.lines();
+    assert_eq!(lines.len(), drawn.indices.len() * 2, "two per index");
+    let packed = polyframe::lines(&drawn.indices, &[]).indices.len();
+    eprintln!(
+        "{} line indices in slots against {packed} packed",
+        lines.len()
+    );
+
+    stroke(&mut document, 0.3);
+    let patch = patch_upload(&mut document, drawn.build).expect("a patch");
+    assert!(!patch.indices.is_empty(), "the stroke re-cut chunks");
+    for (first, run) in &patch.indices {
+        let (at, patched) = layout
+            .patch(*first, run)
+            .expect("every run of an adaptive patch rewrites whole slots");
+        let at = at as usize;
+        lines[at..at + patched.len()].copy_from_slice(&patched);
+    }
+    drawn.apply(&patch);
+
+    let fresh = build(&mut document);
+    assert_eq!(
+        drawn.edges(&lines),
+        fresh.edges(&fresh.lines().indices),
+        "the patched polyframe draws what a rebuild draws"
+    );
+}
+
+/// The renderer writes a patch in place, counting exactly its bytes — with
+/// the polyframe on, the patched slots' lines as well — and still declines,
+/// writing nothing, a run its lines cannot follow.
+#[test]
+fn the_renderer_patches_the_polyframe_with_the_triangles() {
     let Some(mut harness) = support::Harness::new() else {
         return;
     };
     let mut document = surface("renderer", 48, 4.0 / 48.0);
-    let (positions, normals, colors, indices, spans) = document.visible_mesh_geometry();
+    let (vertices, indices, spans) = support::viewport_layers(&mut document);
+    assert!(spans.iter().all(|span| span.chunked));
     let built = document.carried_build();
-    let vertices: Vec<Vertex> = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
-    let spans: Vec<MeshSpan> = spans
-        .into_iter()
-        .map(|span| MeshSpan::new(span.layer, span.indices))
-        .collect();
     let gpu = harness.gpu.clone();
     harness
         .renderer
@@ -318,6 +379,71 @@ fn the_renderer_writes_a_patch_in_place_and_declines_under_the_polyframe() {
     // Switching the polyframe on uploads its own edges; only what the patch
     // does after that is measured.
     harness.gpu.take_uploaded_bytes();
+    assert!(
+        patch.apply(&gpu, &mut harness.renderer),
+        "the polyframe no longer forces a rebuild"
+    );
+    let rewritten: usize = patch.indices.iter().map(|(_, run)| run.len()).sum();
+    let patched = harness.gpu.take_uploaded_bytes();
+    assert_eq!(
+        patched,
+        patch.bytes() + (rewritten * 2 * 4) as u64,
+        "the triangles, and two line indices for each index rewritten"
+    );
+
+    // What the same dab cost before: the whole buffer and its lines again.
+    harness
+        .renderer
+        .set_mesh_layers(&gpu, &vertices, &indices, &spans);
+    let rebuilt = harness.gpu.take_uploaded_bytes();
+    eprintln!("polyframe on: {patched} bytes patched against {rebuilt} rebuilt");
+    assert!(patched * 4 < rebuilt, "a fraction of the rebuild");
+
+    // The same buffer drawn as one ordinary span: its lines are packed, so
+    // a patch cannot follow them and is declined while they are built.
+    let packed = [MeshSpan::new(spans[0].layer, spans[0].indices.clone())];
+    harness
+        .renderer
+        .set_mesh_layers(&gpu, &vertices, &indices, &packed);
+    harness.gpu.take_uploaded_bytes();
     assert!(!patch.apply(&gpu, &mut harness.renderer));
     assert_eq!(harness.gpu.take_uploaded_bytes(), 0, "nothing was written");
+}
+
+/// The picture, not only the list: the polyframe drawn after a patch is the
+/// polyframe drawn after a rebuild of the same surface.
+#[test]
+fn a_patched_polyframe_renders_like_a_rebuilt_one() {
+    let Some(mut harness) = support::Harness::new() else {
+        return;
+    };
+    let mut document = surface("polyframe-render", 48, 4.0 / 48.0);
+    let mut camera = support::framed(&document);
+    camera.pitch = 1.0;
+    let (vertices, indices, spans) = support::viewport_layers(&mut document);
+    let built = document.carried_build();
+    let gpu = harness.gpu.clone();
+    harness
+        .renderer
+        .set_mesh_layers(&gpu, &vertices, &indices, &spans);
+    harness.renderer.set_polyframe(&gpu, true);
+    let surface = clayspace_view::GpuMesh::new(&gpu);
+    let before = harness.capture(&surface, &camera, false, "dynamic-polyframe-before");
+
+    stroke(&mut document, 0.3);
+    let patch = patch_upload(&mut document, built).expect("a patch");
+    assert!(patch.apply(&gpu, &mut harness.renderer));
+    let patched = harness.capture(&surface, &camera, false, "dynamic-polyframe-patched");
+
+    let (vertices, indices, spans) = support::viewport_layers(&mut document);
+    harness
+        .renderer
+        .set_mesh_layers(&gpu, &vertices, &indices, &spans);
+    let rebuilt = harness.capture(&surface, &camera, false, "dynamic-polyframe-rebuilt");
+
+    let moved = support::differing_pixels(&before, &rebuilt);
+    let stale = support::differing_pixels(&patched, &rebuilt);
+    eprintln!("the stroke moved {moved} pixels; the patched frame differs by {stale}");
+    assert!(moved > 500, "the stroke changed the wireframe");
+    assert_eq!(stale, 0, "the patched polyframe is the rebuilt one");
 }

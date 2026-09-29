@@ -8,8 +8,12 @@ The end-of-gesture collapse SHALL be disabled by default — its floor zero — 
 - **THEN** no collapse is planned or performed, and the chain grows exactly as it did before this capability existed
 
 #### Scenario: The engine makes a baked patch cheap
-- **WHEN** an engine pin makes an undo over a baked patch cost less than twice an undo over the chain it replaced
+- **WHEN** an engine pin makes an undo over a baked patch cost less than 0.6 times an undo over the chain it replaced
 - **THEN** the tripwire test fails and names the floor to turn on, rather than the collapse staying off for a reason that no longer holds
+
+#### Scenario: The engine makes a baked brick cheap
+- **WHEN** an engine pin makes one brick refilled over a baked patch cost less than 0.6 times one refilled over the chain at the same point of the same series
+- **THEN** a second tripwire fails, so that the price of a brick — the only factor of an undo a collapse can still lower once the undo's region is the grab's own — is watched apart from the brick count
 
 ### Requirement: A degraded field layer collapses the region it was worked in
 When compaction is enabled, a field layer whose deformer chain has degraded past the configured floor SHALL, after a gesture is committed, collapse the region that gesture touched into a single baked volume, and SHALL leave the surface it just drew in place to within one sample of the bake.

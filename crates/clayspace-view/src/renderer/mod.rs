@@ -19,6 +19,7 @@ use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity, Transfor
 mod ao;
 mod overlays;
 mod pipelines;
+pub mod polyframe;
 mod shadow;
 mod textures;
 
@@ -67,6 +68,14 @@ pub struct MeshSpan {
     /// `None` means derive, which is correct where the faces really are
     /// triangles.
     pub edges: Option<Vec<u32>>,
+    /// Whether the range is laid out in chunk slots that a patch rewrites
+    /// whole — an adaptive surface's region — each slot with vertices of its
+    /// own.
+    ///
+    /// The polyframe then lays this span's lines out in the same slots, so a
+    /// patch to the triangles is followed by a patch to the lines rather
+    /// than a derivation of the whole list; see [`polyframe`].
+    pub chunked: bool,
 }
 
 impl MeshSpan {
@@ -82,6 +91,7 @@ impl MeshSpan {
             indices,
             bounds: None,
             edges: None,
+            chunked: false,
         }
     }
 
@@ -96,7 +106,13 @@ impl MeshSpan {
             indices,
             bounds: None,
             edges,
+            chunked: false,
         }
+    }
+
+    /// The same, saying whether its range is laid out in chunk slots.
+    pub fn chunked(self, chunked: bool) -> Self {
+        Self { chunked, ..self }
     }
 }
 
@@ -880,6 +896,9 @@ pub struct Renderer {
     wire_resident: crate::device_memory::Resident,
     wire_index_count: u32,
     wire_capacity: usize,
+    /// Where the chunked spans' lines sit in `wire_indices`, so a patch can
+    /// rewrite them in place.
+    wire_layout: polyframe::LineLayout,
     /// Whether to draw them.
     polyframe: bool,
     /// The triangles the edges were last built from, when they have not been
@@ -1623,6 +1642,7 @@ impl Renderer {
             wire_resident,
             wire_index_count: 0,
             wire_capacity: 0,
+            wire_layout: polyframe::LineLayout::default(),
             polyframe: false,
             pending_edges: None,
             membrane_pipeline,
@@ -2051,10 +2071,11 @@ impl Renderer {
     ///
     /// Returns `false`, having written nothing, where the patch cannot be
     /// taken and the caller must upload the whole buffer again: a run past
-    /// what was uploaded, or edges that would go stale — the polyframe
-    /// derives its lines from the whole index list, so while it is on, or
-    /// while no copy of that list is kept for it, a patch would leave the
-    /// wireframe describing the triangles before the stroke.
+    /// what was uploaded, or edges that cannot follow it. The polyframe's
+    /// lines follow a run that rewrites whole slots of a chunked span, which
+    /// is every run an adaptive surface's patch sends; a run anywhere else
+    /// would leave the wireframe describing the triangles before it, so it
+    /// is declined while the lines are built.
     ///
     /// [`set_mesh_layers`]: Self::set_mesh_layers
     pub fn patch_mesh_layers(
@@ -2071,16 +2092,17 @@ impl Renderer {
             && indices.iter().all(|(first, run)| {
                 inside(*first, run.len(), self.mesh_layers.index_count as usize)
             });
-        let Some(edges) = self.pending_edges.as_mut().filter(|_| !self.polyframe) else {
-            return false;
-        };
         if !fits {
             return false;
         }
-        for (first, run) in indices.iter() {
-            let at = *first as usize;
-            edges[at..at + run.len()].copy_from_slice(run);
-        }
+        let Some(lines) = self.follow_edges(indices) else {
+            return false;
+        };
+        let mut lines: Vec<(u32, &[u32])> = lines
+            .iter()
+            .map(|(first, run)| (*first, run.as_slice()))
+            .collect();
+        patch_runs(gpu, &self.wire_indices, &mut lines);
         self.mesh_layers.patch_vertex_runs(gpu, vertices);
         self.mesh_layers.patch_index_runs(gpu, indices);
         for &(layer, grew) in grown {
@@ -2098,6 +2120,27 @@ impl Renderer {
             self.mesh_layers.set_bounds(Some(widened(whole, grew)));
         }
         true
+    }
+
+    /// Keeps the polyframe's edges in step with rewritten index runs: the
+    /// lines to write over the built ones, or `None` where they cannot follow.
+    ///
+    /// While the lines have not been built — the polyframe was off at the
+    /// last upload — the kept copy of the indices is patched instead, and
+    /// there is nothing to write. Otherwise each run must rewrite whole slots
+    /// of a chunked span, whose lines sit beside it in the same slots.
+    fn follow_edges(&mut self, indices: &[(u32, &[u32])]) -> Option<Vec<(u32, Vec<u32>)>> {
+        if let Some(kept) = self.pending_edges.as_mut() {
+            for (first, run) in indices {
+                let at = *first as usize;
+                kept[at..at + run.len()].copy_from_slice(run);
+            }
+            return Some(Vec::new());
+        }
+        indices
+            .iter()
+            .map(|(first, run)| self.wire_layout.patch(*first, run))
+            .collect()
     }
 
     /// Which subtool a dab would land on, for the cue to mark.
@@ -2246,73 +2289,14 @@ impl Renderer {
         self.build_edges(gpu, indices);
     }
 
-    /// The line list the polyframe draws, per subtool.
-    ///
-    /// **Authored edges where a subtool has them, derived where it does not.**
-    /// Deriving from a triangle list cannot recover a quad: a quad's two
-    /// triangles share a diagonal that is not one of its four edges, and the
-    /// triangle list does not say which of each triangle's three edges is the
-    /// invented one. So a retopologised layer drawn by derivation showed every
-    /// diagonal and a 100%-quad mesh read as triangles — reported from a
-    /// session, and the reason spans carry `edges` at all.
-    ///
-    /// Mixed scenes are the ordinary case rather than a corner: a retopology
-    /// places its result *beside* the source, so the very first thing a
-    /// sculptor sees is one layer of each kind. An all-or-nothing rule would
-    /// have failed exactly there.
-    fn line_indices(&self, indices: &[u32]) -> Vec<u32> {
-        let mut seen = std::collections::HashSet::with_capacity(indices.len());
-        let mut edges: Vec<u32> = Vec::with_capacity(indices.len());
-        let mut push = |a: u32, b: u32| {
-            // Ordered, so the same edge reached from either of its two faces
-            // is the same key. Deduplicated, and not only to halve the
-            // buffer: the lines are drawn translucent, so an edge emitted
-            // twice is blended twice and comes out darker than a boundary
-            // edge. A wireframe whose interior reads heavier than its
-            // silhouette is backwards.
-            let key = if a < b { (a, b) } else { (b, a) };
-            if seen.insert(key) {
-                edges.push(key.0);
-                edges.push(key.1);
-            }
-        };
-
-        let derive = |from: &[u32], push: &mut dyn FnMut(u32, u32)| {
-            for triangle in from.chunks_exact(3) {
-                push(triangle[0], triangle[1]);
-                push(triangle[1], triangle[2]);
-                push(triangle[2], triangle[0]);
-            }
-        };
-
-        if self.mesh_spans.is_empty() {
-            // No spans is every caller that predates them, and a whole-buffer
-            // derivation is what they got before.
-            derive(indices, &mut push);
-            return edges;
-        }
-
-        for span in &self.mesh_spans {
-            match &span.edges {
-                Some(authored) => {
-                    for edge in authored.chunks_exact(2) {
-                        push(edge[0], edge[1]);
-                    }
-                }
-                None => {
-                    let range = span.indices.start as usize..span.indices.end as usize;
-                    if let Some(slice) = indices.get(range) {
-                        derive(slice, &mut push);
-                    }
-                }
-            }
-        }
-        edges
-    }
-
-    /// The same, once it is known the edges are actually wanted.
+    /// The line list the polyframe draws, per subtool — see
+    /// [`polyframe::lines`] — once it is known the edges are actually wanted.
     fn build_edges(&mut self, gpu: &Gpu, indices: &[u32]) {
-        let edges = self.line_indices(indices);
+        let polyframe::Lines {
+            indices: edges,
+            layout,
+        } = polyframe::lines(indices, &self.mesh_spans);
+        self.wire_layout = layout;
 
         self.wire_index_count = edges.len() as u32;
         if edges.is_empty() {

@@ -2177,8 +2177,20 @@ a replay that leaves the region more than half holes lays it out again.
 Not yet: an open surface's history is a snapshot until the engine reverts
 boundary strokes soundly, and its undo lays the buffer out again; export, like
 a hierarchy's, writes the mesh the row was read from — `dynamic → mesh` first
-exports what the brush has made. The polyframe derives its lines from the whole
-index list, so while it is on an adaptive stroke builds the buffer whole.
+exports what the brush has made.
+
+**The polyframe follows the patch.** Its lines over an adaptive surface are laid
+out in the same chunk slots as the triangles — six line indices per triangle,
+each an edge or a zero-length stand-in — so a stroke rewrites a slot's lines
+beside its triangles instead of the polyframe deriving the whole list again,
+and the patched wireframe draws exactly what a rebuild draws
+(`a_patched_polyframe_draws_what_a_rebuild_draws`,
+`a_patched_polyframe_renders_like_a_rebuilt_one`). Measured on a 48×48 sheet,
+a dab with the polyframe on sends 223,056 bytes against 2,015,232 for the
+rebuild it used to force. The price is memory while the polyframe is on: the
+slot layout pads headroom too, so on a 96×96 sheet the lines take 319,488
+indices against 61,442 packed. The diagnostics' line count includes those
+zero-length stand-ins.
 
 ## Voxel layers
 

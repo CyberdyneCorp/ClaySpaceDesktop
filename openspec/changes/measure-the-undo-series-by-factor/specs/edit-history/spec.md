@@ -14,3 +14,14 @@ The region an undo re-meshes SHALL be the undone edit's own reach and SHALL NOT 
 #### Scenario: The 200x class fails the test
 - **WHEN** the last undos of the series cost eight times the first or more
 - **THEN** the test fails and names both factors
+
+### Requirement: A grown layer's cost is reported as a trend to forty edits
+The undo series SHALL be carried to forty edits and reported at 1, 10, 20 and 40, and a Snake Hook pull begun on the worked patch SHALL be timed at the same checkpoints, so that cost growing with the edit count shows as a slope rather than as one ratio.
+
+#### Scenario: Forty grabs on one patch
+- **WHEN** the series reaches forty mirrored Move gestures
+- **THEN** every undo still re-meshes the grab's neighbourhood, and the last three undos cost less than sixteen times the first three
+
+#### Scenario: A pull on a grown layer
+- **WHEN** a Snake Hook pull is begun on the patch after forty Move gestures
+- **THEN** its first segment and its median segment each cost less than sixteen times the same pull after one gesture
