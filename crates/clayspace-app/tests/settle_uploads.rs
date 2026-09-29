@@ -161,6 +161,37 @@ fn an_empty_mask_refresh_uploads_nothing() {
     );
 }
 
+#[test]
+fn a_mask_stroke_samples_only_its_region_and_matches_a_full_refresh() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = sphere() else { return };
+    let gpu = &harness.gpu;
+    let mut bounded = SurfaceGeometry::new(gpu);
+    bounded.rebuild(gpu, &mut document).expect("initial");
+    let mut full = SurfaceGeometry::new(gpu);
+    full.rebuild(gpu, &mut document).expect("initial reference");
+    document.take_mask_dirty_bounds();
+
+    stroke(&mut document, ToolKind::Mascara, [0.0, 0.0, 1.0], 0.2);
+    let region = document.take_mask_dirty_bounds().expect("bounded stroke");
+    gpu.take_uploaded_bytes();
+    bounded.refresh_mask_in(gpu, &document, Some(region));
+    let bounded_bytes = gpu.take_uploaded_bytes();
+    full.refresh_mask(gpu, &document);
+    let full_bytes = gpu.take_uploaded_bytes();
+    assert!(bounded_bytes > 0 && bounded_bytes <= full_bytes);
+    let mut actual = bounded.stored_triangles_exact();
+    let mut expected = full.stored_triangles_exact();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(
+        actual, expected,
+        "bounded sampling left different mask weights"
+    );
+}
+
 /// A run of captures at one size draws into one target.
 #[test]
 fn captures_reuse_their_target() {

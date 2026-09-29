@@ -5328,6 +5328,20 @@ compaction changed, and a key it empties returns its span as a hole. The
 `re-malha final` console line splits a settle into engine, read, split, prune
 and upload, each measured on every route (issue #175).
 
+The release now remembers which bricks the gesture replaced, even after each
+frame uploads and clears its upload list. Duplicate pruning visits those bricks
+and their immediate neighbours, where a partial mesh can assign a shared
+boundary triangle. It leaves distant bricks out of the duplicate hash. The
+`settle` benchmark reports the triangle count, application-side overhead,
+pruning and upload for three worked scenes around 50k, 300k and 1M triangles; the under-300k
+fixtures carry a 30 ms overhead budget on every backend.
+
+A mask brush stroke also carries its affected world-space box to the viewport.
+Only bricks intersecting the brush radius plus mask-cell interpolation are
+re-sampled. Invert, clear, undo and switching subtools still refresh the whole
+mask. A refused mask operation does not schedule a refresh, and an empty mask
+with no drawn weights stops before walking the surface.
+
 **55, and not the 11,333 first reported here.** That figure came from a dedupe
 keyed on the three vertex positions, which counts every pair of triangles at the
 same three points. Most of those are not one triangle twice. They are two

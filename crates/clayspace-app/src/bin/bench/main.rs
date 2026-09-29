@@ -170,6 +170,7 @@ fn measure_everything(policy: &BackendPolicy, run: &mut Run) {
     run.group("startup", groups::startup::measure);
     run.group("dab", |run| groups::dab::measure(policy, run));
     run.group("locality", |run| groups::locality::measure(policy, run));
+    run.group("settle", |run| groups::settle::measure(policy, run));
     run.group("frame", |run| groups::render::measure(policy, run));
     run.group("render", |run| groups::render::measure_passes(policy, run));
     run.group("msaa", |run| groups::render::measure_msaa(policy, run));
