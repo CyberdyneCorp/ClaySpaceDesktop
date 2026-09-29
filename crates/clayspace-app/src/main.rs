@@ -205,14 +205,15 @@ enum Drag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GizmoGeometryUpdate {
     None,
+    Preview,
     Incremental,
     Settle,
 }
 
 /// How the SDF viewport catches up with a manipulator command.
 ///
-/// A whole SDF layer is rebuilt from the document during its move so that the
-/// brick mesher's artifacts never reach the screen.
+/// An SDF layer previews the retained surface during its move, then evaluates
+/// and settles the document once on release.
 fn gizmo_geometry_update(
     command: &Command,
     manipulating_clay: bool,
@@ -222,12 +223,21 @@ fn gizmo_geometry_update(
         return GizmoGeometryUpdate::None;
     }
     match command {
-        Command::DragGizmo(..) | Command::EndGizmoDrag if representation == Representation::Sdf => {
+        Command::DragGizmo(..) if representation == Representation::Sdf => {
+            GizmoGeometryUpdate::Preview
+        }
+        Command::EndGizmoDrag if representation == Representation::Sdf => {
             GizmoGeometryUpdate::Settle
         }
         Command::DragGizmo(..) | Command::EndGizmoDrag => GizmoGeometryUpdate::Incremental,
         _ => GizmoGeometryUpdate::None,
     }
+}
+
+/// An unrelated command closes a live gizmo gesture before it can change its
+/// target or mode and leave a surface preview attached to the old selection.
+fn interrupts_gizmo_drag(command: &Command) -> bool {
+    !matches!(command, Command::DragGizmo(..) | Command::EndGizmoDrag)
 }
 
 /// A vector's direction and its length, or `None` where it has neither.
@@ -2212,6 +2222,30 @@ impl App {
         // well would only put a sentence in a terminal nobody has open beside
         // the one the sculptor is reading.
         self.request_redraw();
+    }
+
+    /// Keeps a whole SDF layer visible while its expensive field move waits.
+    /// A combined surface cannot be transformed as one without also moving
+    /// other layers, so its widget alone follows the hand until release.
+    fn preview_gizmo_geometry(&mut self) {
+        let Some(clayspace_model::GizmoTarget::Layer(target)) = *self.objects.target().get() else {
+            self.settle_geometry();
+            return;
+        };
+        let mut visible = self
+            .scene
+            .scene()
+            .get()
+            .layers
+            .iter()
+            .filter(|layer| layer.visible);
+        if visible.next().is_some_and(|layer| layer.key == target) && visible.next().is_none() {
+            if let Some(graphics) = self.graphics.as_mut() {
+                graphics
+                    .renderer
+                    .set_surface_preview(self.objects.preview_transform());
+            }
+        }
     }
 
     /// Re-meshes the whole surface after a gesture, clearing the seams the
@@ -5157,6 +5191,13 @@ impl App {
     /// has to be looked at again is settled last. Run in another order, a
     /// panel refreshes against a document the command has not reached yet.
     fn apply_now(&mut self, command: Command) {
+        if self.objects.is_dragging() && interrupts_gizmo_drag(&command) {
+            self.apply_now(Command::EndGizmoDrag);
+            if self.drag == Drag::Gizmo {
+                self.drag = Drag::None;
+                self.gizmo_drag = None;
+            }
+        }
         // A rig owns the same X mirror the sculptor normally uses, but it
         // authors the reflected ZSphere itself rather than asking the field
         // to duplicate a stroke. Keep that one control in the top bar and do
@@ -5373,14 +5414,23 @@ impl App {
         // the surface. Left there, the field moved under a picture that did
         // not — the arrow was dragged and nothing happened on screen, and the
         // next stroke, aimed by a ray through the moved field, landed beside
-        // the drawn form. So the surface is re-meshed on every frame of such a
-        // drag here, and the document is marked unsaved once, when it ends.
+        // the drawn form. A single visible SDF layer follows the hand in the
+        // vertex shader; other SDF compositions wait for the final settle.
+        // The document is marked unsaved once, when the gesture ends.
+        // Release always drops the GPU preview, even when the target changed
+        // before this command reached the viewport or the final edit failed.
+        if matches!(command, Command::EndGizmoDrag) {
+            if let Some(graphics) = self.graphics.as_mut() {
+                graphics.renderer.set_surface_preview(None);
+            }
+        }
         match gizmo_geometry_update(
             command,
             self.manipulating_the_clay(),
             self.sculpt.active_representation(),
         ) {
             GizmoGeometryUpdate::None => {}
+            GizmoGeometryUpdate::Preview => self.preview_gizmo_geometry(),
             GizmoGeometryUpdate::Incremental => {
                 self.sync_geometry();
             }
@@ -8132,15 +8182,17 @@ mod double_press {
 mod tests {
     use super::{
         agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
-        localized_agent_refusal, localized_agent_remark, localized_tool_status, notices_written,
-        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status,
-        visible_scene_bounds, AgentGesture, App, Drag, GizmoGeometryUpdate, ToolStatusSources,
-        NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
+        interrupts_gizmo_drag, localized_agent_refusal, localized_agent_remark,
+        localized_tool_status, notices_written, refusal_for, remark_for_an_agent,
+        stroke_needs_a_gesture, tool_status, visible_scene_bounds, AgentGesture, App, Drag,
+        GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_app::{SharedDocument, ViewportInput};
     use clayspace_engine::{BackendPolicy, ClayDocument};
     use clayspace_mcp::{RefusalCode, Session};
-    use clayspace_model::{ModelError, OutlineFrame, Representation, SculptLayerOp, Unavailable};
+    use clayspace_model::{
+        GizmoMode, ModelError, OutlineFrame, Representation, SculptLayerOp, Unavailable,
+    };
     use clayspace_vm::Command;
 
     #[test]
@@ -8779,15 +8831,28 @@ mod tests {
     }
 
     #[test]
-    fn an_sdf_gizmo_settles_while_it_is_moving() {
+    fn an_sdf_gizmo_previews_while_it_is_moving() {
         assert_eq!(
             gizmo_geometry_update(
                 &Command::DragGizmo([1.0, 0.0, 0.0], false),
                 true,
                 Representation::Sdf,
             ),
-            GizmoGeometryUpdate::Settle
+            GizmoGeometryUpdate::Preview
         );
+    }
+
+    #[test]
+    fn changing_selection_closes_a_gizmo_preview_first() {
+        assert!(interrupts_gizmo_drag(&Command::SetGizmoTarget(None)));
+        assert!(interrupts_gizmo_drag(&Command::SetGizmoMode(
+            GizmoMode::Rotate
+        )));
+        assert!(!interrupts_gizmo_drag(&Command::DragGizmo(
+            [1.0, 0.0, 0.0],
+            false
+        )));
+        assert!(!interrupts_gizmo_drag(&Command::EndGizmoDrag));
     }
 
     #[test]

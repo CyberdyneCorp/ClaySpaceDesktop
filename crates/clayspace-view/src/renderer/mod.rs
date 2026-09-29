@@ -14,7 +14,7 @@ use crate::matcap::MatCap;
 use crate::palette;
 use crate::profiler::{GpuFrameTiming, GpuPass, GpuProfiler};
 use crate::quality::{ShadingMode, StudioMaterial, ViewportQuality};
-use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity};
+use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity, Transform};
 
 mod ao;
 mod overlays;
@@ -180,6 +180,8 @@ impl Vertex {
 struct CameraUniform {
     view_projection: [[f32; 4]; 4],
     view_rotation: [[f32; 4]; 4],
+    surface_preview: [[f32; 4]; 4],
+    surface_normal: [[f32; 4]; 4],
 }
 
 #[repr(C)]
@@ -946,6 +948,7 @@ pub struct Renderer {
     /// sculptor who would rather have the stair-step should be able to say so.
     antialias: bool,
     camera_buffer: wgpu::Buffer,
+    surface_preview: Option<(Transform, Transform)>,
     material_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -1643,6 +1646,7 @@ impl Renderer {
             quality: ViewportQuality::High,
             antialias: true,
             camera_buffer,
+            surface_preview: None,
             material_buffer,
             bind_group,
             bind_group_layout,
@@ -1677,6 +1681,12 @@ impl Renderer {
 
     pub fn matcap(&self) -> MatCap {
         self.matcap
+    }
+
+    /// Transforms the retained SDF surface in the vertex stage during a drag.
+    /// The document and GPU mesh remain at their starting positions until release.
+    pub fn set_surface_preview(&mut self, preview: Option<(Transform, Transform)>) {
+        self.surface_preview = preview;
     }
 
     /// Changes the display material.
@@ -2345,9 +2355,16 @@ impl Renderer {
         // The same matrix the vertex stage will use, so what is culled and
         // what is drawn cannot disagree about where the camera is pointing.
         let frustum = Frustum::from_view_projection(view_projection);
+        let preview = self
+            .surface_preview
+            .map_or(glam::Mat4::IDENTITY, |(from, to)| {
+                transform_matrix(to) * transform_matrix(from).inverse()
+            });
         let uniform = CameraUniform {
             view_projection: view_projection.to_cols_array_2d(),
             view_rotation: camera.view_rotation().to_cols_array_2d(),
+            surface_preview: preview.to_cols_array_2d(),
+            surface_normal: preview.inverse().transpose().to_cols_array_2d(),
         };
         gpu.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
@@ -2390,6 +2407,8 @@ impl Renderer {
         let gizmo_uniform = CameraUniform {
             view_projection: gizmo_camera.view_projection(1.0).to_cols_array_2d(),
             view_rotation: gizmo_camera.view_rotation().to_cols_array_2d(),
+            surface_preview: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            surface_normal: glam::Mat4::IDENTITY.to_cols_array_2d(),
         };
         gpu.queue.write_buffer(
             &self.gizmo_camera_buffer,
@@ -2422,7 +2441,10 @@ impl Renderer {
         // in Studio mode: MatCap's lighting is welded to the camera, so a
         // shadow from it would swing round the form as the view moved, which
         // is worse than none.
-        let form = union_bounds(mesh.bounds(), self.mesh_layers.bounds());
+        let surface_bounds = mesh
+            .bounds()
+            .map(|bounds| transformed_bounds(bounds, preview));
+        let form = union_bounds(surface_bounds, self.mesh_layers.bounds());
         self.cast_shadows(gpu, &mut encoder, mesh, form);
 
         {
@@ -2555,7 +2577,7 @@ impl Renderer {
 
         // The radius of everything drawn with depth: the surface and the mesh
         // layers together, since either may be the only one present.
-        let radius = form_radius(union_bounds(mesh.bounds(), self.mesh_layers.bounds()));
+        let radius = form_radius(form);
         // Occlusion composites onto whatever the scene was drawn into, which
         // is the caller's target unless a post-process pass has to read the
         // scene back — a texture cannot be sampled and written by one pass.
@@ -3040,6 +3062,32 @@ impl Renderer {
     }
 }
 
+/// The same local-to-world order as the engine's layer transform.
+fn transform_matrix(frame: Transform) -> glam::Mat4 {
+    let at = Vec3::from_array(frame.into_world([0.0; 3]));
+    let axis = |axis: usize| {
+        let mut unit = [0.0; 3];
+        unit[axis] = 1.0;
+        (Vec3::from_array(frame.into_world(unit)) - at).extend(0.0)
+    };
+    glam::Mat4::from_cols(axis(0), axis(1), axis(2), at.extend(1.0))
+}
+
+fn transformed_bounds((min, max): (Vec3, Vec3), transform: glam::Mat4) -> (Vec3, Vec3) {
+    let mut lower = Vec3::splat(f32::INFINITY);
+    let mut upper = Vec3::splat(f32::NEG_INFINITY);
+    for x in [min.x, max.x] {
+        for y in [min.y, max.y] {
+            for z in [min.z, max.z] {
+                let point = transform.transform_point3(Vec3::new(x, y, z));
+                lower = lower.min(point);
+                upper = upper.max(point);
+            }
+        }
+    }
+    (lower, upper)
+}
+
 /// A shader source, with the shared definitions in front of it.
 ///
 /// WGSL has no include. Two of the three shaders here draw a fullscreen
@@ -3202,8 +3250,8 @@ mod tests {
     /// fails here, next to the definition, rather than on a device.
     #[test]
     fn the_uniforms_are_the_size_their_shader_declarations_are() {
-        // camera: two mat4x4.
-        assert_eq!(std::mem::size_of::<CameraUniform>(), 128);
+        // camera: four mat4x4.
+        assert_eq!(std::mem::size_of::<CameraUniform>(), 256);
         // material: three vec4.
         assert_eq!(std::mem::size_of::<MaterialUniform>(), 48);
         // ao: two mat4x4, five vec4 and a sixteen-entry vec4 kernel.
@@ -3215,6 +3263,27 @@ mod tests {
         ] {
             assert_eq!(size % 16, 0, "a uniform struct is aligned to sixteen bytes");
         }
+    }
+
+    #[test]
+    fn preview_matrix_matches_layer_transforms_under_rotation_and_scale() {
+        let from = Transform {
+            position: [0.3, -0.2, 0.4],
+            rotation_axis: [0.0, 1.0, 0.0],
+            rotation_angle: 0.4,
+            scale: [1.0, 2.0, 0.7],
+        };
+        let to = Transform {
+            position: [-0.1, 0.5, 0.7],
+            rotation_axis: [1.0, 0.0, 0.0],
+            rotation_angle: 0.8,
+            scale: [1.5, 0.8, 2.0],
+        };
+        let point = [0.7, -0.3, 0.9];
+        let preview = transform_matrix(to) * transform_matrix(from).inverse();
+        let actual = preview.transform_point3(Vec3::from_array(point));
+        let expected = Vec3::from_array(to.into_world(from.into_local(point)));
+        assert!((actual - expected).length() < 1e-5);
     }
 
     /// The vertex layout is stated in three places — the struct, the offset
