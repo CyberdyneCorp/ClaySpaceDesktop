@@ -459,6 +459,12 @@ struct App {
     /// triangles are copied whole or not at all. Comparing a revision is what
     /// keeps "not at all" the usual answer.
     mesh_revision: Option<u64>,
+    /// What the adaptive surfaces have sent to the viewport this session,
+    /// per upload of the carried buffer, for the diagnostics report.
+    adaptive_uploads: clayspace_model::AdaptiveUploads,
+    /// The build of the carried buffer the renderer holds, which is the only
+    /// one a chunk patch may be written into; `None` before the first.
+    carried_build: Option<u64>,
     /// The cage revision the drawn surface was warped at.
     cage_revision: Option<u64>,
     /// The mask revision the drawn surface was sampled at.
@@ -879,6 +885,8 @@ impl App {
             detail_policy: DetailPolicy::default(),
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
+            adaptive_uploads: clayspace_model::AdaptiveUploads::default(),
+            carried_build: None,
             cage_revision: None,
             mask_revision: None,
             detail_camera: None,
@@ -2491,6 +2499,10 @@ impl App {
     /// whole grid every time (ClayCore #86 is the incremental path) — so doing
     /// it every frame would rebuild and upload the lot at sixty hertz to show
     /// a surface that has not moved.
+    ///
+    /// The exception is an adaptive surface under the brush: when only its
+    /// chunks moved, the ones the stroke dirtied are written in place
+    /// ([`Self::patch_mesh_layers`]) and the rest of the buffer is left alone.
     fn sync_mesh_layers(&mut self) {
         // Before the revision is read, so a grid that moved has its smooth
         // surface rebuilt and the revision reflects it. Cheap when nothing
@@ -2506,9 +2518,14 @@ impl App {
             return;
         }
         self.mesh_revision = Some(revision);
+        if self.patch_mesh_layers() {
+            self.sculpt.refresh_stats();
+            return;
+        }
         self.timed("camadas de malha", |app| {
             let (vertices, indices, spans) = app.document.with(|document| {
                 let (positions, normals, colors, indices, spans) = document.visible_mesh_geometry();
+                app.carried_build = Some(document.carried_build());
                 // The frozen region reaches a carried layer the same way it
                 // reaches the brick surface, and from the same sample call —
                 // a mask is world-addressed, so it does not care which of the
@@ -2547,11 +2564,48 @@ impl App {
             graphics
                 .renderer
                 .set_mesh_layers(&gpu, &vertices, &indices, &spans);
+            let upload = app.document.with(|document| document.dynamic_upload());
+            app.adaptive_uploads
+                .record(upload, clayspace_app::carried::rebuilt_bytes(upload));
         });
         // The buffer just built is what the geometry panel counts. Read now,
         // not at the next edit: a remesh or a display change moves no brick,
         // so nothing else would re-read them.
         self.sculpt.refresh_stats();
+    }
+
+    /// Writes the adaptive surfaces' dirty chunks into the drawn carried
+    /// buffer in place, and says whether that was enough.
+    ///
+    /// `false` whenever the buffer has to be built again instead — the
+    /// document offered no patch because something it cannot follow moved,
+    /// or the renderer declined it — and nothing is left half-written: the
+    /// build that follows lays every surface out afresh from what the
+    /// document holds.
+    fn patch_mesh_layers(&mut self) -> bool {
+        if self.graphics.is_none() {
+            return false;
+        }
+        let Some(built) = self.carried_build else {
+            return false;
+        };
+        self.timed("fragmentos adaptativos", |app| {
+            let patch = app
+                .document
+                .with(|document| clayspace_app::carried::patch_upload(document, built));
+            let Some(patch) = patch else {
+                return false;
+            };
+            let Some(graphics) = app.graphics.as_mut() else {
+                return false;
+            };
+            let gpu = graphics.gpu.clone();
+            if !patch.apply(&gpu, &mut graphics.renderer) {
+                return false;
+            }
+            app.adaptive_uploads.record(patch.upload, patch.bytes());
+            true
+        })
     }
 
     /// Tells the viewport which subtool a dab would land on.
@@ -3765,6 +3819,7 @@ impl App {
             self.document
                 .with(|document| document.dynamic_diagnostics()),
         );
+        report.adaptive_uploads = Some(self.adaptive_uploads);
         // The meter's reading rather than a fresh one: this report is built
         // every frame, and the ledger is a walk of the brick cache and of
         // every surface. It is also what keeps this window, the status area

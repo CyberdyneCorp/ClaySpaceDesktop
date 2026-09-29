@@ -1542,3 +1542,99 @@ impl std::fmt::Debug for DynamicSculptor<'_> {
             .finish()
     }
 }
+
+// -- a sculptor that lives as long as its surface ---------------------------
+
+/// A surface and the one sculptor bound to it, held together.
+///
+/// [`DynamicSurface::sculptor`] borrows the surface for as long as the
+/// sculptor lives, which is right for a stroke and wrong for a host: the
+/// sculptor owns the chunked spatial index *and* the chunk table the
+/// transport drains, so a sculptor made per stroke pays the index build per
+/// stroke — measured on the pinned engine, 117 ms over a 100,352-triangle
+/// sheet and 1.50 s over 1,002,528 — and starts every stroke with an empty
+/// dirty set, so a host cannot tell which chunks the last one touched.
+///
+/// This owns both. The surface is boxed so its address is stable, the
+/// sculptor is dropped before it, and the sculptor is lent out for mutation
+/// only inside [`with_sculptor`](Self::with_sculptor), whose closure cannot
+/// move it out or exchange it for another session's: the lifetime it is lent
+/// at is chosen by the closure's caller, and no surface outlives it.
+pub struct DynamicSession {
+    /// Dropped by hand in [`Drop`], before the surface it points into.
+    sculptor: std::mem::ManuallyDrop<DynamicSculptor<'static>>,
+    /// The boxed surface, released after the sculptor. Only touched in
+    /// `Drop`; every other access goes through the sculptor's own borrow.
+    surface: NonNull<DynamicSurface>,
+}
+
+// SAFETY: the session owns both handles outright and hands out no interior
+// pointer, so moving it moves the surface and its only sculptor together. The
+// engine's contract is one handle, one thread at a time, which `&mut` for
+// every mutation already enforces — hence `Send` and no `Sync`, as for
+// `DynamicSurface`.
+unsafe impl Send for DynamicSession {}
+
+impl DynamicSession {
+    /// Takes a surface and binds a sculptor to it, building the index once.
+    pub fn new(surface: DynamicSurface) -> Result<Self> {
+        let raw = Box::into_raw(Box::new(surface));
+        // SAFETY: `raw` came from `Box::into_raw` just above, so it is valid,
+        // aligned and uniquely owned here. The `'static` borrow is the only
+        // path to the surface until `Drop` has destroyed the sculptor holding
+        // it, and the box is reclaimed only after that.
+        let borrowed: &'static mut DynamicSurface = unsafe { &mut *raw };
+        match borrowed.sculptor() {
+            Ok(sculptor) => Ok(Self {
+                sculptor: std::mem::ManuallyDrop::new(sculptor),
+                // SAFETY: from `Box::into_raw`, which never returns null.
+                surface: unsafe { NonNull::new_unchecked(raw) },
+            }),
+            Err(error) => {
+                // SAFETY: no sculptor was made, so nothing borrows the surface
+                // and the box can be reclaimed.
+                drop(unsafe { Box::from_raw(raw) });
+                Err(error)
+            }
+        }
+    }
+
+    /// The surface, for reading: its revision, census and bytes.
+    pub fn surface(&self) -> &DynamicSurface {
+        self.sculptor.surface()
+    }
+
+    /// The sculptor, for reading: the chunk table and the index quality.
+    pub fn sculptor(&self) -> &DynamicSculptor<'_> {
+        &self.sculptor
+    }
+
+    /// Lends the sculptor for a mutation — a stroke, a drain, a rebuild.
+    ///
+    /// Through a closure rather than a `&mut` return, because a `&mut` to a
+    /// sculptor whose lifetime the caller could name would let two sessions
+    /// swap sculptors and each free the other's surface underneath it.
+    pub fn with_sculptor<R>(&mut self, f: impl for<'a> FnOnce(&mut DynamicSculptor<'a>) -> R) -> R {
+        f(&mut self.sculptor)
+    }
+}
+
+impl Drop for DynamicSession {
+    fn drop(&mut self) {
+        // SAFETY: the sculptor is dropped exactly once, here, and first — it
+        // is the only borrow of the surface. The box is then reclaimed from
+        // the pointer `new` took from `Box::into_raw`.
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut self.sculptor);
+            drop(Box::from_raw(self.surface.as_ptr()));
+        }
+    }
+}
+
+impl std::fmt::Debug for DynamicSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicSession")
+            .field("sculptor", &*self.sculptor)
+            .finish()
+    }
+}

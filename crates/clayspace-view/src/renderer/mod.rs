@@ -30,6 +30,9 @@ use pipelines::*;
 pub use textures::Reference;
 use textures::*;
 
+/// A box, as `(min, max)`.
+pub type Aabb = ([f32; 3], [f32; 3]);
+
 /// Which run of the carried buffer belongs to which subtool.
 ///
 /// The voxel and mesh layers arrive as one concatenated buffer, so this is the
@@ -2035,6 +2038,64 @@ impl Renderer {
         self.upload_edges(gpu, indices);
     }
 
+    /// Writes runs into the carried buffer [`set_mesh_layers`] uploaded last,
+    /// leaving the rest of it alone — an adaptive surface's dirty chunks.
+    ///
+    /// `grown` is the world box each patched subtool's rewritten triangles
+    /// occupy; its span's culling box is widened to take it, never narrowed,
+    /// so a stroke that pulls a surface outward cannot be culled away.
+    ///
+    /// Returns `false`, having written nothing, where the patch cannot be
+    /// taken and the caller must upload the whole buffer again: a run past
+    /// what was uploaded, or edges that would go stale — the polyframe
+    /// derives its lines from the whole index list, so while it is on, or
+    /// while no copy of that list is kept for it, a patch would leave the
+    /// wireframe describing the triangles before the stroke.
+    ///
+    /// [`set_mesh_layers`]: Self::set_mesh_layers
+    pub fn patch_mesh_layers(
+        &mut self,
+        gpu: &Gpu,
+        vertices: &mut [(u32, &[Vertex])],
+        indices: &mut [(u32, &[u32])],
+        grown: &[(LayerKey, Aabb)],
+    ) -> bool {
+        let inside = |first: u32, len: usize, end: usize| first as usize + len <= end;
+        let fits = vertices
+            .iter()
+            .all(|(first, run)| inside(*first, run.len(), self.mesh_layers.vertex_capacity))
+            && indices.iter().all(|(first, run)| {
+                inside(*first, run.len(), self.mesh_layers.index_count as usize)
+            });
+        let Some(edges) = self.pending_edges.as_mut().filter(|_| !self.polyframe) else {
+            return false;
+        };
+        if !fits {
+            return false;
+        }
+        for (first, run) in indices.iter() {
+            let at = *first as usize;
+            edges[at..at + run.len()].copy_from_slice(run);
+        }
+        self.mesh_layers.patch_vertex_runs(gpu, vertices);
+        self.mesh_layers.patch_index_runs(gpu, indices);
+        for &(layer, grew) in grown {
+            for span in self
+                .mesh_spans
+                .iter_mut()
+                .filter(|span| span.layer == layer)
+            {
+                span.bounds = Some(widened(span.bounds, grew));
+            }
+            let whole = self
+                .mesh_layers
+                .bounds
+                .map(|(min, max)| (min.to_array(), max.to_array()));
+            self.mesh_layers.set_bounds(Some(widened(whole, grew)));
+        }
+        true
+    }
+
     /// Which subtool a dab would land on, for the cue to mark.
     ///
     /// Separate from the buffer because activation is a click and re-walking
@@ -3121,6 +3182,17 @@ fn span_bounds(
         });
     }
     bounds
+}
+
+/// A box grown to take another in, or the other where there was none.
+fn widened(bounds: Option<Aabb>, (low, high): Aabb) -> Aabb {
+    match bounds {
+        None => (low, high),
+        Some((min, max)) => (
+            std::array::from_fn(|i| min[i].min(low[i])),
+            std::array::from_fn(|i| max[i].max(high[i])),
+        ),
+    }
 }
 
 /// The box containing both, or whichever of them there is.

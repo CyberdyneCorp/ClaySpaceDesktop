@@ -118,6 +118,14 @@ pub struct Diagnostics {
     /// record could not be honoured reopens as the mesh it was read from.
     pub adaptive: Option<MultiresDiagnostics>,
 
+    /// What the adaptive surfaces sent to the viewport, per upload.
+    ///
+    /// `None` until one has been drawn. Beside `adaptive` because an upload
+    /// that follows the model's size rather than the stroke's is the
+    /// regression this representation is most exposed to, and a number in
+    /// the report is how it is seen.
+    pub adaptive_uploads: Option<AdaptiveUploads>,
+
     /// Where the document's memory is, and what it would cost to release it.
     ///
     /// Optional for the reason [`Self::mesh`] is: it is the document's answer
@@ -464,6 +472,71 @@ pub struct MultiresDiagnostics {
     pub lost: Vec<String>,
 }
 
+/// What one upload of the carried buffer sent for the adaptive surfaces.
+///
+/// Counts, not bytes: the engine side knows how many vertices and indices it
+/// handed over and the viewport knows what one of each weighs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AdaptiveUpload {
+    /// Whether the carried buffer was built again, rather than patched with
+    /// the chunks a stroke dirtied.
+    pub rebuilt: bool,
+    /// Chunks whose data was sent.
+    pub chunks: usize,
+    pub vertices: usize,
+    pub indices: usize,
+}
+
+impl AdaptiveUpload {
+    /// Whether anything of an adaptive surface was sent at all.
+    pub fn is_empty(&self) -> bool {
+        self.vertices == 0 && self.indices == 0
+    }
+}
+
+/// The adaptive surfaces' uploads this session, per settle of the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AdaptiveUploads {
+    /// Uploads that sent something of an adaptive surface.
+    pub uploads: u64,
+    /// Of those, the ones that were chunk patches rather than rebuilds.
+    pub patched: u64,
+    pub last: AdaptiveUpload,
+    pub last_bytes: u64,
+    pub largest_bytes: u64,
+}
+
+impl AdaptiveUploads {
+    /// Counts one upload that weighed `bytes`. An upload that sent nothing of
+    /// an adaptive surface is not a settle of one and is not counted.
+    pub fn record(&mut self, upload: AdaptiveUpload, bytes: u64) {
+        if upload.is_empty() {
+            return;
+        }
+        self.uploads += 1;
+        self.patched += u64::from(!upload.rebuilt);
+        self.last = upload;
+        self.last_bytes = bytes;
+        self.largest_bytes = self.largest_bytes.max(bytes);
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "last {} {} chunks, {:.1} KB; {} uploads ({} patched), largest {:.1} KB",
+            if self.last.rebuilt {
+                "rebuilt"
+            } else {
+                "patched"
+            },
+            self.last.chunks,
+            self.last_bytes as f64 / 1024.0,
+            self.uploads,
+            self.patched,
+            self.largest_bytes as f64 / 1024.0,
+        )
+    }
+}
+
 /// What the viewport drew, and what it cost.
 ///
 /// The project measures its sculpting path carefully and measured its
@@ -638,6 +711,9 @@ impl Diagnostics {
                 );
             }
         }
+        if let Some(uploads) = self.adaptive_uploads.filter(|u| u.uploads > 0) {
+            line("adaptive uploads", &uploads.describe());
+        }
         if let Some(memory) = &self.memory {
             // The breakdown before the total, deliberately: the total is the
             // part a reader already has an intuition for and the split is the
@@ -806,12 +882,49 @@ mod tests {
             mesh: None,
             hierarchies: None,
             adaptive: None,
+            adaptive_uploads: None,
             memory: None,
             agent: None,
             tool: None,
             stroke: None,
             refill: None,
         }
+    }
+
+    #[test]
+    fn adaptive_uploads_are_tallied_and_reported() {
+        let mut uploads = AdaptiveUploads::default();
+        uploads.record(AdaptiveUpload::default(), 0);
+        assert_eq!(
+            uploads.uploads, 0,
+            "an upload that sent nothing is not a settle"
+        );
+        let rebuilt = AdaptiveUpload {
+            rebuilt: true,
+            chunks: 1024,
+            vertices: 150_000,
+            indices: 450_000,
+        };
+        uploads.record(rebuilt, 7_880_704);
+        let patched = AdaptiveUpload {
+            rebuilt: false,
+            chunks: 50,
+            vertices: 5_000,
+            indices: 9_000,
+        };
+        uploads.record(patched, 270_680);
+        assert_eq!((uploads.uploads, uploads.patched), (2, 1));
+        assert_eq!(uploads.largest_bytes, 7_880_704);
+        let report = Diagnostics {
+            adaptive_uploads: Some(uploads),
+            ..sample()
+        }
+        .to_report();
+        assert!(
+            report.contains("last patched 50 chunks, 264.3 KB; 2 uploads (1 patched)"),
+            "{report}"
+        );
+        assert!(!sample().to_report().contains("adaptive uploads"));
     }
 
     #[test]

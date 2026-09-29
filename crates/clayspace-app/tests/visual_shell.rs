@@ -177,6 +177,7 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             lost: vec!["Cabeça · hierarquia".into()],
         }),
         adaptive: None,
+        adaptive_uploads: None,
         // A document whose surfaces carry rather more than its edit list does,
         // which is the case the breakdown exists for: the plain roll-up would
         // report the 40 MB and leave the 96 MB of sculpting session out.

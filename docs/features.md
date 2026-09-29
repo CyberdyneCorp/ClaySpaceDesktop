@@ -2046,10 +2046,51 @@ document** in a `.dynamic` file, as a hierarchy's is; a document opened without
 it comes back as the mesh the surface was read from, and a record that could not
 be honoured is named in the diagnostics report.
 
-Not yet: the drawing copies the whole surface when it has moved rather than
-only the chunks a stroke dirtied; the history holds a snapshot rather than the
-engine's topology delta; and export, like a hierarchy's, writes the mesh the
-row was read from — `dynamic → mesh` first exports what the brush has made.
+**A stroke draws the chunks it touched, not the model.** The engine partitions
+the surface into chunks and marks the ones a stamp reached; the viewport keeps a
+copy of every chunk and, after a dab, writes only the dirty ones into the drawn
+buffer in place. A chunk whose triangles are the same triangles, moved, sends
+its vertices and no indices; one the remesh re-cut sends both. Each chunk sits
+in a slot with room to grow, so a chunk that gains a few triangles is rewritten
+where it is; one that outgrows its slot moves to the spare room at the end of
+the surface's region, and one that outgrows the spare room — or anything a
+patch cannot follow: a layer shown, hidden or moved, the mask, an undo, a
+rebuilt index — builds the buffer again, as every change did before. The chunk
+buffers are kept and reused, so a stroke that does not grow the surface
+allocates nothing on this side.
+
+Measured on flat sheets of one density (`upload_volume_is_independent_of_model_size`,
+debug build): a Draw stroke sent 271 KB at 100,352 triangles and 327 KB at
+1,002,528, against 7.9 MB and 70.3 MB for the whole surface's region. The
+benchmark's `dynamic` group, one dab of an open stroke in release: 175 KB and
+194 KB a dab (`dynamic.upload_scaling` 1.11, budget 2), the drawing half
+0.29 ms mean at both sizes, the whole dab 11.1 ms at 100k triangles (held to
+the 16 ms frame budget) and 15.3 ms at 1M.
+
+The surface keeps **one sculptor for its life** rather than one per stroke
+segment. The sculptor owns the spatial index and the dirty set, so one made per
+segment paid the index build every segment — 117 ms at 100,352 triangles and
+1.50 s at 1,002,528 on the pinned engine — and forgot which chunks the last
+segment touched. When the engine says the index has degraded
+(`clay_dynamic_sculptor_index_quality`), a rebuild is queued for between
+strokes, and the next upload lays the renumbered chunks out afresh.
+
+The diagnostics report says what the uploads sent, per settle of the viewport:
+`adaptive uploads: last patched|rebuilt <n> chunks, <KB>; <uploads> uploads
+(<patched> patched), largest <KB>`.
+
+**A coloured surface is still copied whole** when it moves: the engine's chunk
+transport copies positions, normals and indices and no attribute, so a chunked
+colour surface would lose its paint. That is the remaining engine gap (a
+per-chunk colour copy in `clay_dynamic_surface_copy_chunk` or
+`clay_surface_view_copy_chunk`).
+
+Not yet: the history holds a snapshot rather than the engine's topology delta —
+the first segment of every gesture serializes the whole surface, 66 ms at
+100k triangles and 661 ms at 1M — and export, like a hierarchy's, writes the
+mesh the row was read from — `dynamic → mesh` first exports what the brush has
+made. The polyframe derives its lines from the whole index list, so while it is
+on an adaptive stroke builds the buffer whole.
 
 ## Voxel layers
 

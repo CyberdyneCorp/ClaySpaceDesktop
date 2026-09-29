@@ -407,6 +407,8 @@ impl BackendPolicy {
             mesh: None,
             hierarchies: None,
             adaptive: None,
+            // The viewport's tally, filled by the composition root that uploads.
+            adaptive_uploads: None,
             memory: None,
             // Which tool is in hand is the interface's answer and not this
             // layer's: the backend knows what the engine can do and not what

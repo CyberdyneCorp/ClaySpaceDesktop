@@ -71,9 +71,9 @@ pub use consolidate::{
 pub use cut::{cut, CutFrame, CutOutline, CutShape, TrimSide};
 pub use dynamic::{
     DetailMode, DynamicChunk, DynamicChunkInfo, DynamicDesc, DynamicError, DynamicRefusal,
-    DynamicSculptor, DynamicStampReport, DynamicStats, DynamicSurface, DynamicTopology,
-    IndexQuality, SculptStage, StageReport, StageTiming, SurfaceRevision, SurfaceValidation,
-    WorldFrame,
+    DynamicSculptor, DynamicSession, DynamicStampReport, DynamicStats, DynamicSurface,
+    DynamicTopology, IndexQuality, SculptStage, StageReport, StageTiming, SurfaceRevision,
+    SurfaceValidation, WorldFrame,
 };
 pub use measure::{MeasureParams, SurfaceMeasure};
 

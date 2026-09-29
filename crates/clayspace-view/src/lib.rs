@@ -45,9 +45,9 @@ pub use quality::{
     ViewportQuality,
 };
 pub use renderer::{
-    frame_about, mirrored_cursors, ArmatureView, BrushCursor, GizmoView, GpuMesh, LatticeView,
-    MeshSpan, Overlays, Reference, Renderer, ScreenMetric, SymmetryAxis, Vertex, RING_REACH,
-    SCALE_BOX_REACH, VIEW_RING_REACH,
+    frame_about, mirrored_cursors, Aabb, ArmatureView, BrushCursor, GizmoView, GpuMesh,
+    LatticeView, MeshSpan, Overlays, Reference, Renderer, ScreenMetric, SymmetryAxis, Vertex,
+    RING_REACH, SCALE_BOX_REACH, VIEW_RING_REACH,
 };
 pub use shell::{apply_theme, ArmatureState, MemoryFigures, ShellState};
 pub use shortcuts::{Action, Chord, Conflict, Key, Shortcuts};

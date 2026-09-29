@@ -494,12 +494,16 @@ impl Layer {
         self.representation == Representation::Sdf
     }
 
-    /// The triangles last drawn for a row whose surface stands beside its
-    /// layer — a hierarchy's display level, or an adaptive surface.
-    fn drawn_triangles(&self) -> Option<(&[[f32; 3]], &[u32])> {
+    /// Where a ray meets the triangles last drawn for a row whose surface
+    /// stands beside its layer — a hierarchy's display level, or an adaptive
+    /// surface — in that surface's own coordinates.
+    fn pick_drawn(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
         match (&self.multires, &self.dynamic) {
-            (Some(hierarchy), _) => hierarchy.drawn_triangles(),
-            (None, Some(adaptive)) => adaptive.drawn_triangles(),
+            (Some(hierarchy), _) => {
+                let (positions, indices) = hierarchy.drawn_triangles()?;
+                nearest_triangle(origin, direction, positions, indices)
+            }
+            (None, Some(adaptive)) => adaptive.pick(origin, direction, nearest_triangle),
             (None, None) => None,
         }
     }
@@ -1146,6 +1150,65 @@ pub struct CarriedSpan {
     pub edges: Option<Vec<u32>>,
 }
 
+/// What [`ClayDocument::carried_patch`] hands the viewport: runs to write
+/// into the carried buffer it built last, in that buffer's numbering, placed
+/// in the world as the full build places them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CarriedPatch {
+    pub vertices: Vec<crate::chunked::VertexRun>,
+    pub indices: Vec<crate::chunked::IndexRun>,
+    /// The world box each patched layer's rewritten chunks occupy, so the
+    /// viewport can widen what it culls that layer against.
+    pub bounds: Vec<(LayerKey, crate::chunked::Bounds)>,
+    /// Chunks whose data is in the runs.
+    pub chunks: usize,
+}
+
+impl CarriedPatch {
+    /// Takes one surface's runs, moved to where its layer transform puts it.
+    fn add(
+        &mut self,
+        layer: LayerKey,
+        mut runs: crate::chunked::RegionRuns,
+        placement: &Option<clayspace_model::Transform>,
+    ) {
+        if let Some(transform) = placement {
+            for run in &mut runs.vertices {
+                for point in &mut run.positions {
+                    *point = ClayDocument::into_world(transform, *point);
+                }
+                for normal in &mut run.normals {
+                    *normal = transform.normal_into_world(*normal);
+                }
+            }
+            runs.bounds = runs
+                .bounds
+                .map(|bounds| ClayDocument::world_bounds(transform, bounds));
+        }
+        if let Some(bounds) = runs.bounds {
+            self.bounds.push((layer, bounds));
+        }
+        self.chunks += runs.chunks;
+        self.vertices.append(&mut runs.vertices);
+        self.indices.append(&mut runs.indices);
+    }
+
+    /// Whether there is nothing to write.
+    pub fn is_empty(&self) -> bool {
+        self.vertices.is_empty() && self.indices.is_empty()
+    }
+
+    /// The counts, as the diagnostics report them.
+    pub fn upload(&self) -> clayspace_model::AdaptiveUpload {
+        clayspace_model::AdaptiveUpload {
+            rebuilt: false,
+            chunks: self.chunks,
+            vertices: self.vertices.iter().map(|run| run.positions.len()).sum(),
+            indices: self.indices.iter().map(|run| run.indices.len()).sum(),
+        }
+    }
+}
+
 /// The one buffer every carried layer is concatenated into.
 ///
 /// The four parallel vectors travel together everywhere, and the rebasing that
@@ -1158,6 +1221,9 @@ struct CarriedBuffer {
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 3]>,
     indices: Vec<u32>,
+    /// Triangles and vertices appended as room to grow rather than surface —
+    /// an adaptive surface's chunk slots — so the census can leave them out.
+    headroom: (usize, usize),
 }
 
 impl CarriedBuffer {
@@ -1167,6 +1233,7 @@ impl CarriedBuffer {
             normals: Vec::with_capacity(vertices),
             colors: Vec::with_capacity(vertices),
             indices: Vec::with_capacity(triangles),
+            headroom: (0, 0),
         }
     }
 
@@ -1439,6 +1506,19 @@ pub struct ClayDocument {
     /// after it meshes, the carried layers when they are assembled — and a
     /// single field would have each overwrite the other's contribution.
     carried: (usize, usize),
+    /// [`ClayDocument::layout_revision`] when the carried buffer was last
+    /// built, or `None` before it has been or after a patch was declined. A
+    /// chunk patch is offered only while it still holds.
+    carried_layout: Option<u64>,
+    /// How many times the carried buffer has been built. A caller patches
+    /// only the build it uploaded: any other caller of
+    /// [`ClayDocument::visible_mesh_geometry`] lays the regions out again,
+    /// and a patch against that layout would land in the wrong place of a
+    /// buffer built from the earlier one.
+    carried_builds: u64,
+    /// What the adaptive surfaces sent at the last upload of the carried
+    /// buffer, built or patched.
+    dynamic_upload: clayspace_model::AdaptiveUpload,
     /// Bricks the surface occupies, refreshed with the stats.
     ///
     /// Kept because the detail policy needs a size and asking the cache for
@@ -1769,6 +1849,9 @@ impl ClayDocument {
             refill_pending: false,
             stats: SceneStats::default(),
             carried: (0, 0),
+            carried_layout: None,
+            carried_builds: 0,
+            dynamic_upload: clayspace_model::AdaptiveUpload::default(),
             live_mesh: None,
             previewing: false,
             maintenance: crate::maintenance::Maintenance::new(),
@@ -3505,8 +3588,8 @@ impl ClayDocument {
         let adaptive = self
             .document
             .dynamic_from_mesh_layer(id, crate::adaptive::Adaptive::desc())
-            .map(crate::adaptive::Adaptive::holding)
-            .map_err(crate::adaptive::refused)?;
+            .map_err(crate::adaptive::refused)
+            .and_then(crate::adaptive::Adaptive::holding)?;
         let welded = adaptive.to_mesh()?;
         let key = self.attach_meshed_layer(welded, name)?;
         if let Ok(index) = self.index_of(key) {
@@ -6891,11 +6974,12 @@ impl ClayDocument {
         let changed = stroked?;
 
         self.refresh_dynamic_bounds(key);
-        if self.previewing {
-            // Held rather than banked: one drag is one undo however many
-            // segments drew it.
-            self.live_generation = self.live_generation.wrapping_add(1);
-        } else {
+        // Held rather than banked while previewing: one drag is one undo
+        // however many segments drew it. No `live_generation` bump either way:
+        // the surface's own revisions already move `mesh_revision`, and a bump
+        // would make every segment look like a change a chunk patch cannot
+        // follow, re-uploading the whole carried buffer per segment.
+        if !self.previewing {
             self.bank_dynamic_gesture(key);
         }
         Ok(EditOutcome {
@@ -6930,40 +7014,41 @@ impl ClayDocument {
         } = stroke;
         let mask = self.active_mask();
         let topology = crate::adaptive::Adaptive::topology();
-        let mut sculptor = adaptive
-            .surface_mut()
-            .sculptor()
-            .map_err(ModelError::engine)?;
-        let mut changed = false;
-        for mirror in mirrors(symmetry) {
-            let path: Vec<[f32; 5]> = points
-                .iter()
-                .map(|sample| {
-                    let at = mirror.point([sample[0], sample[1], sample[2]]);
-                    [at[0], at[1], at[2], sample[3], sample[4]]
-                })
-                .collect();
-            let (applied, _) = sculptor
-                .apply_stroke(
-                    &path,
-                    &preset,
-                    claycore::MeshStamp {
-                        verb,
-                        direction: mirror.vector(stamp.direction),
-                        center: mirror.point(stamp.center),
-                        // A seed names a numbering the adaptive surface does
-                        // not share: its vertices are created and retired by
-                        // the remesh.
-                        seed: None,
-                        ..stamp
-                    },
-                    Some(&topology),
-                    mask.as_deref(),
-                )
-                .map_err(ModelError::engine)?;
-            changed |= applied > 0;
-        }
-        drop(sculptor);
+        // Through the sculptor the surface keeps for its whole life, so the
+        // index is not rebuilt per segment and the chunks this stroke dirties
+        // stay in the set the viewport drains.
+        let changed = adaptive.with_sculptor(|sculptor| {
+            let mut changed = false;
+            for mirror in mirrors(symmetry) {
+                let path: Vec<[f32; 5]> = points
+                    .iter()
+                    .map(|sample| {
+                        let at = mirror.point([sample[0], sample[1], sample[2]]);
+                        [at[0], at[1], at[2], sample[3], sample[4]]
+                    })
+                    .collect();
+                let (applied, _) = sculptor
+                    .apply_stroke(
+                        &path,
+                        &preset,
+                        claycore::MeshStamp {
+                            verb,
+                            direction: mirror.vector(stamp.direction),
+                            center: mirror.point(stamp.center),
+                            // A seed names a numbering the adaptive surface
+                            // does not share: its vertices are created and
+                            // retired by the remesh.
+                            seed: None,
+                            ..stamp
+                        },
+                        Some(&topology),
+                        mask.as_deref(),
+                    )
+                    .map_err(ModelError::engine)?;
+                changed |= applied > 0;
+            }
+            Ok::<bool, ModelError>(changed)
+        })?;
         adaptive.note_gesture_changed(changed);
         Ok(changed)
     }
@@ -7402,6 +7487,12 @@ impl ClayDocument {
         let Some(bytes) = adaptive.close_gesture() else {
             return;
         };
+        // Between strokes is when the engine's opinion of its own index is
+        // worth reading: queued rather than done, so the drain's budget
+        // decides, weighed against what this surface's last rebuild cost.
+        let rebuild = adaptive
+            .wants_index_rebuild()
+            .then(|| adaptive.rebuild_micros());
         let stamp = self.stamp_history();
         self.mesh_undo.push(MeshGesture {
             layer: key,
@@ -7410,6 +7501,13 @@ impl ClayDocument {
         });
         self.mesh_redo.clear();
         self.trim_gesture_history();
+        if let Some(estimate) = rebuild {
+            self.maintenance.request_costing(
+                claycore::MaintenanceKind::IndexRebuild,
+                key.0 as u32,
+                estimate,
+            );
+        }
     }
 
     /// Where a ray meets the active layer's grid.
@@ -7488,8 +7586,7 @@ impl ClayDocument {
             None => (origin, direction),
         };
         let index = self.index_of(key).ok()?;
-        let (positions, indices) = self.layers[index].drawn_triangles()?;
-        let met = nearest_triangle(start, along, positions, indices)?;
+        let met = self.layers[index].pick_drawn(start, along)?;
         Some(match &placement {
             Some(transform) => Self::into_world(transform, met),
             None => met,
@@ -8048,6 +8145,17 @@ impl ClayDocument {
             .map(|(index, layer)| (index, layer.representation, layer.engine_name.clone()))
             .collect();
 
+        // Every region the last build laid out is void now: this build lays
+        // out again the ones it draws, and a hidden surface has none.
+        self.dynamic_upload = clayspace_model::AdaptiveUpload {
+            rebuilt: true,
+            ..Default::default()
+        };
+        for layer in &mut self.layers {
+            if let Some(adaptive) = layer.dynamic.as_mut() {
+                adaptive.forget_region();
+            }
+        }
         let mut spans: Vec<CarriedSpan> = Vec::with_capacity(drawn.len());
         for (index, representation, name) in drawn {
             let layer = self.layers[index].key;
@@ -8108,12 +8216,20 @@ impl ClayDocument {
         // screen rather than only what the brick cache built. A mesh or voxel
         // layer draws triangles the surface cache knows nothing about, and the
         // panel used to report a sculpted grid as an empty document.
-        self.carried = (carried.indices.len() / 3, carried.positions.len());
+        self.carried = (
+            carried.indices.len() / 3 - carried.headroom.0,
+            carried.positions.len() - carried.headroom.1,
+        );
+        // What this buffer was built against, so a later chunk patch can tell
+        // whether anything it cannot follow has moved since.
+        self.carried_layout = Some(self.layout_revision());
+        self.carried_builds = self.carried_builds.wrapping_add(1);
         let CarriedBuffer {
             positions,
             normals,
             colors,
             indices,
+            ..
         } = carried;
         (positions, normals, colors, indices, spans)
     }
@@ -8170,18 +8286,105 @@ impl ClayDocument {
     /// Appends one adaptive surface, standing where its layer transform puts
     /// it.
     ///
-    /// Copied whole when the surface has moved and held otherwise, so a
-    /// resting frame pays nothing. Uploading only the chunks a stroke dirtied
-    /// is the next step for this path; what is here is correct at any size.
+    /// As a region of chunk slots with room to grow, so the next dab can be
+    /// written into the chunks it touched ([`ClayDocument::carried_patch`])
+    /// rather than the whole buffer rebuilt. A coloured surface is copied
+    /// whole instead, when it has moved, because the chunk transport carries
+    /// no colour; see [`crate::adaptive`].
     fn append_dynamic_layer(&mut self, index: usize, carried: &mut CarriedBuffer) {
         let placement = self.carried_placement(self.layers[index].key);
         let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
             return;
         };
-        let Some((positions, normals, colors, indices)) = adaptive.triangles() else {
+        if let Some((positions, normals, colors, indices)) = adaptive.whole_triangles() {
+            self.dynamic_upload.vertices += positions.len();
+            self.dynamic_upload.indices += indices.len();
+            Self::append_placed(carried, &placement, positions, normals, colors, indices);
+            return;
+        }
+        let (vertex_base, index_base) = (carried.positions.len(), carried.indices.len());
+        let Some(region) = adaptive.lay_out_region(vertex_base as u32, index_base as u32) else {
             return;
         };
-        Self::append_placed(carried, &placement, positions, normals, colors, indices);
+        // White, as a mesh layer without colour is drawn.
+        let colors = vec![[1.0; 3]; region.positions.len()];
+        Self::append_placed(
+            carried,
+            &placement,
+            &region.positions,
+            &region.normals,
+            &colors,
+            &region.indices,
+        );
+        carried.headroom.0 += region.indices.len() / 3 - region.census.0;
+        carried.headroom.1 += region.positions.len() - region.census.1;
+        self.dynamic_upload.chunks += region.chunks;
+        self.dynamic_upload.vertices += region.positions.len();
+        self.dynamic_upload.indices += region.indices.len();
+    }
+
+    /// What the adaptive surfaces sent at the last upload of the carried
+    /// buffer: the whole of their regions when it was built, the runs of the
+    /// dirty chunks when it was patched.
+    pub fn dynamic_upload(&self) -> clayspace_model::AdaptiveUpload {
+        self.dynamic_upload
+    }
+
+    /// Which build of the carried buffer [`visible_mesh_geometry`] returned
+    /// last, for a caller to hand back to [`carried_patch`] with the buffer it
+    /// uploaded.
+    ///
+    /// [`visible_mesh_geometry`]: Self::visible_mesh_geometry
+    /// [`carried_patch`]: Self::carried_patch
+    pub fn carried_build(&self) -> u64 {
+        self.carried_builds
+    }
+
+    /// The chunks every drawn adaptive surface's stroke dirtied since the
+    /// carried buffer was last built or patched, as runs to write into it in
+    /// place. `built` is the [`carried_build`](Self::carried_build) the
+    /// caller uploaded.
+    ///
+    /// `None` when the buffer cannot be patched and has to be built again with
+    /// [`visible_mesh_geometry`](Self::visible_mesh_geometry): it has never
+    /// been built, or was built again since the caller's build, or something
+    /// a patch cannot follow has moved since —
+    /// visibility, a transform, a mesh or grid, the mask, a surface put back
+    /// from bytes — or a chunk outgrew its region. A caller that gets `None`
+    /// must rebuild; the regions it would have patched are void until then.
+    ///
+    /// An empty patch is a real answer: the revision moved and no chunk of
+    /// any drawn surface needs writing.
+    pub fn carried_patch(&mut self, built: u64) -> Option<CarriedPatch> {
+        let layout = self.layout_revision();
+        if self.carried_layout != Some(layout) || self.carried_builds != built {
+            return None;
+        }
+        let mut patch = CarriedPatch::default();
+        for index in 0..self.layers.len() {
+            let key = self.layers[index].key;
+            let placement = self.carried_placement(key);
+            let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
+                continue;
+            };
+            match adaptive.patch_region() {
+                crate::adaptive::RegionPatch::Undrawn => {}
+                crate::adaptive::RegionPatch::Runs(runs) => {
+                    // The census follows the region, so the panel counts the
+                    // triangles a stroke made without waiting for a rebuild.
+                    let [(was_t, was_v), (now_t, now_v)] = runs.census;
+                    self.carried.0 = (self.carried.0 + now_t).saturating_sub(was_t);
+                    self.carried.1 = (self.carried.1 + now_v).saturating_sub(was_v);
+                    patch.add(key, runs, &placement);
+                }
+                crate::adaptive::RegionPatch::Rebuild => {
+                    self.carried_layout = None;
+                    return None;
+                }
+            }
+        }
+        self.dynamic_upload = patch.upload();
+        Some(patch)
     }
 
     /// Appends one voxel layer's triangles to the carried buffer.
@@ -8560,7 +8763,25 @@ impl ClayDocument {
         mask.sample_many(points).ok()
     }
 
+    /// A number that moves whenever what the carried buffer draws moves.
+    ///
+    /// Two parts: [`layout_revision`](Self::layout_revision), everything that
+    /// needs the buffer built again, and every chunked adaptive surface's own
+    /// revisions, which [`carried_patch`](Self::carried_patch) follows chunk
+    /// by chunk.
     pub fn mesh_revision(&mut self) -> u64 {
+        let chunks = self.layers.iter().fold(0u64, |sum, layer| {
+            layer.dynamic.as_ref().map_or(sum, |adaptive| {
+                sum.wrapping_mul(31).wrapping_add(adaptive.chunk_revision())
+            })
+        });
+        self.layout_revision()
+            .wrapping_add(chunks.wrapping_mul(7_000_003))
+    }
+
+    /// The part of [`mesh_revision`](Self::mesh_revision) a chunk patch
+    /// cannot follow: when it moves, the carried buffer is built again.
+    fn layout_revision(&mut self) -> u64 {
         // Which layers this path draws at all, and whether each is shown.
         //
         // Adding a mesh layer moves no vertex and touches no grid, so without
@@ -8662,13 +8883,24 @@ impl ClayDocument {
                 .wrapping_add(u64::from(levels.count))
         });
         // And every adaptive surface's revisions, for the hierarchy's reason:
-        // its layer's triangles are what it was read from and never move.
+        // its layer's triangles are what it was read from and never move. Only
+        // the part a chunk patch cannot follow — see `mesh_revision`.
         let adaptive = self.layers.iter().fold(0u64, |sum, layer| {
             layer.dynamic.as_ref().map_or(sum, |adaptive| {
-                sum.wrapping_mul(31).wrapping_add(adaptive.drawn_revision())
+                sum.wrapping_mul(31)
+                    .wrapping_add(adaptive.layout_revision())
             })
         });
-        let meshes = (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64;
+        // Adaptive records left out: banking one moves no triangle, and its
+        // undo puts back a new surface whose generation is counted above. Kept
+        // in, the end of every adaptive stroke would rebuild the whole buffer.
+        let fixed = |records: &[MeshGesture]| {
+            records
+                .iter()
+                .filter(|record| !matches!(record.what, GestureRecord::Adaptive(_)))
+                .count() as u64
+        };
+        let meshes = fixed(&self.mesh_undo) << 32 | fixed(&self.mesh_redo);
         meshes
             .wrapping_mul(31)
             .wrapping_add(grids)
@@ -9025,19 +9257,35 @@ impl ClayDocument {
 
     /// Does one item.
     ///
-    /// Only one kind is reachable here. The other four name an adaptive
-    /// surface's chunk arena, a hierarchy's detail field, its slot pools and a
-    /// deferred normal flush: this application holds neither an adaptive
-    /// surface nor a hierarchy, and its deferred normals are settled by the
-    /// gesture that deferred them rather than queued — `LiveMesh` owes the
+    /// Only one kind is reachable here: an index rebuild, of a mesh layer's
+    /// ray-query tree or of an adaptive surface's chunked index, told apart by
+    /// the layer the target names. The other four name an adaptive surface's
+    /// chunk arena, a hierarchy's detail field, its slot pools and a deferred
+    /// normal flush: nothing here requests those, and its deferred normals
+    /// are settled by the gesture that deferred them rather than queued — `LiveMesh` owes the
     /// flush to the handle that owes it, and settles on `Drop`, which is a
     /// stronger guarantee than a queue entry for the one item that is not
     /// optional. An item of a kind
     /// nobody here produces is still *completed* rather than left, because a
     /// head item nothing will ever service blocks everything behind it.
     fn perform_maintenance(&mut self, item: claycore::MaintenanceItem) {
-        if item.kind == claycore::MaintenanceKind::IndexRebuild {
-            self.rebuild_mesh_index(LayerKey(u64::from(item.target)));
+        if item.kind != claycore::MaintenanceKind::IndexRebuild {
+            return;
+        }
+        let layer = LayerKey(u64::from(item.target));
+        let adaptive = self
+            .index_of(layer)
+            .ok()
+            .and_then(|index| self.layers[index].dynamic.as_mut());
+        match adaptive {
+            // An adaptive surface's index is the sculptor's chunked one, and
+            // rebuilding it renumbers the chunks the viewport draws.
+            Some(adaptive) => {
+                if let Err(e) = adaptive.rebuild_index() {
+                    eprintln!("o índice da superfície adaptativa não pôde ser reconstruído: {e}");
+                }
+            }
+            None => self.rebuild_mesh_index(layer),
         }
     }
 
@@ -12819,10 +13067,13 @@ impl ClayDocument {
                 self.surfaces_lost.push(layer.name.clone());
                 continue;
             }
-            match claycore::DynamicSurface::deserialize(&record.bytes) {
-                Ok(surface) => {
+            let held = claycore::DynamicSurface::deserialize(&record.bytes)
+                .map_err(ModelError::engine)
+                .and_then(crate::adaptive::Adaptive::holding);
+            match held {
+                Ok(adaptive) => {
                     layer.representation = Representation::Dynamic;
-                    layer.dynamic = Some(crate::adaptive::Adaptive::holding(surface));
+                    layer.dynamic = Some(adaptive);
                 }
                 Err(e) => {
                     eprintln!(
@@ -13253,6 +13504,9 @@ impl ClayDocument {
             refill_pending: false,
             stats: SceneStats::default(),
             carried: (0, 0),
+            carried_layout: None,
+            carried_builds: 0,
+            dynamic_upload: clayspace_model::AdaptiveUpload::default(),
             live_mesh: None,
             previewing: false,
             maintenance: crate::maintenance::Maintenance::new(),
