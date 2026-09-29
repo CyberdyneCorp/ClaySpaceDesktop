@@ -1203,6 +1203,75 @@ fn an_operand_that_disappears_stops_being_quoted() {
 /// the clay catches up once, when the pointer comes up — the same answer the
 /// region-based brushes already give.
 #[test]
+fn the_first_sdf_layer_drag_defers_the_engine_until_release() {
+    let (mut vm, calls) = viewmodel();
+    send(
+        &mut vm,
+        Command::SetGizmoTarget(Some(GizmoTarget::Layer(HIT_LAYER))),
+    );
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    assert!(vm.settling());
+    assert_eq!(
+        calls.borrow().transforms.len(),
+        0,
+        "first frame evaluated the field"
+    );
+    let (from, to) = vm.preview_transform().expect("surface follows the hand");
+    assert_eq!(from.position, [0.0; 3]);
+    assert_eq!(to.position, [0.2, 0.0, 0.0]);
+    send(&mut vm, Command::EndGizmoDrag);
+    assert_eq!(calls.borrow().transforms.len(), 1);
+    assert_eq!(calls.borrow().transforms[0].position, to.position);
+}
+
+#[test]
+fn changing_target_finishes_pending_drag_on_its_original_layer() {
+    let (mut vm, calls) = viewmodel();
+    send(
+        &mut vm,
+        Command::SetGizmoTarget(Some(GizmoTarget::Layer(HIT_LAYER))),
+    );
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    send(&mut vm, Command::SetGizmoTarget(None));
+    assert!(!vm.is_dragging());
+    assert!(vm.preview_transform().is_none());
+    assert_eq!(calls.borrow().transforms.len(), 1);
+    assert_eq!(calls.borrow().transforms[0].position, [0.2, 0.0, 0.0]);
+    assert_eq!(*vm.target().get(), None);
+}
+
+#[test]
+fn a_refused_layer_release_clears_the_pending_preview() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.refuse = Some("layer locked");
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    send(
+        &mut vm,
+        Command::SetGizmoTarget(Some(GizmoTarget::Layer(HIT_LAYER))),
+    );
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    assert!(vm.preview_transform().is_some());
+    send(&mut vm, Command::EndGizmoDrag);
+    assert!(!vm.is_dragging());
+    assert!(!vm.settling());
+    assert!(vm.preview_transform().is_none());
+    assert!(calls.borrow().transforms.is_empty());
+}
+
+#[test]
 fn a_drag_that_overruns_settles_when_the_pointer_comes_up() {
     let calls = Rc::new(RefCell::new(Calls::default()));
     let mut model = FakeObjects::new(calls.clone());

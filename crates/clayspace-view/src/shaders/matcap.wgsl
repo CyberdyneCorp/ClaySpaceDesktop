@@ -108,11 +108,12 @@ fn material_shading(n: vec3<f32>, color: vec3<f32>) -> vec3<f32> {
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = camera.view_projection * vec4<f32>(input.position, 1.0);
-    out.view_normal = (camera.view_rotation * vec4<f32>(input.normal, 0.0)).xyz;
+    let world = camera.surface_preview * vec4<f32>(input.position, 1.0);
+    out.clip_position = camera.view_projection * world;
+    out.view_normal = (camera.view_rotation * camera.surface_normal * vec4<f32>(input.normal, 0.0)).xyz;
     out.color = input.color;
     out.mask = input.mask;
-    out.world_position = input.position;
+    out.world_position = world.xyz;
     return out;
 }
 
@@ -127,7 +128,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 /// reads that buffer in the same frame.
 @vertex
 fn shadow_vs(input: VertexInput) -> @builtin(position) vec4<f32> {
-    return shadow.light_view_projection * vec4<f32>(input.position, 1.0);
+    return shadow.light_view_projection * camera.surface_preview * vec4<f32>(input.position, 1.0);
 }
 
 @fragment
