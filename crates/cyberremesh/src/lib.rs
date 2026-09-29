@@ -41,7 +41,10 @@ pub use bake::{bake_field, BakeParams, Field, FieldMap, Image};
 pub use conform::{conform, Conformed};
 pub use error::{Error, Result};
 pub use mesh::Mesh;
-pub use remesh::{remesh, was_cancelled, QuadMethod, RemeshParams, Unwatched, Watcher};
+pub use remesh::{
+    remesh, remesh_guided, was_cancelled, Guidance, Guide, QuadMethod, RemeshParams, Unwatched,
+    Watcher,
+};
 pub use uv::{atlas, Atlas, AtlasParams};
 pub use version::{version, Version};
 

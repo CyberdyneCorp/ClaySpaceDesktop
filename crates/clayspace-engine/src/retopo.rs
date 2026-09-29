@@ -12,9 +12,9 @@
 //! engine's authors built the buffer profile for exactly this case.
 
 use clayspace_model::{
-    split_at_uv_seams, ModelError, QuadMethod, Representation, RetopoModel, RetopoOutcome,
-    RetopoResult, RetopoSettings, RetopoSource, RetopoUv, Retopologiser, Unwrapper, UvModel,
-    UvOutcome, UvResult, UvSettings, UvSource,
+    split_at_uv_seams, ModelError, QuadMethod, Representation, RetopoGuidance, RetopoModel,
+    RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, RetopoUv, Retopologiser, Unwrapper,
+    UvModel, UvOutcome, UvResult, UvSettings, UvSource,
 };
 use clayspace_model::{BakeMap, BakeModel, BakeResult, BakeSettings, BakedMap, Baker};
 use clayspace_model::{
@@ -38,11 +38,10 @@ impl ClayDocument {
     /// The active mesh subtool as owned geometry, checked and read, with no
     /// retopology target recorded.
     ///
-    /// Shared by the retopology and the UV layout. Only the retopology
-    /// stashes a target: a layout started while a retopology runs must not
-    /// move the layer that retopology will be published against.
+    /// Used by the UV layout without recording a retopology target: a layout
+    /// started while retopology runs must not move its publish destination.
     fn active_mesh_source(&mut self) -> Result<RetopoSource, ModelError> {
-        self.can_retopologise().map_err(ModelError::engine)?;
+        self.can_unwrap().map_err(ModelError::engine)?;
         let (positions, normals, indices) = self.active_mesh_geometry()?;
         Ok(RetopoSource {
             positions,
@@ -50,21 +49,28 @@ impl ClayDocument {
             indices,
             name: self.scene_layers_name(),
             revision: 0,
+            guidance: self.retopo_guidance.clone(),
         })
     }
 }
 
 impl RetopoModel for ClayDocument {
+    fn retopo_guidance(&self) -> RetopoGuidance {
+        self.retopo_guidance.clone()
+    }
+
+    fn set_retopo_guidance(&mut self, guidance: RetopoGuidance) {
+        if guidance.valid() {
+            self.retopo_guidance = guidance;
+        }
+    }
+
     fn can_retopologise(&self) -> Result<(), String> {
         let (representation, carries) = self.active_layer_shape();
-        if representation != Representation::Mesh {
-            return Err(format!(
-                "remalhar para quads reconstrói a topologia de uma malha; \
-                 esta camada é {representation:?}"
-            ));
-        }
         if !carries {
-            return Err("esta camada de malha ainda não carrega triângulos".to_string());
+            return Err(format!(
+                "esta camada {representation:?} ainda não carrega uma superfície"
+            ));
         }
         Ok(())
     }
@@ -84,7 +90,35 @@ impl RetopoModel for ClayDocument {
     }
 
     fn retopo_source(&mut self) -> Result<RetopoSource, ModelError> {
-        let mut source = self.active_mesh_source()?;
+        self.can_retopologise().map_err(ModelError::engine)?;
+        let (positions, normals, indices) = self.active_retopo_geometry()?;
+        let mut guidance = self.retopo_guidance.clone();
+        let (representation, placement) = self.active_retopo_placement();
+        if representation != Representation::Sdf {
+            for guide in &mut guidance.guides {
+                for point in &mut guide.points {
+                    *point = placement.into_local(*point);
+                }
+                // The engine's guide radius is in source coordinates. For an
+                // anisotropic placement, use the mean axis size as the UI's
+                // single scalar cannot express an ellipsoid.
+                let scale = placement.scale.iter().sum::<f32>() / 3.0;
+                guide.radius /= scale.max(1e-4);
+            }
+            for dab in &mut guidance.density {
+                dab.position = placement.into_local(dab.position);
+                let scale = placement.scale.iter().sum::<f32>() / 3.0;
+                dab.radius /= scale.max(1e-4);
+            }
+        }
+        let mut source = RetopoSource {
+            positions,
+            normals,
+            indices,
+            name: self.scene_layers_name(),
+            revision: 0,
+            guidance,
+        };
         // Which layer this is about and what revision it is at, read before
         // the work is dispatched. `RetopoResult` carries a name and not an
         // identity, and the publish is checked against the revision.
@@ -169,24 +203,45 @@ impl Retopologiser for EngineRetopologiser {
         let quad_share = if settings.uv.is_some() { 0.8 } else { 1.0 };
         let mut relay = Relay::span(progress, cancelled, 0.0, quad_share);
 
-        let mut quads = cyberremesh::remesh(
-            &mesh,
-            cyberremesh::RemeshParams {
-                target_quads: settings.target_quads,
-                method: engine_method(settings.method),
-                sharp_edge_degrees: settings.sharp_edge_degrees,
-                pure_quads: settings.pure_quads,
-                adaptivity: settings.adaptivity,
-            },
-            &mut relay,
-        )
-        .map_err(|e| {
-            if cyberremesh::was_cancelled(&e) {
-                "a retopologia foi cancelada".to_string()
+        let params = cyberremesh::RemeshParams {
+            target_quads: settings.target_quads,
+            method: engine_method(settings.method),
+            sharp_edge_degrees: settings.sharp_edge_degrees,
+            pure_quads: settings.pure_quads,
+            adaptivity: settings.adaptivity,
+        };
+        let guidance = cyberremesh::Guidance {
+            guides: source
+                .guidance
+                .guides
+                .iter()
+                .map(|guide| cyberremesh::Guide {
+                    points: guide.points.clone(),
+                    strength: guide.strength,
+                    radius: guide.radius,
+                    topology: guide.mode == clayspace_model::FlowGuideMode::Topology,
+                    closed: guide.closed,
+                })
+                .collect(),
+            vertex_density: if source.guidance.density.is_empty() {
+                Vec::new()
             } else {
-                format!("a retopologia foi recusada: {e}")
-            }
-        })?;
+                source
+                    .positions
+                    .iter()
+                    .map(|point| source.guidance.density_at(*point))
+                    .collect()
+            },
+        };
+        let mut quads =
+            cyberremesh::remesh_guided(&mesh, params, &guidance, &mut relay).map_err(|e| {
+                if cyberremesh::was_cancelled(&e) {
+                    "a retopologia foi cancelada".to_string()
+                } else {
+                    format!("a retopologia foi recusada: {e}")
+                }
+            })?;
+        let guidance_warnings = std::mem::take(&mut relay.warnings);
 
         let mut result = RetopoResult {
             outcome: RetopoOutcome {
@@ -195,6 +250,7 @@ impl Retopologiser for EngineRetopologiser {
                 triangles: quads.triangle_count(),
                 vertices: quads.vertex_count(),
                 uv: RetopoUv::NotRequested,
+                guidance_warnings,
             },
             positions: quads.positions(),
             indices: quads.triangle_indices(),
@@ -314,9 +370,13 @@ fn authored_edges(quads: &cyberremesh::Mesh) -> Vec<u32> {
 
 impl UvModel for ClayDocument {
     fn can_unwrap(&self) -> Result<(), String> {
-        // The same rule as retopology, and for the same reason: a UV layout is
-        // a parameterisation of a mesh's faces, and a field has none.
-        self.can_retopologise()
+        let (representation, carries) = self.active_layer_shape();
+        if representation != Representation::Mesh || !carries {
+            return Err(format!(
+                "esta camada {representation:?} não carrega uma malha para desdobrar"
+            ));
+        }
+        Ok(())
     }
 
     fn uv_source(&mut self) -> Result<UvSource, ModelError> {
@@ -397,6 +457,7 @@ struct Relay<'a> {
     /// rather than twice.
     from: f32,
     width: f32,
+    warnings: Vec<String>,
 }
 
 impl<'a> Relay<'a> {
@@ -411,6 +472,7 @@ impl<'a> Relay<'a> {
             cancelled,
             from,
             width,
+            warnings: Vec::new(),
         }
     }
 }
@@ -421,6 +483,9 @@ impl cyberremesh::Watcher for Relay<'_> {
     }
     fn cancelled(&mut self) -> bool {
         (self.cancelled)()
+    }
+    fn warning(&mut self, message: &str) {
+        self.warnings.push(message.to_string());
     }
 }
 

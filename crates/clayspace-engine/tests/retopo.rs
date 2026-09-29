@@ -7,10 +7,12 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument, EngineRetopologiser};
 use clayspace_model::{
-    Combine, CombineSettings, ConformModel, ConformOutcome, ConformResult, Direction, LayerKey,
-    ObjectModel, QuadMethod, Representation, RetopoModel, RetopoSettings, Retopologiser,
-    SceneModel, SculptModel, Shape,
+    Combine, CombineSettings, ConformModel, ConformOutcome, ConformResult, DensityDab, Direction,
+    DocumentModel, FlowGuide, FlowGuideMode, LayerKey, ObjectModel, QuadMethod, Representation,
+    RetopoModel, RetopoSettings, Retopologiser, SceneModel, SculptModel, Shape,
 };
+
+mod adaptive_fixture;
 
 /// A sculpt that has become a mesh: the starting form, crossed.
 fn meshed() -> Option<ClayDocument> {
@@ -130,27 +132,209 @@ fn an_in_place_retopology_rebuilds_the_subtool() {
     );
 }
 
-/// A field subtool is refused by name rather than crossed for the sculptor.
-///
-/// Crossing one silently would be a representation change with its own cost
-/// and its own undo entry, and a tool that says it rebuilds topology must not
-/// perform one.
+/// A field can supply temporary triangles without changing its representation.
 #[test]
-fn a_field_subtool_is_refused_and_the_reason_names_the_representation() {
+fn a_field_subtool_supplies_retopology_geometry_without_conversion() {
     let Ok(policy) = BackendPolicy::discover(None) else {
         return;
     };
-    let Ok(document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form) else {
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
         return;
     };
     assert_eq!(document.active_representation(), Representation::Sdf);
-    let refusal = document
+    document
         .can_retopologise()
-        .expect_err("a field is not a mesh");
-    assert!(
-        refusal.contains("Sdf"),
-        "the refusal does not say which representation is in the way: {refusal}"
+        .expect("the field carries a surface");
+    let before = document.scene().layers.len();
+    let source = document.retopo_source().expect("temporary triangles");
+    assert!(!source.indices.is_empty());
+    assert_eq!(document.active_representation(), Representation::Sdf);
+    assert_eq!(document.scene().layers.len(), before);
+}
+
+#[test]
+fn authored_guidance_changes_the_retopology_result_without_changing_the_source() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let mut source = document.retopo_source().expect("mesh source");
+    let original = source.positions.clone();
+    let settings = RetopoSettings {
+        target_quads: 300,
+        ..RetopoSettings::default()
+    };
+    let plain = EngineRetopologiser
+        .run(&source, settings, &|_, _| {}, &|| false)
+        .expect("plain retopology");
+    let guide_points = [
+        source.positions[0],
+        source.positions[source.positions.len() / 3],
+    ];
+    source.guidance.guides.push(FlowGuide {
+        points: guide_points.to_vec(),
+        strength: 1.0,
+        radius: 1.0,
+        mode: FlowGuideMode::Topology,
+        closed: false,
+    });
+    let guide_only = EngineRetopologiser
+        .run(&source, settings, &|_, _| {}, &|| false)
+        .expect("flow-guided retopology");
+    assert_ne!(
+        guide_only.edges, plain.edges,
+        "flow guide left edge layout unchanged"
     );
+    let local_plain = edge_flow_near(&plain, guide_points, 0.4);
+    let local_guided = edge_flow_near(&guide_only, guide_points, 0.4);
+    assert!(!local_plain.is_empty() && !local_guided.is_empty());
+    assert_ne!(
+        local_guided, local_plain,
+        "the guide changed edges elsewhere, but not the flow near its curve"
+    );
+    source.guidance.guides.clear();
+    source.guidance.density.push(DensityDab {
+        position: source.positions[0],
+        radius: 2.0,
+        multiplier: 3.0,
+    });
+    let density_only = EngineRetopologiser
+        .run(&source, settings, &|_, _| {}, &|| false)
+        .expect("density-guided retopology");
+    assert_eq!(
+        source.positions, original,
+        "guidance edited the sculpt source"
+    );
+    assert_ne!(
+        density_only.edges, plain.edges,
+        "density paint left the edge layout unchanged"
+    );
+}
+
+/// Quantized edge positions and unsigned directions inside the guide's
+/// neighborhood. The comparison ignores vertex numbering and edge ordering.
+fn edge_flow_near(
+    result: &clayspace_model::RetopoResult,
+    guide: [[f32; 3]; 2],
+    radius: f32,
+) -> Vec<[i32; 6]> {
+    let start = guide[0];
+    let along: [f32; 3] = std::array::from_fn(|axis| guide[1][axis] - start[axis]);
+    let length_squared: f32 = along.iter().map(|value| value * value).sum();
+    let mut nearby = Vec::new();
+    for edge in result.edges.chunks_exact(2) {
+        let a = result.positions[edge[0] as usize];
+        let b = result.positions[edge[1] as usize];
+        let midpoint: [f32; 3] = std::array::from_fn(|axis| (a[axis] + b[axis]) * 0.5);
+        let dot: f32 = (0..3)
+            .map(|axis| (midpoint[axis] - start[axis]) * along[axis])
+            .sum();
+        let fraction = (dot / length_squared).clamp(0.0, 1.0);
+        let distance_squared: f32 = (0..3)
+            .map(|axis| (midpoint[axis] - start[axis] - along[axis] * fraction).powi(2))
+            .sum();
+        if distance_squared > radius * radius {
+            continue;
+        }
+        let direction: [f32; 3] = std::array::from_fn(|axis| b[axis] - a[axis]);
+        let length = direction
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
+        if length == 0.0 {
+            continue;
+        }
+        nearby.push([
+            (midpoint[0] * 100.0).round() as i32,
+            (midpoint[1] * 100.0).round() as i32,
+            (midpoint[2] * 100.0).round() as i32,
+            (direction[0].abs() / length * 100.0).round() as i32,
+            (direction[1].abs() / length * 100.0).round() as i32,
+            (direction[2].abs() / length * 100.0).round() as i32,
+        ]);
+    }
+    nearby.sort_unstable();
+    nearby
+}
+
+#[test]
+fn every_sculptable_representation_supplies_temporary_retopology_triangles() {
+    let cases = [
+        (Direction::SdfToVoxel, Representation::Voxel),
+        (Direction::MeshToMultires, Representation::Multires),
+        (Direction::MeshToDynamic, Representation::Dynamic),
+    ];
+    for (direction, expected) in cases {
+        let Some(mut document) = (if expected == Representation::Dynamic {
+            Some(adaptive_fixture::adaptive_sphere())
+        } else if expected == Representation::Voxel {
+            BackendPolicy::discover(None)
+                .ok()
+                .and_then(|policy| ClayDocument::new(policy).ok())
+                .and_then(|document| document.with_starting_form().ok())
+        } else {
+            meshed()
+        }) else {
+            return;
+        };
+        if expected == Representation::Multires {
+            document
+                .retopologise(RetopoSettings {
+                    target_quads: 300,
+                    ..RetopoSettings::default()
+                })
+                .expect("prepare a quad cage for multires");
+        }
+        if expected != Representation::Dynamic {
+            document
+                .convert_layer(direction, 0.05, 0)
+                .expect("convert active sculpt");
+        }
+        assert_eq!(document.active_representation(), expected);
+        let layers_before = document.scene().layers.len();
+        let source = document.retopo_source().expect("temporary source");
+        assert!(!source.positions.is_empty(), "{expected:?}");
+        assert!(!source.indices.is_empty(), "{expected:?}");
+        assert_eq!(document.active_representation(), expected);
+        assert_eq!(document.scene().layers.len(), layers_before);
+    }
+}
+
+#[test]
+fn document_reopen_restores_guides_and_density() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let guidance = clayspace_model::RetopoGuidance {
+        guides: vec![FlowGuide {
+            points: vec![[0.0, 0.0, 1.0], [0.5, 0.0, 0.8]],
+            strength: 0.75,
+            radius: 0.3,
+            mode: FlowGuideMode::Orientation,
+            closed: false,
+        }],
+        density: vec![DensityDab {
+            position: [0.0, 0.0, 1.0],
+            radius: 0.4,
+            multiplier: 2.0,
+        }],
+    };
+    document.set_retopo_guidance(guidance.clone());
+    let path = std::env::temp_dir().join(format!(
+        "clayspace-retopo-guidance-{}.clayspace",
+        std::process::id()
+    ));
+    document.save(&path).expect("save sculpt and guidance");
+    let policy = BackendPolicy::discover(None).expect("backend");
+    let mut reopened = ClayDocument::new(policy).expect("document");
+    reopened.open(&path).expect("reopen sculpt");
+    assert_eq!(reopened.retopo_guidance(), guidance);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_file_name(format!(
+        "{}.retopo",
+        path.file_name().unwrap().to_string_lossy()
+    )));
 }
 
 /// Every method the domain offers is one the engine accepts.

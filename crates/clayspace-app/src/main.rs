@@ -182,6 +182,7 @@ struct GizmoGesture {
 enum Drag {
     None,
     Sculpt,
+    Retopo,
     Orbit,
     Pan,
     /// A ZSphere gesture. The plane it runs on is held alongside.
@@ -375,6 +376,7 @@ struct App {
     cut: clayspace_vm::CutViewModel,
     /// Retopology to quads, which runs off this thread.
     retopo: clayspace_vm::RetopoViewModel,
+    retopo_drag_point: Option<(usize, usize)>,
     /// The UV layout, which runs off this thread as well.
     uv: clayspace_vm::UvViewModel,
     /// Conforming a retopologised mesh onto a field that has moved.
@@ -854,6 +856,7 @@ impl App {
             bake_into: None,
             curve_drag: None,
             curve_draw: None,
+            retopo_drag_point: None,
             last_curve_press: None,
             cage_plane: None,
             marquee: None,
@@ -4174,6 +4177,13 @@ impl App {
                     // follow the pointer from where this one took hold.
                     self.drag_anchor = None;
                 }
+                Drag::Retopo => {
+                    if self.retopo.tool().get().mode == clayspace_model::RetopoEditMode::DrawGuide {
+                        self.apply(Command::EditRetopo(clayspace_vm::RetopoEdit::FinishGuide));
+                    }
+                    self.apply(Command::EditRetopo(clayspace_vm::RetopoEdit::EndGesture));
+                    self.retopo_drag_point = None;
+                }
                 Drag::Rig => {
                     self.armature.release();
                     self.rig_plane = None;
@@ -4227,6 +4237,15 @@ impl App {
             // press said until the next press, so it is read once and does not
             // stand over the session that follows.
             self.objects.clear_notice();
+            if self.retopo.tool().get().mode != clayspace_model::RetopoEditMode::Off
+                && button == egui::PointerButton::Primary
+                && !input.orbit_modifier
+            {
+                self.drag = Drag::Retopo;
+                self.apply(Command::EditRetopo(clayspace_vm::RetopoEdit::BeginGesture));
+                self.retopo_at(point);
+                return;
+            }
             // Rigging takes the primary button first, and only where it lands
             // on a sphere: everywhere else the camera keeps working, so a rig
             // can be turned to look at without leaving the mode.
@@ -4396,6 +4415,11 @@ impl App {
         if self.drag != Drag::None && input.delta != egui::Vec2::ZERO {
             match self.drag {
                 Drag::Sculpt => self.carry_sculpt(input),
+                Drag::Retopo => {
+                    if let Some(point) = input.pointer {
+                        self.retopo_at(point);
+                    }
+                }
                 Drag::Curve => self.carry_curve(input),
                 Drag::Outline => self.carry_outline(input),
                 Drag::Cut => self.carry_cut(input),
@@ -4416,6 +4440,90 @@ impl App {
     fn carry_sculpt(&mut self, input: &ViewportInput) {
         if let Some(point) = input.pointer {
             self.stroke_at(point, false, StrokeModifiers::default());
+        }
+    }
+
+    /// Retopology owns this pointer gesture before the sculpt dispatcher.
+    fn retopo_at(&mut self, point: egui::Pos2) {
+        let Some((position, _)) = self.pick_at(point) else {
+            return;
+        };
+        let tool = *self.retopo.tool().get();
+        match tool.mode {
+            clayspace_model::RetopoEditMode::DrawGuide => {
+                let spaced = self.retopo.guide_draft().get().last().is_none_or(|last| {
+                    last.iter()
+                        .zip(position)
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f32>()
+                        >= (tool.guide_radius * 0.2).powi(2)
+                });
+                if spaced {
+                    self.apply(Command::EditRetopo(
+                        clayspace_vm::RetopoEdit::AddGuidePoint(position),
+                    ));
+                }
+            }
+            clayspace_model::RetopoEditMode::PaintDensity => {
+                let spaced = self
+                    .retopo
+                    .guidance()
+                    .get()
+                    .density
+                    .last()
+                    .is_none_or(|last| {
+                        last.position
+                            .iter()
+                            .zip(position)
+                            .map(|(a, b)| (a - b).powi(2))
+                            .sum::<f32>()
+                            >= (tool.density_radius * 0.25).powi(2)
+                    });
+                if spaced {
+                    self.apply(Command::EditRetopo(clayspace_vm::RetopoEdit::PaintDensity(
+                        position,
+                    )));
+                }
+            }
+            clayspace_model::RetopoEditMode::EditGuide => {
+                if self.retopo_drag_point.is_none() {
+                    let max_distance = tool.guide_radius.powi(2);
+                    self.retopo_drag_point = self
+                        .retopo
+                        .guidance()
+                        .get()
+                        .guides
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(guide, curve)| {
+                            curve
+                                .points
+                                .iter()
+                                .enumerate()
+                                .map(move |(index, point)| (guide, index, *point))
+                        })
+                        .filter_map(|(guide, index, candidate)| {
+                            let squared: f32 = candidate
+                                .iter()
+                                .zip(position)
+                                .map(|(a, b)| (a - b).powi(2))
+                                .sum();
+                            (squared <= max_distance).then_some((guide, index, squared))
+                        })
+                        .min_by(|a, b| a.2.total_cmp(&b.2))
+                        .map(|(guide, index, _)| (guide, index));
+                }
+                if let Some((guide, index)) = self.retopo_drag_point {
+                    self.apply(Command::EditRetopo(
+                        clayspace_vm::RetopoEdit::MoveGuidePoint {
+                            guide,
+                            point: index,
+                            position,
+                        },
+                    ));
+                }
+            }
+            clayspace_model::RetopoEditMode::Off => {}
         }
     }
 
@@ -5155,9 +5263,11 @@ impl App {
             // interface thread, so a busy cursor over it would be a lie about
             // where the work is and a timing around it would measure the
             // dispatch rather than the retopology.
-            Command::SetRetopoSettings(_) | Command::RunRetopology | Command::CancelRetopology => {
-                self.retopo.dispatch(command)
-            }
+            Command::SetRetopoSettings(_)
+            | Command::SetRetopoTool(_)
+            | Command::EditRetopo(_)
+            | Command::RunRetopology
+            | Command::CancelRetopology => self.retopo.dispatch(command),
             Command::SetUvSettings(_) | Command::RunUvAtlas | Command::CancelUvAtlas => {
                 self.uv.dispatch(command)
             }
@@ -5513,6 +5623,9 @@ impl App {
             remesh_outcome: self.remesh_outcome,
             repair_outcome: self.repair_outcome,
             retopo: *self.retopo.settings().get(),
+            retopo_tool: *self.retopo.tool().get(),
+            retopo_guidance: self.retopo.guidance().get(),
+            retopo_draft: self.retopo.guide_draft().get(),
             retopo_outcome: self.retopo.last().get().clone(),
             retopo_unavailable: localized_vm_text(
                 self.strings,
@@ -5828,6 +5941,7 @@ impl App {
                         // one is the press that draws the other.
                         shell::outline_overlay(ui, rect, &state);
                         shell::cut_overlay(ui, rect, &state);
+                        shell::retopo_overlay(ui, rect, &self.camera, &state);
                         // And the transform readout, in the corner, while a
                         // manipulator is pointed at a placed object. Over the
                         // scene for the same reason as the two above: it
@@ -8020,10 +8134,10 @@ mod tests {
         agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
         localized_agent_refusal, localized_agent_remark, localized_tool_status, notices_written,
         refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status,
-        visible_scene_bounds, AgentGesture, App, GizmoGeometryUpdate, ToolStatusSources,
+        visible_scene_bounds, AgentGesture, App, Drag, GizmoGeometryUpdate, ToolStatusSources,
         NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
-    use clayspace_app::SharedDocument;
+    use clayspace_app::{SharedDocument, ViewportInput};
     use clayspace_engine::{BackendPolicy, ClayDocument};
     use clayspace_mcp::{RefusalCode, Session};
     use clayspace_model::{ModelError, OutlineFrame, Representation, SculptLayerOp, Unavailable};
@@ -8105,6 +8219,28 @@ mod tests {
             .and_then(ClayDocument::with_starting_form)
             .expect("starting form");
         App::new(SharedDocument::new(document), policy)
+    }
+
+    #[test]
+    fn retopology_mode_consumes_primary_drag_before_sculpt() {
+        let mut app = app();
+        app.apply(Command::SetRetopoTool(clayspace_model::RetopoToolState {
+            mode: clayspace_model::RetopoEditMode::PaintDensity,
+            ..Default::default()
+        }));
+        app.begin_a_drag(&ViewportInput {
+            pointer: Some(egui::pos2(100.0, 100.0)),
+            over_viewport: true,
+            pressed: Some(egui::PointerButton::Primary),
+            ..Default::default()
+        });
+        assert_eq!(app.drag, Drag::Retopo);
+        assert!(!app.sculpt.is_stroking());
+        app.finish_any_drag(&ViewportInput {
+            released: true,
+            ..Default::default()
+        });
+        assert!(!app.sculpt.is_stroking());
     }
 
     #[test]

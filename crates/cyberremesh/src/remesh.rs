@@ -130,9 +130,28 @@ impl RemeshParams {
 /// than a mesh.
 pub trait Watcher {
     fn progress(&mut self, _fraction: f32, _stage: &str) {}
+    fn warning(&mut self, _message: &str) {}
     fn cancelled(&mut self) -> bool {
         false
     }
+}
+
+/// An ordered surface curve for the engine's guided remesher.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Guide {
+    pub points: Vec<[f32; 3]>,
+    pub strength: f32,
+    pub radius: f32,
+    pub topology: bool,
+    pub closed: bool,
+}
+
+/// Per-run guidance. Density is one value per input vertex; empty means
+/// uniform density. Both vectors are owned until the C call returns.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Guidance {
+    pub guides: Vec<Guide>,
+    pub vertex_density: Vec<f32>,
 }
 
 /// A watcher that neither reports nor cancels.
@@ -169,6 +188,17 @@ pub(crate) unsafe extern "C" fn on_cancel(user: *mut std::ffi::c_void) -> std::o
     i32::from(carrier.cancelled())
 }
 
+// SAFETY: the engine calls this only while `carrier` in `remesh_guided` lives.
+unsafe extern "C" fn on_warning(message: *const std::os::raw::c_char, user: *mut std::ffi::c_void) {
+    let Some(carrier) = (user as *mut &mut dyn Watcher).as_mut() else {
+        return;
+    };
+    if message.is_null() {
+        return;
+    }
+    carrier.warning(&std::ffi::CStr::from_ptr(message).to_string_lossy());
+}
+
 /// Retopologises a triangle mesh to quads.
 pub fn remesh<W: Watcher>(mesh: &Mesh, params: RemeshParams, watcher: &mut W) -> Result<Mesh> {
     let raw_params = params.to_raw();
@@ -197,6 +227,103 @@ pub fn remesh<W: Watcher>(mesh: &Mesh, params: RemeshParams, watcher: &mut W) ->
         "cyber_remesh",
     )?;
     Mesh::from_raw(out, "cyber_remesh")
+}
+
+/// Retopologises with mode-bearing flow curves and painted vertex density.
+pub fn remesh_guided<W: Watcher>(
+    mesh: &Mesh,
+    params: RemeshParams,
+    guidance: &Guidance,
+    watcher: &mut W,
+) -> Result<Mesh> {
+    if guidance.guides.is_empty() && guidance.vertex_density.is_empty() {
+        return remesh(mesh, params, watcher);
+    }
+    if !guidance.vertex_density.is_empty() && guidance.vertex_density.len() != mesh.vertex_count() {
+        return Err(Error::misuse(
+            "cyber_remesh_guided_ex",
+            "density count must match input vertices",
+        ));
+    }
+    if guidance
+        .vertex_density
+        .iter()
+        .any(|value| !value.is_finite() || !(0.25..=4.0).contains(value))
+    {
+        return Err(Error::misuse(
+            "cyber_remesh_guided_ex",
+            "density must be finite and within [0.25, 4]",
+        ));
+    }
+    let points: Vec<Vec<f32>> = guidance
+        .guides
+        .iter()
+        .map(|guide| guide.points.iter().flat_map(|point| *point).collect())
+        .collect();
+    let mut guides = Vec::with_capacity(guidance.guides.len());
+    for (guide, points) in guidance.guides.iter().zip(&points) {
+        if guide.points.len() < 2
+            || points.iter().any(|value| !value.is_finite())
+            || !guide.strength.is_finite()
+            || !(0.0..=1.0).contains(&guide.strength)
+            || !guide.radius.is_finite()
+            || guide.radius <= 0.0
+        {
+            return Err(Error::misuse(
+                "cyber_remesh_guided_ex",
+                "invalid flow guide",
+            ));
+        }
+        guides.push(sys::CyberFlowGuideEx {
+            points: points.as_ptr(),
+            point_count: guide.points.len(),
+            strength: guide.strength,
+            radius: guide.radius,
+            mode: if guide.topology {
+                sys::CYBER_GUIDE_TOPOLOGY as i32
+            } else {
+                sys::CYBER_GUIDE_ORIENTATION as i32
+            },
+            closed: i32::from(guide.closed),
+        });
+    }
+    let raw_guidance = sys::CyberGuidanceEx {
+        guides: if guides.is_empty() {
+            std::ptr::null()
+        } else {
+            guides.as_ptr()
+        },
+        guide_count: guides.len(),
+        vertex_density: if guidance.vertex_density.is_empty() {
+            std::ptr::null()
+        } else {
+            guidance.vertex_density.as_ptr()
+        },
+        vertex_density_count: guidance.vertex_density.len(),
+        face_density: std::ptr::null(),
+        face_density_count: 0,
+    };
+    let mut carrier: &mut dyn Watcher = watcher;
+    let user = &mut carrier as *mut &mut dyn Watcher as *mut std::ffi::c_void;
+    let mut out = std::ptr::null_mut();
+    check(
+        // SAFETY: all arrays and callbacks live through this synchronous call;
+        // the engine only reads the guidance and writes the out-parameter.
+        unsafe {
+            sys::cyber_remesh_guided_ex(
+                mesh.as_ptr(),
+                &params.to_raw(),
+                &raw_guidance,
+                Some(on_progress),
+                Some(on_cancel),
+                Some(on_warning),
+                user,
+                &mut out,
+            )
+        },
+        "cyber_remesh_guided_ex",
+    )?;
+    Mesh::from_raw(out, "cyber_remesh_guided_ex")
 }
 
 /// Whether a status is the engine's "the caller stopped it".

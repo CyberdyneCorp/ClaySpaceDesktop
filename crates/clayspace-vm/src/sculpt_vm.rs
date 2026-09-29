@@ -511,6 +511,8 @@ impl SculptViewModel {
             // Retopology belongs to its own ViewModel, which owns the job that
             // runs it off this thread. Nothing here reads or changes.
             | Command::SetRetopoSettings(_)
+            | Command::SetRetopoTool(_)
+            | Command::EditRetopo(_)
             | Command::RunRetopology
             | Command::CancelRetopology
             | Command::SetUvSettings(_)

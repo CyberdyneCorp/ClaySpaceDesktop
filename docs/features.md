@@ -2915,7 +2915,7 @@ a second engine with its own `-sys` crate and safe wrapper. Neither engine knows
 the other's types — both state that as a rule about themselves — so this
 application is the only place the correspondence exists.
 
-**Retopologise to quads** rebuilds a mesh subtool's topology as quads with edge
+**Retopologise to quads** rebuilds an active sculptable subtool's topology as quads with edge
 loops. Five methods, from the engine's own list: **QuadCover** (its default,
 QuadCover seamless-UV isoline extraction), **ZRemesher** (the same field, solve
 and extraction plus an explicit topology-layout stage, which makes where the
@@ -2927,13 +2927,21 @@ surface until no triangles remain.
 **The result is a new fixed-mesh subtool**, named after its source with
 ` · quads`, standing where the source stands, in one undo entry — and the
 sculpt it was made from is left exactly as it was. That is the production
-crossing's shape: SDF, voxel or hierarchy crosses to a mesh, the mesh is
-retopologised, and the fixed mesh is the layer a hierarchy, a layout and a bake
-are built on. A field or a grid is crossed to a mesh first, explicitly, through
-the conversion panel; retopology refuses a subtool that is not a mesh rather
-than crossing it silently. Undo takes the new subtool away whole.
+crossing's shape: SDF, voxel, multires, dynamic and fixed mesh surfaces are
+temporarily triangulated for the remesher. The source representation stays as
+it was, and the fixed mesh is the layer a hierarchy, a layout and a bake are
+built on. Undo takes the new subtool away whole.
 
-*Substituir a origem* rebuilds the source subtool itself instead, which is what
+**Guided retopology** stores flow curves and density dabs as retopology data,
+separate from sculpt strokes and mask attributes. The retopology panel selects
+draw, edit or density mode; a primary drag then belongs to that mode and cannot
+sculpt. Curves have editable control points, orientation or topology mode,
+strength and radius. Density painting changes the target density sampled on
+the next retopology run. Light curves and warm accent dabs appear as a viewport overlay.
+Guidance is saved in a versioned `.clayspace.retopo` companion file and restored
+when the sculpt is reopened. A missing companion file means no guidance.
+
+*Substituir a origem* rebuilds a **mesh** source subtool itself instead, which is what
 ZBrush's ZRemesher, its Dynamesh and *Refazer a malha* here do; then one undo is
 the comparison. It is offered, not defaulted: a sculpt replaced by its
 retopology is detail that comes back only through the history.

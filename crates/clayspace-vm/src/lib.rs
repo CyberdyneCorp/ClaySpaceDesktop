@@ -33,7 +33,7 @@ mod uv_vm;
 pub use agent_vm::{AgentAnswer, AgentAsk, AgentGate, AgentViewModel, Door};
 pub use bake_vm::{BakeViewModel, Snapshotter};
 pub use banked::Unbanked;
-pub use command::{Axis, CageFate, Command, CommandQueue};
+pub use command::{Axis, CageFate, Command, CommandQueue, RetopoEdit};
 pub use conform_vm::ConformViewModel;
 pub use history_vm::HistoryViewModel;
 pub use jobs::{Completion, Generation, JobRunner, Outcome, Progress, Reporter};
