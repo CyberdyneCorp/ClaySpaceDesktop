@@ -314,6 +314,11 @@ pub struct SurfaceGeometry {
     over_budget: bool,
     /// Which keys changed since the last upload, so only those are written.
     touched: std::collections::HashSet<BrickKey>,
+    /// Keys replaced since the last release. Upload drains `touched` each
+    /// frame, but release still needs this set to prune their shared seams.
+    release_keys: std::collections::HashSet<BrickKey>,
+    /// Whether retained vertices may carry nonzero mask weights.
+    mask_drawn: bool,
     /// Where each key's geometry sits in the GPU buffers.
     layout: SlotMap,
     /// Set when the layout cannot be patched and must be laid out afresh.
@@ -430,6 +435,8 @@ impl SurfaceGeometry {
             mesh: GpuMesh::new(gpu),
             dirty: false,
             touched: std::collections::HashSet::new(),
+            release_keys: std::collections::HashSet::new(),
+            mask_drawn: false,
             layout: SlotMap::default(),
             relayout: true,
             bounds: None,
@@ -491,7 +498,8 @@ impl SurfaceGeometry {
         // for a single dab — when a dab's duplicates live in the few keys its
         // separate requests shared. The full layout stays the fallback for a
         // layout that can no longer take a patch.
-        let changed = compact_release_geometry(&mut self.keys);
+        let changed = compact_release_geometry_near(&mut self.keys, &self.release_keys);
+        self.release_keys.clear();
         let prune_time = started.elapsed();
         if !changed.is_empty() {
             self.touched.extend(changed);
@@ -842,6 +850,9 @@ impl SurfaceGeometry {
         let mut remap = VertexRemap::new(vertices.len());
         for key in &to_replace {
             self.touched.insert(*key);
+            if lod == 0 {
+                self.release_keys.insert(*key);
+            }
             let triangles = slot_of
                 .get(key)
                 .map(|&slot| owned[slot].as_slice())
@@ -860,6 +871,7 @@ impl SurfaceGeometry {
         // rather than patched: the next preview stores them again from what is
         // there now.
         self.cage_rest.clear();
+        self.mask_drawn |= document.has_mask();
         self.dirty = true;
         self.needs_settle = needs_settle;
         self.document_gradients = document_gradients;
@@ -1260,9 +1272,32 @@ impl SurfaceGeometry {
     /// was never there used to rewrite the whole layer, 1.78 MB, to write
     /// zeroes over zeroes.
     pub fn refresh_mask(&mut self, gpu: &Gpu, document: &ClayDocument) {
+        self.refresh_mask_in(gpu, document, None);
+    }
+
+    /// Refresh only bricks intersecting a bounded mask stroke. Whole-mask
+    /// operations and history steps pass `None`.
+    pub fn refresh_mask_in(
+        &mut self,
+        gpu: &Gpu,
+        document: &ClayDocument,
+        region: Option<([f32; 3], [f32; 3])>,
+    ) {
         let masked = document.has_mask();
+        if !masked && !self.mask_drawn {
+            return;
+        }
         for (key, geometry) in self.keys.iter_mut() {
             if geometry.vertices.is_empty() {
+                continue;
+            }
+            if region.is_some_and(|region| {
+                Vertex::bounds(&geometry.vertices).is_none_or(|bounds| {
+                    (0..3).any(|axis| {
+                        bounds.1[axis] < region.0[axis] || bounds.0[axis] > region.1[axis]
+                    })
+                })
+            }) {
                 continue;
             }
             let moved = if masked {
@@ -1274,6 +1309,7 @@ impl SurfaceGeometry {
                 self.touched.insert(*key);
             }
         }
+        self.mask_drawn = masked;
         if self.touched.is_empty() {
             return;
         }
@@ -1457,6 +1493,7 @@ impl SurfaceGeometry {
         let (keys, lod, shading) = self.level_for(document, detail)?;
         self.keys.clear();
         self.touched.clear();
+        self.release_keys.clear();
         // The spans described geometry that has just been discarded, so the
         // layout cannot be patched onto what replaces it.
         self.relayout = true;
@@ -1473,11 +1510,13 @@ impl SurfaceGeometry {
             self.last_upload = started.elapsed();
             self.layout = SlotMap::default();
             self.needs_settle = false;
+            self.release_keys.clear();
             document.take_dirty_keys();
             return Ok(());
         }
         self.remesh(document, &keys, None, shading, lod)?;
         self.upload(gpu);
+        self.release_keys.clear();
         document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
         // Drained, because everything it could name has just been meshed.
         //
@@ -1637,6 +1676,45 @@ fn compact_release_geometry(geometries: &mut HashMap<BrickKey, KeyGeometry>) -> 
         geometry.vertices.shrink_to_fit();
         geometry.indices.shrink_to_fit();
     }
+    changed
+}
+
+/// Compact the edited bricks and the bricks sharing their boundary. A partial
+/// mesh can attribute a boundary triangle to either requested key, so those
+/// neighbours are the only retained geometry that can duplicate a new key.
+/// Looking them up by key avoids hashing every triangle in the layer on each
+/// pointer release.
+fn compact_release_geometry_near(
+    geometries: &mut HashMap<BrickKey, KeyGeometry>,
+    edited: &std::collections::HashSet<BrickKey>,
+) -> Vec<BrickKey> {
+    if edited.is_empty() {
+        return Vec::new();
+    }
+    let mut nearby = std::collections::HashSet::with_capacity(edited.len() * 27);
+    for key in edited {
+        for x in -1i32..=1 {
+            for y in -1i32..=1 {
+                for z in -1i32..=1 {
+                    if let (Some(a), Some(b), Some(c)) = (
+                        key[0].checked_add(x),
+                        key[1].checked_add(y),
+                        key[2].checked_add(z),
+                    ) {
+                        nearby.insert([a, b, c]);
+                    }
+                }
+            }
+        }
+    }
+    let mut candidates = HashMap::with_capacity(nearby.len());
+    for key in nearby {
+        if let Some(geometry) = geometries.remove(&key) {
+            candidates.insert(key, geometry);
+        }
+    }
+    let changed = compact_release_geometry(&mut candidates);
+    geometries.extend(candidates);
     changed
 }
 
@@ -2555,6 +2633,24 @@ mod tests {
             [0, 1, 2],
             "preserve winding while remapping references"
         );
+    }
+
+    #[test]
+    fn release_compaction_prunes_only_edited_keys_and_their_neighbours() {
+        let duplicate = triangle([0.0, 0.0, 1.0]);
+        let remote = triangle([0.0, 1.0, 0.0]);
+        let mut keys = HashMap::from([
+            ([0, 0, 0], duplicate.clone()),
+            ([1, 0, 0], duplicate),
+            ([100, 0, 0], remote),
+        ]);
+        let remote_before = geometry_bits(&keys[&[100, 0, 0]]);
+        let edited = std::collections::HashSet::from([[1, 0, 0]]);
+        let changed = super::compact_release_geometry_near(&mut keys, &edited);
+        assert!(changed.contains(&[1, 0, 0]));
+        assert!(!keys.contains_key(&[1, 0, 0]), "the duplicate survived");
+        assert_eq!(geometry_bits(&keys[&[100, 0, 0]]), remote_before);
+        assert!(!changed.contains(&[100, 0, 0]));
     }
 
     #[test]

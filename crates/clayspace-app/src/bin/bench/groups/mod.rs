@@ -21,6 +21,7 @@ pub mod normals;
 pub mod objects;
 pub mod operations;
 pub mod render;
+pub mod settle;
 pub mod startup;
 pub mod subtool;
 pub mod tape;

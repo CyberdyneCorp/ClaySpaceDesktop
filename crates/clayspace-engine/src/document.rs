@@ -1284,6 +1284,11 @@ impl RefillBudget {
     }
 }
 
+enum MaskRefreshScope {
+    Full,
+    Region(Bounds),
+}
+
 pub struct ClayDocument {
     // -- what must go before the document ------------------------------------
     //
@@ -1485,6 +1490,9 @@ pub struct ClayDocument {
     /// counter is what lets the frozen region be shown without re-sampling
     /// every vertex on every frame.
     mask_revision: u64,
+    /// Pending viewport mask refresh: a bounded stroke, or the full surface
+    /// for operations such as invert, undo, and layer selection.
+    mask_refresh: Option<MaskRefreshScope>,
     /// The document's own history order, which nothing ever lowers.
     ///
     /// **This replaced the engine's undo depth**, which every ordering
@@ -1799,6 +1807,7 @@ impl ClayDocument {
             voxel_smooth: std::collections::BTreeMap::new(),
             cage_revision: 0,
             mask_revision: 0,
+            mask_refresh: Some(MaskRefreshScope::Full),
             next_key: 2,
             skin_undo: Vec::new(),
             skin_redo: Vec::new(),
@@ -5935,6 +5944,21 @@ impl ClayDocument {
         brush: BrushSettings,
         samples: &[GestureSample],
     ) -> Result<EditOutcome, ModelError> {
+        // Keep the dirty region in displayed world coordinates. The mask is
+        // sampled there after placement, and interpolation reaches beyond its
+        // painted cells by at most a cell on either side.
+        let reach = brush.sanitized().size + Self::VOXEL_SIZE * 2.0;
+        let dirty_bounds = samples.first().map(|first| {
+            let mut min = first.position.map(|v| v - reach);
+            let mut max = first.position.map(|v| v + reach);
+            for sample in &samples[1..] {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(sample.position[axis] - reach);
+                    max[axis] = max[axis].max(sample.position[axis] + reach);
+                }
+            }
+            (min, max)
+        });
         // In the layer's own frame, as a sculpting stroke is, because that is
         // the frame every consumer of this mask actually reads it in.
         //
@@ -5996,7 +6020,11 @@ impl ClayDocument {
         // because it draws the frozen region — and a surface that has not
         // moved reports no dirty brick, so the mask carries its own counter.
         if painted > 0 {
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            if let Some(bounds) = dirty_bounds {
+                self.mark_mask_region(bounds);
+            } else {
+                self.mark_mask_full();
+            }
         }
         Ok(EditOutcome {
             changed: painted > 0,
@@ -8347,6 +8375,35 @@ impl ClayDocument {
         self.mask_revision
     }
 
+    /// The region changed since the last viewport refresh. `None` means a
+    /// whole-surface change, including the initial draw and history steps.
+    pub fn take_mask_dirty_bounds(&mut self) -> Option<([f32; 3], [f32; 3])> {
+        match self.mask_refresh.take() {
+            Some(MaskRefreshScope::Region(bounds)) => Some(bounds),
+            _ => None,
+        }
+    }
+
+    fn mark_mask_full(&mut self) {
+        self.mask_revision = self.mask_revision.wrapping_add(1);
+        self.mask_refresh = Some(MaskRefreshScope::Full);
+    }
+
+    fn mark_mask_region(&mut self, bounds: ([f32; 3], [f32; 3])) {
+        self.mask_revision = self.mask_revision.wrapping_add(1);
+        self.mask_refresh = match self.mask_refresh.take() {
+            Some(MaskRefreshScope::Full) => Some(MaskRefreshScope::Full),
+            Some(MaskRefreshScope::Region((mut min, mut max))) => {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(bounds.0[axis]);
+                    max[axis] = max[axis].max(bounds.1[axis]);
+                }
+                Some(MaskRefreshScope::Region((min, max)))
+            }
+            None => Some(MaskRefreshScope::Region(bounds)),
+        };
+    }
+
     /// Whether the active layer has anything masked.
     ///
     /// What [`Self::mask_at`] checks before sampling, for a caller that would
@@ -9009,7 +9066,7 @@ impl ClayDocument {
     /// where it is not.
     fn mask_may_have_moved(&mut self, stepped: bool) {
         if stepped {
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            self.mark_mask_full();
         }
     }
 
@@ -11432,7 +11489,7 @@ impl SceneModel for ClayDocument {
         // different picture, so the viewport is told to look again. Nothing in
         // the surface moved, which is exactly why the mask carries a counter
         // of its own.
-        self.mask_revision = self.mask_revision.wrapping_add(1);
+        self.mark_mask_full();
         self.arm_mesh_sculptor();
         Ok(())
     }
@@ -13079,6 +13136,7 @@ impl ClayDocument {
             voxel_smooth: std::collections::BTreeMap::new(),
             cage_revision: 0,
             mask_revision: 0,
+            mask_refresh: Some(MaskRefreshScope::Full),
             combine: CombineSettings::for_strokes(),
             colour: clayspace_model::ColourState::default(),
             smooth_mode: clayspace_model::SmoothFrequency::default(),
@@ -14715,15 +14773,9 @@ impl MaskModel for ClayDocument {
             if let Some(mut mask) = self.document.layer_mask_mut(layer) {
                 mask.clear().map_err(ModelError::engine)?;
             }
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            self.mark_mask_full();
             return Ok(());
         }
-        // Bumped before the operation, and whatever it turns out to do: every
-        // one of them changes what is frozen, and a viewport that missed one
-        // would keep drawing the mask as it was. A redundant re-sample costs a
-        // buffer write; a missed one is a lie on the screen.
-        self.mask_revision = self.mask_revision.wrapping_add(1);
-
         // Refused where nothing is frozen, which is the same refusal as before
         // and now has to be spelled out: a document-owned mask stays attached
         // once it exists, so "carries a mask" and "freezes something" are no
@@ -14736,7 +14788,7 @@ impl MaskModel for ClayDocument {
             return Err(ModelError::engine("não há máscara para editar"));
         };
 
-        match op {
+        let result = match op {
             MaskOp::Invert => mask.invert().map_err(ModelError::engine),
             MaskOp::Expand(steps) => mask.expand(steps.max(1)).map_err(ModelError::engine),
             MaskOp::Contract(steps) => mask.contract(steps.max(1)).map_err(ModelError::engine),
@@ -14758,7 +14810,11 @@ impl MaskModel for ClayDocument {
                 mask.invert_within(low, high).map_err(ModelError::engine)
             }
             MaskOp::Clear => unreachable!("handled above"),
+        };
+        if result.is_ok() {
+            self.mark_mask_full();
         }
+        result
     }
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
@@ -14902,7 +14958,7 @@ impl MaskModel for ClayDocument {
         // As a mask stroke does: nothing in the surface moved, so no brick is
         // dirty and the viewport would keep drawing the region as it was.
         if painted > 0 {
-            self.mask_revision = self.mask_revision.wrapping_add(1);
+            self.mark_mask_full();
         }
         Ok(())
     }

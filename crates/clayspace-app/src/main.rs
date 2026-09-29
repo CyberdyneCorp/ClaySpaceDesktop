@@ -2564,8 +2564,10 @@ impl App {
                 return;
             };
             let gpu = graphics.gpu.clone();
-            app.document
-                .with(|document| graphics.geometry.refresh_mask(&gpu, document));
+            app.document.with(|document| {
+                let region = document.take_mask_dirty_bounds();
+                graphics.geometry.refresh_mask_in(&gpu, document, region);
+            });
         });
     }
 

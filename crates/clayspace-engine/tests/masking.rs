@@ -463,6 +463,37 @@ fn the_mask_revision_moves_whenever_the_mask_does() {
 }
 
 #[test]
+fn mask_strokes_report_a_bounded_refresh_and_operations_report_full() {
+    let mut document = document();
+    assert_eq!(
+        document.take_mask_dirty_bounds(),
+        None,
+        "initial draw is full"
+    );
+    freeze(&mut document, [1.0, 0.0, 0.0]);
+    let (min, max) = document.take_mask_dirty_bounds().expect("stroke bounds");
+    assert!(min[0] < 1.0 && max[0] > 1.0);
+    assert!(max[0] < 2.0, "a small stroke dirtied the whole form");
+    freeze(&mut document, [-1.0, 0.0, 0.0]);
+    freeze(&mut document, [1.0, 0.0, 0.0]);
+    let (min, max) = document
+        .take_mask_dirty_bounds()
+        .expect("two strokes before a frame are both pending");
+    assert!(min[0] < -1.0 && max[0] > 1.0);
+    document.apply_mask_op(MaskOp::Invert).expect("invert");
+    assert_eq!(document.take_mask_dirty_bounds(), None, "invert is full");
+}
+
+#[test]
+fn a_refused_mask_operation_does_not_schedule_a_refresh() {
+    let mut document = document();
+    document.take_mask_dirty_bounds();
+    let revision = document.mask_revision();
+    assert!(document.apply_mask_op(MaskOp::Invert).is_err());
+    assert_eq!(document.mask_revision(), revision);
+}
+
+#[test]
 fn a_surface_stroke_leaves_the_mask_revision_alone() {
     // The other half: the counter drives a re-sample of every drawn vertex, so
     // a number that moved on every dab would pay that cost on every dab.
