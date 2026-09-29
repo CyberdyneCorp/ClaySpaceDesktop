@@ -56,6 +56,11 @@
 //! runners have varied through near parity. Only a large win triggers a new
 //! policy review; the floor stays off by default until repeatable measurements
 //! justify enabling it.
+//!
+//! What a collapse could still be credited with is recorded apart in
+//! `tests/undo_series.rs`. Over twenty edits the bricks an undo re-meshes are
+//! flat (126 to 144), and the undo's 2.0–2.3x growth is all the price of one
+//! brick over a longer chain. That price is the one a baked patch raises.
 
 use std::collections::HashMap;
 use std::time::Duration;
