@@ -3,6 +3,8 @@ The object ViewModel knows the active representation at `BeginGizmoDrag`. For a 
 
 On release, the app clears the renderer preview, while the ViewModel writes the final transform once and the app settles the SDF surface. This keeps the field authoritative and the existing drag history grouping intact.
 
+Any unrelated command while a gizmo gesture is open ends that gesture first, then changes selection or mode. The object ViewModel does the same for direct dispatch and retains the gesture's original target for its final edit. `EndGizmoDrag` always clears the renderer preview, including when the final model edit is refused or the current selection has changed.
+
 A combined multi-layer SDF cannot be transformed as one picture without also moving stationary layers. This path retains only the pending manipulator and releases to the exact combined field. A future upstream layer placement preview cache could improve that case.
 
 ## Measurement

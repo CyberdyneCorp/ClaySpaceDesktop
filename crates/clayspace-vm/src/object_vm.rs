@@ -127,12 +127,12 @@ pub struct ObjectViewModel {
     /// Whether the last frame overran, so the rest of this gesture is drawn
     /// rather than evaluated.
     settling: bool,
-    /// The gesture in flight, and where the target stood when it began.
+    /// The gesture in flight, its original target, and where it stood.
     ///
     /// The transform is captured at the press so every frame resolves from it,
     /// which is what makes a wandering drag land where it settles rather than
     /// accumulating.
-    drag: Option<(GizmoDrag, Transform)>,
+    drag: Option<(GizmoDrag, GizmoTarget, Transform)>,
     /// Where the document's history stood when the drag in flight began.
     ///
     /// A drag is one thing the sculptor did — press to release — however many
@@ -417,7 +417,7 @@ impl ObjectViewModel {
 
     /// The retained surface can follow this drag while the SDF waits for release.
     pub fn preview_transform(&self) -> Option<(Transform, Transform)> {
-        let (_, started) = self.drag?;
+        let (_, _, started) = self.drag?;
         Some((started, self.pending?))
     }
 
@@ -480,6 +480,12 @@ impl ObjectViewModel {
     }
 
     pub fn dispatch(&mut self, command: &Command, representation: Representation) {
+        // Target and mode changes must finish the gesture against its original
+        // target. Otherwise a pending layer move can land on the next target.
+        if self.drag.is_some() && !matches!(command, Command::DragGizmo(..) | Command::EndGizmoDrag)
+        {
+            self.end();
+        }
         match command {
             Command::ToggleShapes => {
                 let open = !*self.picking.get();
@@ -768,12 +774,13 @@ impl ObjectViewModel {
                 anchor,
                 view_axis,
             },
+            target,
             at,
         ));
     }
 
     fn drag_to(&mut self, to: [f32; 3], snap: bool) {
-        let (Some(target), Some((gesture, started))) = (*self.target.get(), self.drag) else {
+        let Some((gesture, target, started)) = self.drag else {
             return;
         };
         let moved = gesture.resolve(started, to, snap);
@@ -799,7 +806,7 @@ impl ObjectViewModel {
     }
 
     fn end(&mut self) {
-        let target = *self.target.get();
+        let target = self.drag.map(|(_, target, _)| target);
         // What the hand asked for, applied once now that it has stopped.
         if let (Some(target), Some(pending)) = (target, self.pending.take()) {
             self.edit(|model| model.set_target_transform(target, pending));

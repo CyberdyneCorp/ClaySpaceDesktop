@@ -233,6 +233,12 @@ fn gizmo_geometry_update(
     }
 }
 
+/// An unrelated command closes a live gizmo gesture before it can change its
+/// target or mode and leave a surface preview attached to the old selection.
+fn interrupts_gizmo_drag(command: &Command) -> bool {
+    !matches!(command, Command::DragGizmo(..) | Command::EndGizmoDrag)
+}
+
 /// A vector's direction and its length, or `None` where it has neither.
 fn unit(v: [f32; 3]) -> Option<([f32; 3], f32)> {
     let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -5075,6 +5081,13 @@ impl App {
     /// has to be looked at again is settled last. Run in another order, a
     /// panel refreshes against a document the command has not reached yet.
     fn apply_now(&mut self, command: Command) {
+        if self.objects.is_dragging() && interrupts_gizmo_drag(&command) {
+            self.apply_now(Command::EndGizmoDrag);
+            if self.drag == Drag::Gizmo {
+                self.drag = Drag::None;
+                self.gizmo_drag = None;
+            }
+        }
         // A rig owns the same X mirror the sculptor normally uses, but it
         // authors the reflected ZSphere itself rather than asking the field
         // to duplicate a stroke. Keep that one control in the top bar and do
@@ -5292,6 +5305,13 @@ impl App {
         // the drawn form. A single visible SDF layer follows the hand in the
         // vertex shader; other SDF compositions wait for the final settle.
         // The document is marked unsaved once, when the gesture ends.
+        // Release always drops the GPU preview, even when the target changed
+        // before this command reached the viewport or the final edit failed.
+        if matches!(command, Command::EndGizmoDrag) {
+            if let Some(graphics) = self.graphics.as_mut() {
+                graphics.renderer.set_surface_preview(None);
+            }
+        }
         match gizmo_geometry_update(
             command,
             self.manipulating_the_clay(),
@@ -5303,9 +5323,6 @@ impl App {
                 self.sync_geometry();
             }
             GizmoGeometryUpdate::Settle => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.renderer.set_surface_preview(None);
-                }
                 self.settle_geometry();
             }
         }
@@ -8045,15 +8062,17 @@ mod double_press {
 mod tests {
     use super::{
         agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
-        localized_agent_refusal, localized_agent_remark, localized_tool_status, notices_written,
-        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status,
-        visible_scene_bounds, AgentGesture, App, GizmoGeometryUpdate, ToolStatusSources,
-        NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
+        interrupts_gizmo_drag, localized_agent_refusal, localized_agent_remark,
+        localized_tool_status, notices_written, refusal_for, remark_for_an_agent,
+        stroke_needs_a_gesture, tool_status, visible_scene_bounds, AgentGesture, App,
+        GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_app::SharedDocument;
     use clayspace_engine::{BackendPolicy, ClayDocument};
     use clayspace_mcp::{RefusalCode, Session};
-    use clayspace_model::{ModelError, OutlineFrame, Representation, SculptLayerOp, Unavailable};
+    use clayspace_model::{
+        GizmoMode, ModelError, OutlineFrame, Representation, SculptLayerOp, Unavailable,
+    };
     use clayspace_vm::Command;
 
     #[test]
@@ -8679,6 +8698,19 @@ mod tests {
             ),
             GizmoGeometryUpdate::Preview
         );
+    }
+
+    #[test]
+    fn changing_selection_closes_a_gizmo_preview_first() {
+        assert!(interrupts_gizmo_drag(&Command::SetGizmoTarget(None)));
+        assert!(interrupts_gizmo_drag(&Command::SetGizmoMode(
+            GizmoMode::Rotate
+        )));
+        assert!(!interrupts_gizmo_drag(&Command::DragGizmo(
+            [1.0, 0.0, 0.0],
+            false
+        )));
+        assert!(!interrupts_gizmo_drag(&Command::EndGizmoDrag));
     }
 
     #[test]

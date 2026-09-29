@@ -11,3 +11,8 @@ When a whole SDF subtool is dragged, the application SHALL defer field evaluatio
 #### Scenario: Other layers are visible
 - **WHEN** the sculptor drags a whole SDF layer among other visible layers
 - **THEN** the manipulator follows the pointer while the composite surface waits for the final evaluation, leaving the other layers visually fixed
+
+#### Scenario: The drag is interrupted or the final edit is refused
+- **WHEN** a selection or mode command interrupts a pending drag, or the release edit fails
+- **THEN** the renderer clears the preview before another command draws the scene
+- **AND** an interrupted drag commits to its original target before the new target is selected
