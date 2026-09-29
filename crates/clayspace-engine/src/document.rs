@@ -959,14 +959,33 @@ enum GestureRecord {
     /// take at level 4 over a 16×16 cage, and 8.15 ms to put back. The bytes
     /// are what [`crate::multires::HISTORY_BYTES`] bounds.
     Hierarchy(Vec<u8>),
-    /// An adaptive gesture, taken back by putting the surface's serialized
-    /// state back.
+    /// An adaptive gesture: the engine's reversible topology delta on a
+    /// closed surface, the surface's bytes on one with an open boundary. See
+    /// [`crate::adaptive`] for why the two.
     ///
-    /// A bounded snapshot rather than the engine's reversible topology delta,
-    /// which this application does not carry yet. Exact all the same — a
-    /// restore brings connectivity, positions and attributes back together —
-    /// and bounded by the same byte budget as a hierarchy's.
-    Adaptive(Vec<u8>),
+    /// The delta is *symmetric*, as `MeshDeltas` is: the same record reverts
+    /// and re-applies, so it travels between the stacks unchanged. A replay
+    /// is bit-exact over what `to_mesh` exports, so a redo lays down the same
+    /// connectivity rather than an equivalent one, and undo-redo cycles
+    /// converge. Replay is last in, first out, which the ordered stack
+    /// already is, and the engine refuses an out-of-order or foreign record
+    /// before writing anything. Either kind is weighed against the same
+    /// budget as a hierarchy's — see [`crate::adaptive::Record::weight`].
+    Adaptive(crate::adaptive::Record),
+}
+
+impl GestureRecord {
+    /// What the record holds against the history budget, in bytes.
+    ///
+    /// A mesh's is not counted: it is bounded by the vertices a gesture
+    /// reached and has never been what fills the budget.
+    fn weight(&self) -> usize {
+        match self {
+            Self::Hierarchy(bytes) => bytes.len(),
+            Self::Adaptive(record) => record.weight(),
+            Self::Deltas(_) => 0,
+        }
+    }
 }
 
 /// One crossing, and the layer whose presence in the scene follows it.
@@ -6835,10 +6854,14 @@ impl ClayDocument {
     /// gathers its region at the first stamp and *maintains* it across the
     /// remesh; a lone stamp would re-gather over triangles it just split.
     ///
-    /// **The record** is the surface's bytes before the gesture, taken once on
-    /// the first segment, for the hierarchy's reason: they are what a dragging
-    /// verb is laid down again from and what the gesture enters the undo
-    /// history as. See [`GestureRecord::Adaptive`].
+    /// **The record** is opened on the first segment and every segment and
+    /// every mirror lands in it, so the gesture is one undo step whatever it
+    /// did to the topology: on a closed surface the engine's reversible
+    /// topology delta, captured through
+    /// `clay_dynamic_sculptor_apply_stroke_recorded`; on an open one the
+    /// surface's bytes before the gesture. A dragging verb is taken back by it
+    /// before it is laid down again from its anchor. See
+    /// [`GestureRecord::Adaptive`].
     fn stroke_dynamic(
         &mut self,
         tool: ToolKind,
@@ -6921,7 +6944,6 @@ impl ClayDocument {
         if tool.is_path_driven() && adaptive.gesture_is_open() {
             adaptive.replay_from_the_anchor()?;
         }
-        adaptive.open_gesture()?;
         let CarriedStroke {
             preset,
             stamp,
@@ -6930,42 +6952,30 @@ impl ClayDocument {
         } = stroke;
         let mask = self.active_mask();
         let topology = crate::adaptive::Adaptive::topology();
-        let mut sculptor = adaptive
-            .surface_mut()
-            .sculptor()
-            .map_err(ModelError::engine)?;
-        let mut changed = false;
-        for mirror in mirrors(symmetry) {
-            let path: Vec<[f32; 5]> = points
-                .iter()
-                .map(|sample| {
-                    let at = mirror.point([sample[0], sample[1], sample[2]]);
-                    [at[0], at[1], at[2], sample[3], sample[4]]
-                })
-                .collect();
-            let (applied, _) = sculptor
-                .apply_stroke(
-                    &path,
-                    &preset,
-                    claycore::MeshStamp {
-                        verb,
-                        direction: mirror.vector(stamp.direction),
-                        center: mirror.point(stamp.center),
-                        // A seed names a numbering the adaptive surface does
-                        // not share: its vertices are created and retired by
-                        // the remesh.
-                        seed: None,
-                        ..stamp
-                    },
-                    Some(&topology),
-                    mask.as_deref(),
-                )
-                .map_err(ModelError::engine)?;
-            changed |= applied > 0;
-        }
-        drop(sculptor);
-        adaptive.note_gesture_changed(changed);
-        Ok(changed)
+        let passes: Vec<crate::adaptive::Pass<'_>> = mirrors(symmetry)
+            .into_iter()
+            .map(|mirror| {
+                let path = points
+                    .iter()
+                    .map(|sample| {
+                        let at = mirror.point([sample[0], sample[1], sample[2]]);
+                        [at[0], at[1], at[2], sample[3], sample[4]]
+                    })
+                    .collect();
+                let stamp = claycore::MeshStamp {
+                    verb,
+                    direction: mirror.vector(stamp.direction),
+                    center: mirror.point(stamp.center),
+                    // A seed names a numbering the adaptive surface does not
+                    // share: its vertices are created and retired by the
+                    // remesh.
+                    seed: None,
+                    ..stamp
+                };
+                (path, stamp)
+            })
+            .collect();
+        adaptive.stroke(&passes, &preset, &topology, mask.as_deref())
     }
 
     /// The engine half of [`ClayDocument::stroke_multires`], with the
@@ -7399,13 +7409,13 @@ impl ClayDocument {
         let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
             return;
         };
-        let Some(bytes) = adaptive.close_gesture() else {
+        let Some(record) = adaptive.close_gesture() else {
             return;
         };
         let stamp = self.stamp_history();
         self.mesh_undo.push(MeshGesture {
             layer: key,
-            what: GestureRecord::Adaptive(bytes),
+            what: GestureRecord::Adaptive(record),
             stamp,
         });
         self.mesh_redo.clear();
@@ -9495,9 +9505,10 @@ impl ClayDocument {
     /// there is nothing to put back, and dropping the record is the whole of
     /// the answer.
     ///
-    /// The two representations differ in what "the other stack's record" is,
+    /// The representations differ in what "the other stack's record" is,
     /// and it is worth naming. A `MeshDeltas` is *symmetric* — the same record
-    /// reverts and re-applies — so it travels unchanged. A hierarchy's record
+    /// reverts and re-applies — so it travels unchanged, as an adaptive
+    /// surface's topology delta does. A hierarchy's record
     /// is one **state**, so the record that goes the other way has to be the
     /// state this step is leaving: it is taken here, on the way past, which is
     /// why one blob is held per step rather than a before and an after.
@@ -9540,16 +9551,17 @@ impl ClayDocument {
                 self.refresh_multires_bounds(layer);
                 GestureRecord::Hierarchy(leaving)
             }
-            // The same one-state record, for the same reason: what goes the
-            // other way is the surface this step leaves, connectivity and all.
-            GestureRecord::Adaptive(bytes) => {
+            GestureRecord::Adaptive(record) => {
                 let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
                     return Ok(None);
                 };
-                let leaving = adaptive.bytes(0)?;
-                adaptive.restore(&bytes)?;
+                let way = match step {
+                    Step::Back => crate::adaptive::Replay::Revert,
+                    Step::Forward => crate::adaptive::Replay::Apply,
+                };
+                let record = adaptive.step(record, way)?;
                 self.refresh_dynamic_bounds(layer);
-                GestureRecord::Adaptive(leaving)
+                GestureRecord::Adaptive(record)
             }
         };
         Ok(Some(MeshGesture { layer, what, stamp }))
@@ -9564,13 +9576,7 @@ impl ClayDocument {
     /// what it just did.
     fn trim_gesture_history(&mut self) {
         let weigh = |stack: &[MeshGesture]| -> usize {
-            stack
-                .iter()
-                .map(|gesture| match &gesture.what {
-                    GestureRecord::Hierarchy(bytes) | GestureRecord::Adaptive(bytes) => bytes.len(),
-                    GestureRecord::Deltas(_) => 0,
-                })
-                .sum()
+            stack.iter().map(|gesture| gesture.what.weight()).sum()
         };
         while weigh(&self.mesh_undo) + weigh(&self.mesh_redo) > crate::multires::HISTORY_BYTES {
             if self.mesh_undo.is_empty() {
@@ -12750,6 +12756,8 @@ impl ClayDocument {
 
     /// What the hierarchies cost this session, and which of them were lost.
     pub fn multires_diagnostics(&self) -> clayspace_model::MultiresDiagnostics {
+        let (history_steps, history_bytes) =
+            self.gesture_history(|what| matches!(what, GestureRecord::Hierarchy(_)));
         clayspace_model::MultiresDiagnostics {
             held: self
                 .layers
@@ -12757,7 +12765,21 @@ impl ClayDocument {
                 .filter(|layer| layer.multires.is_some())
                 .count(),
             lost: self.hierarchies_lost.clone(),
+            history_steps,
+            history_bytes,
         }
+    }
+
+    /// How many carried history records of one kind both stacks hold, and
+    /// what they weigh against [`crate::multires::HISTORY_BYTES`].
+    fn gesture_history(&self, kind: impl Fn(&GestureRecord) -> bool) -> (usize, u64) {
+        self.mesh_undo
+            .iter()
+            .chain(&self.mesh_redo)
+            .filter(|gesture| kind(&gesture.what))
+            .fold((0, 0), |(steps, bytes), gesture| {
+                (steps + 1, bytes + gesture.what.weight() as u64)
+            })
     }
 
     /// Writes every adaptive surface this document holds, beside it.
@@ -12836,7 +12858,13 @@ impl ClayDocument {
     }
 
     /// What the adaptive surfaces hold this session, and which were lost.
+    ///
+    /// With the undo history the surfaces' gestures hold: the engine's memory
+    /// ledger does not count topology records, so this is the only place the
+    /// figure is reported.
     pub fn dynamic_diagnostics(&self) -> clayspace_model::MultiresDiagnostics {
+        let (history_steps, history_bytes) =
+            self.gesture_history(|what| matches!(what, GestureRecord::Adaptive(_)));
         clayspace_model::MultiresDiagnostics {
             held: self
                 .layers
@@ -12844,6 +12872,8 @@ impl ClayDocument {
                 .filter(|layer| layer.dynamic.is_some())
                 .count(),
             lost: self.surfaces_lost.clone(),
+            history_steps,
+            history_bytes,
         }
     }
 

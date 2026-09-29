@@ -1980,7 +1980,7 @@ it needs. It is the contract while a form is still being found.
 | quads | preserved | no — the surface is triangles |
 | large Move | stretches existing triangles | creates the triangles it needs |
 | best use | a settled, retopologized asset | free-form construction |
-| undo | vertex deltas | the surface as it stood, connectivity and all |
+| undo | vertex deltas | the gesture's topology delta, connectivity and all |
 
 **It comes from a mesh.** There is no call that makes an empty one, so it is
 not among the representations a new layer can be; it arrives through
@@ -2039,17 +2039,47 @@ A Mesh → Dynamic → Mesh round trip with no stroke between gives back the sam
 vertices within 1e-5 and the same triangle count
 (`mesh_to_dynamic_and_back_preserves_the_form`).
 
-**One gesture is one undo, and it restores connectivity.** The record is the
-surface's own bytes before the gesture — a bounded snapshot, exact, in the one
-ordered history every other edit is in. **The surface is saved beside the
-document** in a `.dynamic` file, as a hierarchy's is; a document opened without
-it comes back as the mesh the surface was read from, and a record that could not
-be honoured is named in the diagnostics report.
+**One gesture is one undo, and it restores connectivity.** However many
+segments and mirrors draw a gesture, it lands in one record in the one ordered
+history every other edit is in:
+
+- **On a closed surface the record is the engine's topology delta**
+  (`clay_dynamic_sculptor_apply_stroke_recorded`): every vertex, half-edge,
+  edge and face the stroke created, deleted or rewrote, with both ends. Undo
+  reverts it and redo re-applies the same record, and both are bit-exact over
+  the exported triangles — the same indices and the same position bits — so
+  undo-redo cycles converge and a redo lays down the same connectivity, not an
+  equivalent one. A dragging brush is laid down again from its anchor by
+  reverting the segment before, and a cancelled stroke is banked and reverted,
+  so it leaves no partial topology and takes back nothing committed before it.
+- **On a surface with an open boundary** — an imported sheet, say — the record
+  is still the surface's bytes before the gesture. On the pinned engine
+  (ClayCore v0.120.1) reverting a delta whose stroke reached the boundary gives
+  back the right triangles and a half-edge structure that fails validation
+  ("half-edge N has a dead next"), so the delta waits for the engine;
+  `a_revert_at_an_open_boundary_leaves_a_dead_next` fails the day it is fixed.
+
+**What a record costs is reported and bounded.** The diagnostics report's
+`adaptive surfaces` line gives the undo steps the surfaces hold and what they
+weigh — a delta by its resident size, a snapshot by its bytes; the engine's
+memory ledger counts neither. Both come out of the same 256 MB carried-history
+budget a hierarchy's snapshots do, dropped from the oldest end. A delta costs
+what the stroke reached, a snapshot what the surface holds. Measured for one
+Draw stroke on a closed ball: at 6,016 faces, 1.9 MB resident for the delta
+against a 1.6 MB snapshot; at 97,792 faces, 3.1 MB against 25.4 MB
+(`price_a_gesture_at_two_model_sizes`).
+
+**The surface is saved beside the document** in a `.dynamic` file, as a
+hierarchy's is; a document opened without it comes back as the mesh the
+surface was read from, and a record that could not be honoured is named in the
+diagnostics report. A reopened surface starts with an empty history: an engine
+record never outlives the surface handle it was taken on.
 
 Not yet: the drawing copies the whole surface when it has moved rather than
-only the chunks a stroke dirtied; the history holds a snapshot rather than the
-engine's topology delta; and export, like a hierarchy's, writes the mesh the
-row was read from — `dynamic → mesh` first exports what the brush has made.
+only the chunks a stroke dirtied; an open surface's history is a snapshot
+until the engine reverts boundary strokes soundly; and export, like a
+hierarchy's, writes the mesh the row was read from — `dynamic → mesh` first
+exports what the brush has made.
 
 ## Voxel layers
 

@@ -1063,9 +1063,10 @@ impl SculptViewModel {
             // values rather than reconstructing them — so a segment can be
             // undone and the gesture laid down again from its anchor.
             Representation::Multires => true,
-            // An adaptive surface too: its take-back is the surface's own
-            // bytes from before the gesture, exact connectivity and all, and
-            // the engine's Grab gathers its region once at the anchor.
+            // An adaptive surface too: its take-back is exact, connectivity
+            // and all — the gesture's topology delta reverted on a closed
+            // surface, the bytes from before it on an open one — and the
+            // engine's Grab gathers its region once at the anchor.
             Representation::Dynamic => true,
         }
     }

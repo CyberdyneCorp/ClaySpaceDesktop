@@ -12,7 +12,8 @@
 use clayspace_app::SharedDocument;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    ExchangeModel, ExportSettings, ImportSettings, Representation, SceneModel, ToolKind,
+    ConversionSettings, Direction, ExchangeModel, ExportSettings, ImportSettings, Representation,
+    SceneModel, ToolKind,
 };
 use clayspace_vm::{Command, SculptViewModel};
 
@@ -144,4 +145,121 @@ fn cancelling_a_mesh_stroke_leaves_the_committed_ones_standing() {
         !vm.history().get().can_redo,
         "a cancelled gesture is not an action the sculptor can ask back"
     );
+}
+
+/// A closed ball of radius one as OBJ text: bands of quads split in two,
+/// with a fan at each pole.
+fn ball_obj(rings: u32, segments: u32) -> String {
+    let mut text = String::from("v 0 1 0\n");
+    for ring in 1..rings {
+        let phi = std::f32::consts::PI * ring as f32 / rings as f32;
+        for seg in 0..segments {
+            let theta = std::f32::consts::TAU * seg as f32 / segments as f32;
+            let (x, y, z) = (phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
+            text.push_str(&format!("v {x} {y} {z}\n"));
+        }
+    }
+    text.push_str("v 0 -1 0\n");
+    // OBJ counts from one, and the top pole is vertex one.
+    let at = |ring: u32, seg: u32| 2 + (ring - 1) * segments + seg % segments;
+    let bottom = 2 + (rings - 1) * segments;
+    for seg in 0..segments {
+        text.push_str(&format!("f 1 {} {}\n", at(1, seg + 1), at(1, seg)));
+        text.push_str(&format!(
+            "f {bottom} {} {}\n",
+            at(rings - 1, seg),
+            at(rings - 1, seg + 1)
+        ));
+    }
+    for ring in 1..rings - 1 {
+        for seg in 0..segments {
+            let (a, b) = (at(ring, seg), at(ring, seg + 1));
+            let (c, d) = (at(ring + 1, seg), at(ring + 1, seg + 1));
+            text.push_str(&format!("f {a} {b} {d}\nf {a} {d} {c}\n"));
+        }
+    }
+    text
+}
+
+/// A document holding one closed ball as an adaptive surface: imported as a
+/// mesh and crossed in place. Closed, so its gestures are recorded as the
+/// engine's topology delta.
+fn with_a_dynamic_layer() -> Option<SharedDocument> {
+    let policy = BackendPolicy::discover(None).ok()?;
+    let mut document = ClayDocument::new(policy).ok()?;
+    let path = std::env::temp_dir().join("clayspace-stroke-cancel-ball.obj");
+    std::fs::write(&path, ball_obj(24, 32)).ok()?;
+    let imported = document.import_mesh(&path, ImportSettings::default());
+    let _ = std::fs::remove_file(&path);
+    imported.ok()?;
+    let key = document
+        .scene()
+        .layers
+        .iter()
+        .find(|layer| layer.representation == Representation::Mesh)
+        .map(|layer| layer.key)?;
+    document.set_active_layer(key).ok()?;
+    let settings = ConversionSettings::default();
+    document
+        .convert_layer_in_place(Direction::MeshToDynamic, settings.cell_size, settings.blur)
+        .ok()?;
+    Some(SharedDocument::new(document))
+}
+
+/// The drawn triangles and every position's bits: an adaptive stroke changes
+/// the connectivity, so positions alone would not say it was taken back.
+fn topology_digest(document: &SharedDocument) -> (Vec<u32>, Vec<[u32; 3]>) {
+    document.with(|document| {
+        let (positions, _, _, indices, _) = document.visible_mesh_geometry();
+        let bits = positions
+            .into_iter()
+            .map(|position| position.map(f32::to_bits))
+            .collect();
+        (indices, bits)
+    })
+}
+
+/// Cancelling an adaptive stroke takes back exactly that stroke's topology,
+/// leaving the committed ones — connectivity and all — and no partial
+/// triangles behind.
+#[test]
+fn cancelling_a_dynamic_stroke_leaves_no_partial_topology() {
+    let Some(document) = with_a_dynamic_layer() else {
+        return;
+    };
+    let mut vm = SculptViewModel::new(Box::new(document.clone()));
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+    let present = subtools(&document);
+    let bare = topology_digest(&document);
+    assert!(!bare.0.is_empty(), "the adaptive layer is not being drawn");
+
+    if !drag(&mut vm, -0.15, true) || !drag(&mut vm, 0.15, true) {
+        return;
+    }
+    let committed = topology_digest(&document);
+    assert_ne!(
+        committed.0.len(),
+        bare.0.len(),
+        "neither committed gesture changed the topology, so this proves nothing"
+    );
+
+    if !drag(&mut vm, 0.0, false) {
+        return;
+    }
+    assert_ne!(
+        topology_digest(&document),
+        committed,
+        "the open gesture changed nothing, so its cancel proves nothing"
+    );
+    vm.dispatch(Command::CancelStroke).expect("cancel");
+
+    assert_eq!(
+        topology_digest(&document),
+        committed,
+        "the cancel left the open gesture's topology, or took a committed one"
+    );
+    assert_eq!(subtools(&document), present);
+    assert_eq!(vm.history().get().depth, 2);
+    assert!(!vm.history().get().can_redo);
 }
