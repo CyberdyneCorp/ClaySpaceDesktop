@@ -2134,6 +2134,15 @@ measured ~11 ms at 32³ here; it reaches this build when the pin moves to a
 release carrying it. Until then the cage's state names the cost: the agent's
 cage reads `dragged_points` and `preview_ms`, the last frame's time.
 
+The benchmark's `cage` group measures the same drag on every run, one corner
+dragged on the 296k-triangle mesh reference and timed to the surface arriving:
+**45.9 ms** at 3³, **85.7 ms** at 8³ and **3.9 s** at 32³ on an M3 Pro, each
+against the 16 ms budget, with `cage.scaling` (32³ over 3³, **85.6×** against
+a budget of 3×) stating whether the cost follows the points in hand. A drag
+leaves no memory behind: `cage.memory`, device memory after a 100-frame drag
+over before it, is **1.00×**, because each frame writes into the buffers the
+surface already holds.
+
 A cage is sized from the layer's bounds as they are when it goes up, **mirrored
 copies included**. A new subtool is mirrored on X, so a form moved off the axis
 has a copy on the other side and the cage encloses both — a ball of radius 0.5

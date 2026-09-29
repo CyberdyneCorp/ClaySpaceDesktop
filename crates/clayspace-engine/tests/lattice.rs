@@ -1125,6 +1125,45 @@ fn a_field_cage_reports_no_preview_cost() {
     assert_eq!(cage.preview_micros, None);
 }
 
+#[test]
+fn a_long_drag_leaves_the_documents_memory_where_it_found_it() {
+    // #176 reported the footprint climbing across a drag and staying there.
+    // Each frame replaces the last preview rather than stacking on it, so the
+    // document's holding may rise once when the preview is first laid down
+    // and must not rise with the frame count — and taking the cage down gives
+    // it back.
+    let mut document = meshed();
+    document.begin_lattice([3, 3, 3]).expect("a cage");
+    let total = |document: &ClayDocument| document.memory().expect("memory").total as f64;
+    let before = total(&document);
+
+    document.select_lattice_point(Some(0));
+    let start = document.lattice().points[0];
+    let mut early = 0.0;
+    for frame in 1..=100 {
+        let by = 0.01 * (frame % 10 + 1) as f32;
+        document
+            .drag_lattice_point([start[0] + by, start[1] - by, start[2]])
+            .expect("the drag was refused");
+        if frame == 10 {
+            early = total(&document);
+        }
+    }
+    let late = total(&document);
+    assert!(
+        late <= early * 1.2,
+        "the document held {early} bytes ten frames in and {late} a hundred \
+         frames in: a drag frame is keeping something"
+    );
+
+    document.cancel_lattice();
+    let after = total(&document);
+    assert!(
+        after <= before * 1.2,
+        "the document held {before} bytes before the drag and {after} after it"
+    );
+}
+
 // -- where the cage is put ----------------------------------------------------
 
 /// A document with no starting form: one empty field layer, so whatever the
