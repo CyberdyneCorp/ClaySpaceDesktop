@@ -962,6 +962,80 @@ impl Document {
         )?;
         Ok(gradients)
     }
+
+    /// [`Self::eval_points`] against one layer's own field.
+    ///
+    /// Only that layer is compiled, so the layers around it cannot change the
+    /// answer. A hidden layer, or one with no SDF content (a grid), evaluates
+    /// as empty space rather than failing. Probes near each other belong in
+    /// one call: the engine culls its compile to the box they span.
+    pub fn layer_eval_points(
+        &self,
+        layer: LayerId,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<f32>> {
+        let mut distances = vec![0.0f32; points.len()];
+        if points.is_empty() {
+            return Ok(distances);
+        }
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_layer_eval_points"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: as `eval_points`, with the layer passed by value.
+        check(
+            unsafe {
+                sys::clay_layer_eval_points(
+                    self.raw.as_ptr(),
+                    layer.0,
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    distances.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_layer_eval_points",
+        )?;
+        Ok(distances)
+    }
+
+    /// [`Self::eval_gradients`] against one layer's own field, on the same
+    /// terms as [`Self::layer_eval_points`].
+    pub fn layer_eval_gradients(
+        &self,
+        layer: LayerId,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<[f32; 3]>> {
+        let mut gradients = vec![[0.0f32; 3]; points.len()];
+        if points.is_empty() {
+            return Ok(gradients);
+        }
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_layer_eval_gradients"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: input and output are each `points.len() * 3` contiguous
+        // floats, and the layer is passed by value.
+        check(
+            unsafe {
+                sys::clay_layer_eval_gradients(
+                    self.raw.as_ptr(),
+                    layer.0,
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    gradients.as_mut_ptr() as *mut f32,
+                )
+            },
+            "clay_layer_eval_gradients",
+        )?;
+        Ok(gradients)
+    }
 }
 
 impl Drop for Document {

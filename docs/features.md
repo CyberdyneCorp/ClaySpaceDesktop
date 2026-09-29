@@ -1249,19 +1249,40 @@ means.
 not like can be thrown away without painting the mask again, and the patch
 arrives as its own layer rather than as an edit to the one it came from.
 Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
-1.16, **Para dentro** leaves the outside at 1.000 and builds inward, and
-**Centrado** reaches 1.1015 — half the thickness above the surface, which is
+1.20, **Para dentro** leaves the outside at 1.000 and builds inward, and
+**Centrado** reaches 1.1003 — half the thickness above the surface, which is
 what half each way means.
 
-**A wall is no taller than the mask reaches off the surface.** The engine keeps
-the part of the shell that lies *inside the mask's own volume*, and a mask
-painted on a surface is a thin volume around it — a dab's ball, or an outline's
-prism swept to just past the form. Past that the thickness is not honoured:
-measured on the unit sphere with an outline mask, 0.05 gives a 0.05 wall and 0.1
-a 0.1 wall, but 0.3 and 0.6 both stop at about 0.11, with a top that follows the
-dabs the outline was painted with. That is the engine's to fix — the region has
-to be read where a point projects onto the surface rather than where it is —
-and is filed as CyberdyneCorp/ClayCore#660.
+**A wall is as tall as the thickness asks, and even.** The engine keeps the part
+of the wall's shell that lies inside the mask's own volume, read at the point
+itself, and a mask painted on a surface is only a thin volume around it — a
+dab's ball, or an outline swept to just past the form. Handed the painted mask,
+every wall stopped where the paint did: on the unit sphere with an outline mask,
+0.3 and 0.6 both stopped at about 0.11, with a top that followed the dabs
+(CyberdyneCorp/ClayCore#660). On a field layer the application now hands the
+engine the painted patch *swept along the surface normal*: every cell whose
+distance from the layer's own surface lies in the band the side fills takes the
+painted mask's value at its foot on the surface. The engine's intersection then
+keeps the whole shell, and the wall's top is the shell's offset surface.
+Measured on the unit sphere, Para fora, at five spots in the patch
+(`mask_extrude_thickness.rs`):
+
+| Mask | Thickness | Before | Now |
+|---|---|---|---|
+| Outline, 0.5 square | 0.05 | 0.050 | 0.050 |
+| Outline, 0.5 square | 0.1 | 0.080 – 0.100 | 0.100 |
+| Outline, 0.5 square | 0.6 | 0.080 – 0.103 | 0.600 |
+| One Máscara dab, size 0.3 | 0.6 | 0.134 – 0.160 | 0.600 |
+
+Across the outline's patch, out to 0.02 inside its edge, the old 0.6 wall ran
+from 0.08 to 0.13; the new one stays within 0.0001 of 0.600. Centrado at 0.6
+puts 0.300 above the surface. The region is searched in the mask's bounds grown
+by the thickness, and the engine's own measurement of the mask covers the same
+box, so a wall far thicker than the patch — 100 units — is refused with a
+reason instead of costing gigabytes. A **voxel layer is still capped**: the
+engine grows a grid's wall cell by cell through masked cells only, and the
+layer's field that gives a normal is empty for a grid, so that path waits on
+ClayCore#660.
 
 **Extrudar needs something to sample.** `clay_document_mask_extrude` samples a
 *layer's field*, and a grid has a verb of its own that works from its cells
