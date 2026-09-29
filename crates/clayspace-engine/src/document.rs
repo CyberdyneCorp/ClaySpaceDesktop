@@ -10818,16 +10818,14 @@ struct Curve {
 
 impl Curve {
     /// The guide as the engine takes it: x, y, z, radius per point.
-    fn guide(&self) -> Vec<f32> {
+    fn guide(&self, frame: clayspace_model::Transform) -> Vec<f32> {
         self.points
             .iter()
             .flat_map(|point| {
-                [
-                    point.position[0],
-                    point.position[1],
-                    point.position[2],
-                    point.radius,
-                ]
+                // Controls are held in world space for the viewport; the
+                // engine applies the subtool's transform to its curve item.
+                let local = frame.into_local(point.position);
+                [local[0], local[1], local[2], point.radius]
             })
             .collect()
     }
@@ -13902,7 +13900,7 @@ impl ClayDocument {
         }
         let index = self.index_of(curve.layer)?;
         let layer = self.layers[index].id;
-        let guide = curve.guide();
+        let guide = curve.guide(self.layers[index].transform);
         let kind = point_type(curve.join);
 
         if let Some(node) = curve.node {
