@@ -13919,6 +13919,66 @@ impl ClayDocument {
         self.stay_on_the_masked_subtool(index)
     }
 
+    /// The region an extrusion of `layer` may fill: the active mask swept
+    /// along the layer's surface normal across the band the side fills.
+    ///
+    /// Each cell of the search box takes the painted mask's value at its foot
+    /// on the layer's own surface — the layer's, not the document's, because
+    /// the engine extrudes from the layer's field and another subtool nearby
+    /// (an earlier extrusion, say) would bend the normals. Only cells whose
+    /// distance lies in the band are asked for a normal or a foot, which is
+    /// most of the cost saved: the box is mostly empty space and material.
+    fn extrusion_region(
+        &self,
+        layer: claycore::LayerId,
+        settings: ExtrudeSettings,
+    ) -> Result<claycore::Mask, ModelError> {
+        use crate::extrude_region::{candidates, centre, distance_band, fill_box, foot, in_band};
+
+        let painted = self
+            .active_mask()
+            .ok_or_else(|| ModelError::engine("não há máscara para extrudar"))?;
+        let size = painted.cell_size().map_err(ModelError::engine)?;
+        let bounds = painted
+            .bounds()
+            .map_err(ModelError::engine)?
+            .ok_or_else(|| ModelError::engine("a máscara está vazia"))?;
+        let band = distance_band(settings.side, settings.thickness, size);
+        let cells = candidates(bounds, size, band.0.abs().max(band.1)).ok_or_else(|| {
+            ModelError::engine(
+                "a espessura é grande demais para esta máscara; \
+                 extrude uma parede mais fina",
+            )
+        })?;
+
+        let points: Vec<[f32; 3]> = cells.iter().map(|&c| centre(c, size)).collect();
+        let distances = self
+            .document
+            .layer_eval_points(layer, None, &points)
+            .map_err(ModelError::engine)?;
+        let kept = in_band(&distances, band);
+        let near: Vec<[f32; 3]> = kept.iter().map(|&i| points[i]).collect();
+        let normals = self
+            .document
+            .layer_eval_gradients(layer, None, &near)
+            .map_err(ModelError::engine)?;
+        let feet: Vec<[f32; 3]> = kept
+            .iter()
+            .zip(&normals)
+            .map(|(&i, &normal)| foot(points[i], distances[i], normal))
+            .collect();
+        let values = painted.sample_many(&feet).map_err(ModelError::engine)?;
+
+        let mut region = claycore::Mask::new(size).map_err(ModelError::engine)?;
+        for (&i, value) in kept.iter().zip(values) {
+            if value > 0.0 {
+                let (lo, hi) = fill_box(cells[i], size);
+                region.fill(lo, hi, value).map_err(ModelError::engine)?;
+            }
+        }
+        Ok(region)
+    }
+
     /// Puts the sculptor back on the subtool they were masking.
     ///
     /// An extrusion arrives as a row of its own, and creating a row activates
@@ -15132,14 +15192,18 @@ impl MaskModel for ClayDocument {
         }
 
         let layer = self.layers[index].id;
-        // Named rather than handed over: the extrusion holds the document
-        // mutably, and the mask is one of that document's own. See
-        // `claycore::MaskSource`.
+        // Not the painted mask itself: the engine keeps only the part of the
+        // wall inside the mask's own volume, which caps the wall at how far
+        // the paint reaches off the surface (ClayCore #660). The region below
+        // is the painted patch swept along the surface normal as far as the
+        // wall is asked to go, so the thickness is honoured and the top is
+        // even. See `extrude_region`.
+        let region = self.extrusion_region(layer, settings)?;
         let item = self
             .document
             .mask_extrude(
                 layer,
-                claycore::MaskSource::Layer(layer),
+                claycore::MaskSource::Field(&region),
                 extrude_params(settings),
             )
             .map_err(ModelError::engine)?;

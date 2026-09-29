@@ -16,6 +16,7 @@ pub mod alpha;
 pub mod backend;
 pub mod compaction;
 pub mod document;
+mod extrude_region;
 pub mod grid_to_field;
 mod holes;
 mod live;

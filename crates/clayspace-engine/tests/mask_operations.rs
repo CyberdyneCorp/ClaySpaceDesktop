@@ -340,19 +340,21 @@ fn the_three_extrusion_sides_put_the_wall_in_three_places() {
     );
     // Half each way is the whole difference between Centrado and the other
     // two, and the outward half of it lands where arithmetic says: half the
-    // thickness above the surface, 1.1015 measured against 1.1000.
-    //
-    // Not stated as half of *Para fora's* travel, which it is not — that one
-    // reaches 1.16 rather than 1.20 for the same 0.2, so the wall it builds is
-    // referred to a threshold surface a little inside the one a raycast finds.
-    // Pinning Centrado to the thickness and Para fora to an ordering is what
-    // can be justified from the measurements rather than assumed from the
-    // names.
+    // thickness above the surface, 1.1003 measured against 1.1000.
     assert!(
         (centred - (base + 0.1)).abs() < 0.01,
         "Centrado reached {centred}, where half of a 0.2 wall above a surface \
          at {base} is {}",
         base + 0.1
+    );
+    // Para fora used to reach 1.16 rather than 1.20: the engine kept only the
+    // part of the wall inside the dab's own ball (#178, ClayCore #660). The
+    // region is swept along the normal now, and it measures 1.2004.
+    assert!(
+        (out - (base + 0.2)).abs() < 0.01,
+        "Para fora reached {out}, where a 0.2 wall above a surface at {base} \
+         is {}",
+        base + 0.2
     );
     assert!(
         out > centred,
