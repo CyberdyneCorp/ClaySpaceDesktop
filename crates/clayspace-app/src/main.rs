@@ -7262,6 +7262,10 @@ impl App {
 }
 
 impl Session for App {
+    fn history_revision(&mut self) -> Option<u64> {
+        Some(self.document.with(|document| document.history_revision()))
+    }
+
     /// One command, down the path a menu item's click takes.
     ///
     /// `handle` and nothing else: there is no second way in, which is what

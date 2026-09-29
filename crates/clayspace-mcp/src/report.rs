@@ -358,6 +358,7 @@ pub fn history_state(
         undoes: state.can_undo.then_some(undoes).flatten(),
         redoes: state.can_redo.then_some(redoes).flatten(),
         from_agent,
+        last_entry_by: None,
     }
 }
 

@@ -14662,6 +14662,13 @@ impl ClayDocument {
 }
 
 impl ClayDocument {
+    /// Monotonic ID of the latest history entry, including entries that
+    /// replaced an evicted one while the stack stayed at its depth limit.
+    pub fn history_revision(&mut self) -> u64 {
+        self.note_engine_entries();
+        self.history_seq
+    }
+
     /// How many things the history holds, as the interface counts them.
     ///
     /// The one number every ViewModel that writes to the document measures

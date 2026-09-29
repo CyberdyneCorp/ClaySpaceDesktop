@@ -743,7 +743,28 @@ pub enum LayerOperation {
     },
 }
 
+/// The condition for offering a layer operation that can replace surface data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationHistory {
+    Undoable,
+    ConsentRequired,
+}
+
 impl LayerOperation {
+    /// Exhaustive by design: a new operation must declare how lost work is
+    /// recovered before it can be routed to the interface or the agent door.
+    pub fn history_policy(self) -> OperationHistory {
+        match self {
+            Self::Taper { .. }
+            | Self::Twist { .. }
+            | Self::LatticeDrag { .. }
+            | Self::CloseHoles { .. }
+            | Self::FillVoids => OperationHistory::Undoable,
+            // There is no history record for a regional level yet. It has no
+            // UI or MCP route, and would need consent if one is added.
+            Self::RefineRegion { .. } => OperationHistory::ConsentRequired,
+        }
+    }
     /// One of each, with the arguments the application itself would send.
     ///
     /// For anything that has to exercise all of them — the performance gate
@@ -2877,6 +2898,7 @@ impl BrushSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DeformSettings, DeformVerb};
 
     #[test]
     fn every_falloff_has_a_distinct_label() {
@@ -2912,6 +2934,37 @@ mod tests {
             all.len(),
             "two entries in LayerOperation::all are the same operation"
         );
+    }
+
+    #[test]
+    fn routed_destructive_operations_are_undoable() {
+        // These are the operations `RunDeform`, `CloseHoles`, and `FillVoids`
+        // offer. The default and Twist settings are taken from the same
+        // settings type the app dispatches, so this holds the routes' actual
+        // inputs rather than re-stating history_policy's match arms.
+        let deform = |verb| {
+            DeformSettings {
+                verb,
+                ..DeformSettings::default()
+            }
+            .operation()
+        };
+        for operation in [
+            deform(DeformVerb::Taper),
+            deform(DeformVerb::Twist),
+            LayerOperation::CloseHoles { passes: 1 },
+            LayerOperation::FillVoids,
+        ] {
+            assert_eq!(operation.history_policy(), OperationHistory::Undoable);
+        }
+
+        // The document implements this binding, but no UI or MCP route
+        // offers it. Opening a route before adding undo must require consent.
+        let region = LayerOperation::RefineRegion {
+            min: [-0.3; 3],
+            max: [0.3; 3],
+        };
+        assert_eq!(region.history_policy(), OperationHistory::ConsentRequired);
     }
 
     #[test]
