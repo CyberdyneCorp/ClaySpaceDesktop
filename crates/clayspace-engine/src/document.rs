@@ -3952,6 +3952,29 @@ impl ClayDocument {
         self.point_the_mirror_of(self.active, symmetry)
     }
 
+    /// The same, for a verb whose whole effect is items it adds.
+    ///
+    /// **Symmetry off leaves the layer's mirror where it stands.** Every item
+    /// such a verb makes with symmetry off stays out of the mirror (see
+    /// `takes_part_in_the_mirror`), so the mirror has nothing to say about it
+    /// — while writing it off took the twins away from every item made while
+    /// it was on: a lump sculpted with X lost its far side at the next stroke
+    /// made with symmetry off (#170). Left alone, that lump keeps both sides
+    /// and the new stroke is one-sided anyway.
+    ///
+    /// The drag verbs do not come through here. A Move grab and a Pinch
+    /// region are reflected into every image the engine emits of an item that
+    /// takes part, so a drag with symmetry off on a mirrored form moved both
+    /// sides unless the mirror really was off; they still point it. Turning
+    /// the mirror to another axis still re-points it for everything as well —
+    /// both wait on per-item axes or a mirror bake (ClayCore #664).
+    fn point_the_mirror_for_items(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        if !takes_part_in_the_mirror(symmetry) {
+            return Ok(());
+        }
+        self.point_the_mirror(symmetry)
+    }
+
     /// The same, for the layer at `index` rather than the active one — a curve
     /// is placed on the layer it was begun on, whichever is active now.
     ///
@@ -4152,8 +4175,14 @@ impl ClayDocument {
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
         // The mirror is still pointed where the sculptor asked, because these
-        // verbs share a layer with the ones it does reach.
-        self.point_the_mirror(symmetry)?;
+        // verbs share a layer with the ones it does reach — except with
+        // symmetry off, where only Move still writes it: its drag images
+        // follow the mirror, and the others lay down a bake it never reaches.
+        if tool == ToolKind::Mover {
+            self.point_the_mirror(symmetry)?;
+        } else {
+            self.point_the_mirror_for_items(symmetry)?;
+        }
         // Unreflected, because the commit reflects it again; one dab per
         // segment, where `live_relax_dab` puts it.
         if self.live_smooth.is_some() && tool == ToolKind::Suavizar {
@@ -4243,7 +4272,7 @@ impl ClayDocument {
             // mirror does reach it, and pointing the mirror is the whole
             // of what symmetry means here.
             ToolKind::Puxar => {
-                self.point_the_mirror(symmetry)?;
+                self.point_the_mirror_for_items(symmetry)?;
                 self.snakehook_stroke(brush, samples, symmetry)
             }
             _ => self.stroke_sdf(tool, brush, samples, symmetry),
@@ -4258,7 +4287,7 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
-        self.point_the_mirror(symmetry)?;
+        self.point_the_mirror_for_items(symmetry)?;
         // Every tool that reaches here combines a stamp with the surface.
         // There is no catch-all arm: the one that was here mapped anything
         // unlisted to `Op::Add`, which adds a *sphere* — so the planing tools
@@ -5061,7 +5090,13 @@ impl ClayDocument {
             // dirty and the wide bound was the correct answer. The two fixes
             // are one fix.
             let placed = self.active_layer().transform;
-            let mirror = Mirror(self.mirror_for_dirtying(self.active_layer()));
+            // A tendril pulled with symmetry off is out of the mirror, which
+            // the layer can keep carrying; its reflections are not its own.
+            let mirror = if takes_part_in_the_mirror(symmetry) {
+                Mirror(self.mirror_for_dirtying(self.active_layer()))
+            } else {
+                Mirror([false; 3])
+            };
             let regions =
                 Self::tendril_tail_regions(&points, hook.points, brush.size, mirror, &placed);
             self.live_hook = Some(LiveHook {
@@ -5583,7 +5618,7 @@ impl ClayDocument {
         // — which the commit then refuses, correctly, as a preview computed
         // against a document that has since moved.
         let before = self.engine_undo_depth();
-        if self.point_the_mirror(symmetry).is_err() {
+        if self.point_the_mirror_for_items(symmetry).is_err() {
             return false;
         }
         // Pointing it is an edit of its own, and one this gesture caused. It is
@@ -5752,7 +5787,7 @@ impl ClayDocument {
         // gives: pointing the mirror is an edit this gesture caused, and one a
         // preview's take-back must not spend.
         let before = self.engine_undo_depth();
-        if self.point_the_mirror(symmetry).is_err() {
+        if self.point_the_mirror_for_items(symmetry).is_err() {
             self.live_opening_entries = orphaned;
             return false;
         }

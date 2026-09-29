@@ -29,6 +29,14 @@ default, so the switch reached backwards (#170):
   the same undo group as the item, so they are mirrored from the start and one
   undo takes back both. Made with symmetry off they leave the layer's mirror
   alone: nothing they do needs it.
+- **Symmetry off keeps the mirror.** The verbs whose whole effect is items
+  they add (stamping strokes, Puxar, curves, placed objects) and the bake verbs
+  (whose bakes the layer mirror never reaches) no longer write the layer's
+  mirror off when symmetry is off. What they make stays out of the mirror
+  anyway, and writing it off took the twin away from every item made while it
+  was on. Move and Pinch still write it off: the engine reflects their drag
+  into every image of an item that takes part, so with the mirror kept a
+  one-sided drag moved both sides.
 - **Rigs (A5).** An armature mirrors itself, so its item stays out of the
   layer mirror: a stroke made with symmetry on on a rig's subtool no longer
   gives a sphere added one-sided a twin. And a rig edit, which removes the
@@ -41,8 +49,9 @@ default, so the switch reached backwards (#170):
 The per-layer engine mirror stays. What remains of #170 is the engine's, and
 is tracked there:
 
-- Turning symmetry **off**, or switching it to a different axis, still re-points
-  the layer's mirror and so still changes items made under the old one.
+- Switching symmetry to a different axis, or the first Move or Pinch made with
+  symmetry off, still re-points the layer's mirror and so still changes items
+  made under the old one.
   Participation is one bool per item, and a host cannot express a reflected
   copy of an arbitrary item to bake it (ClayCore #664).
 - A Move drag exactly on the mirror plane is applied once per image (F10):

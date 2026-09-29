@@ -29,11 +29,22 @@
       order, in the edit's undo group; verify
       `a_rig_edit_keeps_the_strokes_on_the_rig_layer`
 
-## 4. Waiting on the engine (#170)
+## 4. Symmetry off keeps the mirror (#170)
 
-- [ ] 4.1 Turning symmetry off or changing its axis leaves items made under the
-      old mirror unchanged — needs per-item axes or an engine mirror bake
-      (ClayCore #664)
-- [ ] 4.2 A Move drag on the mirror plane moves as far as an unmirrored drag —
+- [x] 4.1 Item-adding and bake verbs made with symmetry off leave the layer's
+      mirror as it stands; verify `turning_symmetry_off_leaves_mirrored_items_alone`,
+      `a_pull_with_symmetry_off_leaves_mirrored_items_alone` and
+      `a_bake_with_symmetry_off_is_not_copied_across_a_kept_mirror`
+- [x] 4.2 Move still writes the mirror off, so a drag with symmetry off moves
+      one side; verify `a_drag_with_symmetry_off_moves_one_side`
+- [x] 4.3 The mirror-change and mirror-after-undo tests drive a change of axis,
+      which still writes the mirror, instead of turning it off
+
+## 5. Waiting on the engine (#170)
+
+- [ ] 5.1 Changing the axis, or a Move or Pinch with symmetry off, leaves items
+      made under the old mirror unchanged — needs per-item axes or an engine
+      mirror bake (ClayCore #664)
+- [ ] 5.2 A Move drag on the mirror plane moves as far as an unmirrored drag —
       the coincident drag image is the engine's (ClayCore #663); un-ignore
       `a_move_on_the_plane_is_applied_once` when it lands
