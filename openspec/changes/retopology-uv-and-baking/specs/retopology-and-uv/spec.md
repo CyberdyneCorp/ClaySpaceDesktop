@@ -156,6 +156,51 @@ during the layout SHALL cancel the whole run.
 - **THEN** the quads are placed without UVs, the outcome reports `failed` with
   the engine's reason, and the notice says the mesh carries no UVs
 
+### Requirement: A layout on a layer can be seen on it
+A mesh layer carrying UVs SHALL offer a UV display with three choices:
+the layer's own material (the default), a checker in UV space over the
+material, and the same checker tinted a distinct colour per island. The
+display SHALL draw the layout's seams over either checker in a colour of their
+own. It SHALL be offered in the active mesh layer's inspector only when that
+layer carries UVs, and to the agent as `view set_uv_display`
+(`off` / `checker` / `islands`); `state.presentation.uv_display` SHALL report
+what the viewport shows.
+
+The display SHALL be presentation only: it SHALL NOT change a vertex, a UV,
+the document, its modified mark or its history. It SHALL draw the active layer
+only, on the triangles and at the placement the viewport already draws for
+that layer, and SHALL fall back to the layer's own material while the surface
+is drawn through (a cage, or a dialled-back opacity). A choice made while the
+active layer carries no layout SHALL be kept and shown on the next active
+layer that does.
+
+An island SHALL be a set of triangles joined through shared vertices, and a
+seam SHALL be a border edge whose two positions are also those of another
+border edge — so a mesh's own open border is not drawn as a seam. For an
+accepted retopology the display SHALL find one island per chart and one seam
+per seam edge the engine reported.
+
+#### Scenario: The checker is drawn on the accepted result
+- **WHEN** a retopology result carrying UVs is active and the checker is chosen
+- **THEN** the viewport draws that layer with alternating squares in UV space
+  and its seams drawn over them, and choosing the material again draws the
+  layer exactly as before
+
+#### Scenario: Islands are told apart
+- **WHEN** the island display is chosen on a layer whose layout has several charts
+- **THEN** each chart is drawn in a colour of its own, and the number of
+  islands equals the engine's chart count
+
+#### Scenario: No layout, no display
+- **WHEN** the active layer carries no UVs
+- **THEN** the inspector offers no UV display, the viewport draws the layer's
+  own material whatever was chosen, and `state.presentation.uv_display` is
+  `off`
+
+#### Scenario: The display is not an edit
+- **WHEN** the UV display is changed
+- **THEN** no history entry is created and the document is not marked modified
+
 ### Requirement: Maps are baked from the field where a field is what exists
 Normal, ambient occlusion, curvature and cavity SHALL be baked through
 `cyber_bake_field`, sampling ClayCore's field directly, so that the cage ray is

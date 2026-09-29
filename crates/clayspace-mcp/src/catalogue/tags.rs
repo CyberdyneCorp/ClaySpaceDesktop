@@ -16,7 +16,7 @@ use clayspace_model::CutGesture;
 use clayspace_model::{
     BlendProfile, BooleanOp, Combine, CurveJoin, CurveProfile, DeformVerb, Direction, DragFalloff,
     ExportMesher, ExtrudeSide, Falloff, GizmoMode, ImportAs, InsertAs, Locale, MaskGesture,
-    QuadMethod, RefPlane, Representation, Shape, ToolKind, ViewPresetKind, VoxelDisplay,
+    QuadMethod, RefPlane, Representation, Shape, ToolKind, UvDisplay, ViewPresetKind, VoxelDisplay,
 };
 use clayspace_vm::{Axis, CageFate};
 
@@ -164,6 +164,12 @@ pub const VOXEL_DISPLAYS: &[(&str, VoxelDisplay)] = &[
     ("smooth", VoxelDisplay::Smooth),
 ];
 
+pub const UV_DISPLAYS: &[(&str, UvDisplay)] = &[
+    ("off", UvDisplay::Off),
+    ("checker", UvDisplay::Checker),
+    ("islands", UvDisplay::Islands),
+];
+
 pub const DIRECTIONS: &[(&str, Direction)] = &[
     ("field-to-grid", Direction::SdfToVoxel),
     ("grid-to-field", Direction::VoxelToSdf),
@@ -254,6 +260,7 @@ mod tests {
         assert_eq!(INSERT_AS.len(), InsertAs::ALL.len());
         assert_eq!(VIEW_PRESETS.len(), ViewPresetKind::ALL.len());
         assert_eq!(VOXEL_DISPLAYS.len(), VoxelDisplay::ALL.len());
+        assert_eq!(UV_DISPLAYS.len(), UvDisplay::ALL.len());
         assert_eq!(DIRECTIONS.len(), Direction::ALL.len());
         assert_eq!(IMPORT_AS.len(), ImportAs::ALL.len());
         assert_eq!(MESHERS.len(), ExportMesher::ALL.len());

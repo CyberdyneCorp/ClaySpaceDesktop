@@ -949,6 +949,9 @@ pub struct PresentationState {
     pub rigging: bool,
     /// Whether the rig's skin is previewed, or only its ZSpheres stand.
     pub skin_preview: bool,
+    /// How the active layer's UVs are drawn — `off`, `checker` or `islands`.
+    /// `off` whenever that layer carries no layout.
+    pub uv_display: String,
 }
 
 /// One reference image plane, as the reference panel holds it.
@@ -1433,6 +1436,7 @@ mod tests {
                 surface_opacity: 1.0,
                 rigging: false,
                 skin_preview: true,
+                uv_display: "off".into(),
             }),
             references: Some(Vec::new()),
             exchange: Some(ExchangeState {

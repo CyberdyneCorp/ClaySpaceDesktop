@@ -17242,6 +17242,51 @@ impl ClayDocument {
             .map_err(ModelError::engine)
     }
 
+    /// Whether the active layer is a mesh carrying a UV layout.
+    pub fn active_layer_carries_uvs(&mut self) -> bool {
+        let key = self.active_layer().key;
+        matches!(self.layer_uvs(key), Ok(Some(_)))
+    }
+
+    /// A mesh layer with its UVs, standing where the viewport draws it.
+    ///
+    /// `None` for a layer carrying no layout, or one whose UV count no longer
+    /// matches its vertices — a preview drawn from a table that does not line
+    /// up would put the checker on the wrong corners, which is worse than none.
+    /// Placed by the layer transform exactly as [`Self::append_mesh_layer`]
+    /// places the drawn triangles, so the preview covers them bit for bit.
+    pub fn uv_preview(
+        &mut self,
+        key: LayerKey,
+    ) -> Result<Option<clayspace_model::UvPreview>, ModelError> {
+        let Some(uvs) = self.layer_uvs(key)? else {
+            return Ok(None);
+        };
+        let name = self.layers[self.index_of(key)?].engine_name.clone();
+        let (mut positions, mut normals, _, indices) = self
+            .document
+            .read_mesh_layer(&name)
+            .map_err(ModelError::engine)?;
+        if uvs.len() != positions.len() {
+            return Ok(None);
+        }
+        if let Some(transform) = self.carried_placement(key) {
+            for point in &mut positions {
+                *point = Self::into_world(&transform, *point);
+            }
+            for normal in &mut normals {
+                *normal = transform.normal_into_world(*normal);
+            }
+        }
+        Ok(Some(clayspace_model::UvPreview {
+            layer: key,
+            positions,
+            normals,
+            uvs,
+            indices,
+        }))
+    }
+
     /// The revision the layer a running retopology was asked about stands at
     /// now. An error when it has gone, which makes any result for it stale.
     pub(crate) fn retopo_target_revision(&mut self) -> Result<u64, ModelError> {

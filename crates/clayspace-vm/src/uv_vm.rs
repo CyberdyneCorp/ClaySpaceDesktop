@@ -9,11 +9,16 @@
 //! the layout by: a layout written onto a subtool still being shaped is one the
 //! next stroke invalidates. A retopology asked for UVs is where a layout is
 //! kept on the layer — see `RetopoSettings::uv`.
+//!
+//! **A layout kept on a layer is drawn from here too.** Whether the active
+//! subtool carries one, and how the viewport shows it — its material, a
+//! checker, or a checker tinted by island — are held beside the report, so the
+//! panel offers the display only where there is a layout to display.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use clayspace_model::{Unwrapper, UvModel, UvOutcome, UvResult, UvSettings};
+use clayspace_model::{Unwrapper, UvDisplay, UvModel, UvOutcome, UvResult, UvSettings};
 
 use crate::command::Command;
 use crate::jobs::{Completion, JobRunner};
@@ -26,6 +31,8 @@ pub struct UvViewModel {
     unavailable: Observable<Option<String>>,
     last: Observable<Option<UvOutcome>>,
     notice: Observable<Option<String>>,
+    display: Observable<UvDisplay>,
+    carries_uvs: Observable<bool>,
     jobs: JobRunner<UvResult>,
     stop: Arc<AtomicBool>,
 }
@@ -39,6 +46,8 @@ impl UvViewModel {
             unavailable: Observable::new(None),
             last: Observable::new(None),
             notice: Observable::new(None),
+            display: Observable::new(UvDisplay::default()),
+            carries_uvs: Observable::new(false),
             jobs: JobRunner::new(),
             stop: Arc::new(AtomicBool::new(false)),
         }
@@ -60,6 +69,29 @@ impl UvViewModel {
         &self.notice
     }
 
+    /// How a layer carrying UVs is drawn, as the sculptor last chose.
+    ///
+    /// Kept when the active subtool carries no layout, so choosing one that
+    /// does shows it the way it was asked for last time.
+    pub fn display(&self) -> &Observable<UvDisplay> {
+        &self.display
+    }
+
+    /// Whether the active subtool carries a UV layout to display.
+    pub fn carries_uvs(&self) -> &Observable<bool> {
+        &self.carries_uvs
+    }
+
+    /// What the viewport should draw: the chosen display where the active
+    /// subtool carries a layout, and nothing where it does not.
+    pub fn shown_display(&self) -> UvDisplay {
+        if *self.carries_uvs.get() {
+            *self.display.get()
+        } else {
+            UvDisplay::Off
+        }
+    }
+
     pub fn jobs(&self) -> &JobRunner<UvResult> {
         &self.jobs
     }
@@ -71,6 +103,8 @@ impl UvViewModel {
     pub fn refresh(&mut self) {
         let reason = self.model.can_unwrap().err();
         self.unavailable.set_if_changed(reason);
+        let carries = self.model.active_layer_carries_uvs();
+        self.carries_uvs.set_if_changed(carries);
     }
 
     pub fn dispatch(&mut self, command: &Command) {
@@ -80,6 +114,9 @@ impl UvViewModel {
             }
             Command::RunUvAtlas => self.start(),
             Command::CancelUvAtlas => self.stop.store(true, Ordering::Relaxed),
+            Command::SetUvDisplay(display) => {
+                self.display.set_if_changed(*display);
+            }
             _ => {}
         }
     }

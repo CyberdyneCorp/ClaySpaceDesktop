@@ -24,7 +24,52 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
+    uv_display(ui, state, queue);
     create_multires(ui, state, queue);
+}
+
+/// Where one UV display chip was drawn, for a test to press it.
+pub fn uv_display_chip_id(display: clayspace_model::UvDisplay) -> egui::Id {
+    egui::Id::new(("uv-display", display as u8))
+}
+
+/// How the layer's UV layout is drawn, where it carries one.
+///
+/// Nothing at all on a layer with no layout: three chips that change nothing
+/// would say there is something to see.
+fn uv_display(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    use clayspace_model::UvDisplay;
+    if !state.carries_uvs {
+        return;
+    }
+    let s = state.strings;
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(s.label_uv_display)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for display in UvDisplay::ALL {
+            let on = state.uv_display == display;
+            let response = ui.add(chip(s.uv_display_name(display), on, Tokens::panel()));
+            ui.ctx().memory_mut(|memory| {
+                memory
+                    .data
+                    .insert_temp(uv_display_chip_id(display), response.rect)
+            });
+            if response.clicked() {
+                queue.push(Command::SetUvDisplay(display));
+            }
+        }
+    });
+    if state.uv_display.is_on() {
+        ui.label(
+            egui::RichText::new(s.hint_uv_display)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
 }
 
 /// Where the Create Multires button was drawn, for a test to press it.

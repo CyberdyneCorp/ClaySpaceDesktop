@@ -906,6 +906,10 @@ impl clayspace_model::UvModel for SharedDocument {
     fn record_uv(&mut self, result: &clayspace_model::UvResult) -> Result<(), ModelError> {
         self.document.borrow_mut().record_uv(result)
     }
+
+    fn active_layer_carries_uvs(&mut self) -> bool {
+        self.document.borrow_mut().active_layer_carries_uvs()
+    }
 }
 
 impl clayspace_model::BakeModel for SharedDocument {

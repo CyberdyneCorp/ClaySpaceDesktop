@@ -459,6 +459,9 @@ struct App {
     /// triangles are copied whole or not at all. Comparing a revision is what
     /// keeps "not at all" the usual answer.
     mesh_revision: Option<u64>,
+    /// What the viewport's UV preview was last built for: the mesh revision,
+    /// the active layer when it is visible, and the display asked for.
+    uv_preview_key: Option<(u64, Option<LayerKey>, clayspace_model::UvDisplay)>,
     /// What the adaptive surfaces have sent to the viewport this session,
     /// per upload of the carried buffer, for the diagnostics report.
     adaptive_uploads: clayspace_model::AdaptiveUploads,
@@ -885,6 +888,7 @@ impl App {
             detail_policy: DetailPolicy::default(),
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
+            uv_preview_key: None,
             adaptive_uploads: clayspace_model::AdaptiveUploads::default(),
             carried_build: None,
             cage_revision: None,
@@ -2154,6 +2158,7 @@ impl App {
         // nothing at all both report zero — and the viewport would then keep
         // drawing the document that was just closed.
         self.mesh_revision = None;
+        self.uv_preview_key = None;
         self.mask_revision = None;
         self.cage_revision = None;
         // For the same reason, and with the same word for it: the figure in
@@ -2625,6 +2630,54 @@ impl App {
             return;
         };
         graphics.renderer.set_active_subtool(cued);
+    }
+
+    /// Shows the active layer's UV layout on it, as the UV display asks.
+    ///
+    /// Its own pass for the reason the subtool cue has one: choosing a display
+    /// or a layer changes no triangle. Rebuilt only when the mesh revision,
+    /// the active layer or the display moves — the preview re-reads the
+    /// layer's triangles and UVs and finds its islands, which is a whole-mesh
+    /// walk that a resting frame must not pay for.
+    fn sync_uv_preview(&mut self) {
+        let active = self
+            .scene
+            .scene()
+            .get()
+            .active_layer()
+            .filter(|layer| layer.visible)
+            .map(|layer| layer.key);
+        let revision = self.document.with(|document| document.mesh_revision());
+        let key = (revision, active, *self.uv.display().get());
+        if self.uv_preview_key == Some(key) {
+            return;
+        }
+        self.uv_preview_key = Some(key);
+        // Whether the active layer carries a layout moves with the same
+        // things — a retopology landing is a revision, not a command.
+        self.uv.refresh();
+        let display = self.uv.shown_display();
+        let preview = self.uv_preview_of(active.filter(|_| display.is_on()));
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let gpu = graphics.gpu.clone();
+        graphics
+            .renderer
+            .set_uv_preview(&gpu, preview.as_ref().map(|preview| (preview, display)));
+    }
+
+    /// One layer's UVs as the preview draws them; `None` for no layer, a layer
+    /// carrying no layout, or one that could not be read.
+    fn uv_preview_of(&self, layer: Option<LayerKey>) -> Option<clayspace_model::UvPreview> {
+        let layer = layer?;
+        match self.document.with(|document| document.uv_preview(layer)) {
+            Ok(preview) => preview,
+            Err(e) => {
+                eprintln!("{}: {e}", self.strings.log_uv_preview);
+                None
+            }
+        }
     }
 
     /// The active layer, when the viewport has something to contrast it with.
@@ -5389,9 +5442,10 @@ impl App {
             | Command::EditRetopo(_)
             | Command::RunRetopology
             | Command::CancelRetopology => self.retopo.dispatch(command),
-            Command::SetUvSettings(_) | Command::RunUvAtlas | Command::CancelUvAtlas => {
-                self.uv.dispatch(command)
-            }
+            Command::SetUvSettings(_)
+            | Command::RunUvAtlas
+            | Command::CancelUvAtlas
+            | Command::SetUvDisplay(_) => self.uv.dispatch(command),
             // The destination is this layer's business: it owns the platform's
             // file panel, and a ViewModel that opened one could not be
             // exercised without a desktop.
@@ -5835,6 +5889,8 @@ impl App {
             mask_steps: *self.mask.steps().get(),
             voxel_display: self.document.with(|d| d.voxel_display()),
             voxel_blur: self.document.with(|d| d.voxel_blur()),
+            uv_display: *self.uv.display().get(),
+            carries_uvs: *self.uv.carries_uvs().get(),
             curve: self.curve.state().get().clone(),
             curve_radius: *self.curve.radius().get(),
             lattice: self.lattice.state().get().clone(),
@@ -6232,6 +6288,7 @@ impl App {
         });
         self.sync_mesh_layers();
         self.sync_active_subtool();
+        self.sync_uv_preview();
         self.sync_cage();
         self.sync_mask();
         self.sync_lattice_view();
@@ -7321,15 +7378,18 @@ impl App {
             ));
         }
         if query.presentation {
-            state.presentation = Some(report::presentation_state(
-                self.focus,
-                *self.sculpt.grid().get(),
-                *self.sculpt.polyframe().get(),
-                *self.sculpt.view_preset().get(),
-                self.surface_opacity,
-                self.rigging,
-                self.skin_preview,
-            ));
+            state.presentation = Some(
+                report::presentation_state(
+                    self.focus,
+                    *self.sculpt.grid().get(),
+                    *self.sculpt.polyframe().get(),
+                    *self.sculpt.view_preset().get(),
+                    self.surface_opacity,
+                    self.rigging,
+                    self.skin_preview,
+                )
+                .with_uv_display(self.uv.shown_display()),
+            );
         }
         if query.references {
             state.references = Some(report::reference_state(|plane| {

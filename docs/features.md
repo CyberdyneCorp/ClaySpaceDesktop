@@ -3222,8 +3222,22 @@ field and every visible mesh layer, and an attribute any input lacks is dropped
 from all of them — the field never carries UVs. So export the result on its
 own: hide the other layers, and a document whose visible geometry is mesh
 layers alone is written from those layers. An export that did drop a visible
-layer's UVs says so rather than writing the file quietly. The checker preview
-and a seam display are not drawn yet; the viewport has no UV attribute.
+layer's UVs says so rather than writing the file quietly.
+
+**Seeing a layout.** A mesh layer carrying UVs gets *Mostrar UVs como* in its
+inspector section — **Material** (the default), **Xadrez** and **Ilhas** — and
+the agent's `view set_uv_display` (`off` / `checker` / `islands`). The checker
+is sixteen squares a side in UV space over the MatCap: where the layout
+stretches, the squares on the form stretch with it. *Ilhas* tints each island a
+colour of its own. Both draw the seams as red lines over the surface. Islands
+and seams are found from the layer's per-vertex UVs alone — a seam is an edge
+the split duplicated, so the mesh's own open border is never drawn as one — and
+on an accepted retopology they come to one island per chart and one seam per
+seam edge the report states. The display is presentation only: no history, no
+modified mark. It draws the active layer, and only while the surface is solid;
+a choice made on a layer without UVs is kept for the next one that has them,
+and `state.presentation.uv_display` reports what is actually shown. The 2D
+layout view is not drawn yet.
 
 **Cozer mapas** bakes normal, ambient occlusion, curvature and cavity **from the
 field**, with no high-poly mesh at all. This is the half of the pipeline nothing

@@ -1255,6 +1255,31 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
     settle(&running, &session);
     assert_eq!(uv_of(&running)["status"], "not_requested");
 
+    // The checker asked for on a result with no layout draws nothing, and the
+    // choice is kept for the next result that has one.
+    let uv_display = |running: &Running| {
+        let state = call(
+            running,
+            &session,
+            "state",
+            json!({ "sections": ["presentation"] }),
+        );
+        state["structuredContent"]["presentation"]["uv_display"].clone()
+    };
+    assert_eq!(uv_display(&running), "off");
+    call(
+        &running,
+        &session,
+        "view",
+        json!({ "action": "set_uv_display", "display": "checker" }),
+    );
+    settle(&running, &session);
+    assert_eq!(
+        uv_display(&running),
+        "off",
+        "a checker was reported on a layer that carries no UVs"
+    );
+
     call(
         &running,
         &session,
@@ -1273,6 +1298,11 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
         layer_count(&running, &session),
         layers + 2,
         "each retopology should arrive as a new layer"
+    );
+    assert_eq!(
+        uv_display(&running),
+        "checker",
+        "the result carries a layout and the checker chosen earlier is not shown"
     );
 }
 

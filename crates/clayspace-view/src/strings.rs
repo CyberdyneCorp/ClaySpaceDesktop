@@ -60,6 +60,8 @@ pub struct Strings {
     pub smooth_mode_names: [&'static str; clayspace_model::SmoothFrequency::ALL.len()],
     /// How a grid is drawn, in `VoxelDisplay::ALL` order.
     pub voxel_display_names: [&'static str; clayspace_model::VoxelDisplay::ALL.len()],
+    /// How a layer's UV layout is drawn, in `UvDisplay::ALL` order.
+    pub uv_display_names: [&'static str; clayspace_model::UvDisplay::ALL.len()],
     /// The manipulator's three modes, in `GizmoMode::ALL` order.
     pub gizmo_mode_names: [&'static str; clayspace_model::GizmoMode::ALL.len()],
 
@@ -125,6 +127,7 @@ pub struct Strings {
     pub log_rename: &'static str,
     pub log_door_reopen: &'static str,
     pub log_voxel_display: &'static str,
+    pub log_uv_preview: &'static str,
     pub log_stall: &'static str,
     pub log_final_remesh: &'static str,
     pub log_engine: &'static str,
@@ -282,6 +285,10 @@ pub struct Strings {
     pub label_voxel_blur: &'static str,
     /// What a blur above zero costs.
     pub hint_voxel_blur: &'static str,
+    /// How a mesh layer carrying UVs is drawn.
+    pub label_uv_display: &'static str,
+    /// What the checker and the seams say.
+    pub hint_uv_display: &'static str,
     /// The lattice section of the inspector.
     pub section_lattice: &'static str,
     /// Putting a cage up and taking it down.
@@ -962,6 +969,7 @@ const PT_BR: Strings = Strings {
     cut_gesture_names: ["Linha", "Laço", "Retângulo"],
     smooth_mode_names: ["Forma", "Só detalhe", "Forma com detalhe"],
     voxel_display_names: ["Voxels", "Suave"],
+    uv_display_names: ["Material", "Xadrez", "Ilhas"],
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
         "Padrão",
@@ -1103,6 +1111,7 @@ const PT_BR: Strings = Strings {
     log_rename: "a camada não pôde ser renomeada",
     log_door_reopen: "a porta do agente não pode ser reaberta nesta sessão",
     log_voxel_display: "a exibição de voxels não pôde ser alterada",
+    log_uv_preview: "as UVs da camada não puderam ser lidas para a pré-visualização",
     log_stall: "a interface travou",
     log_final_remesh: "re-malha final",
     log_engine: "motor",
@@ -1220,6 +1229,8 @@ libera em vez de congelar.",
     label_voxel_display: "Exibir voxels como",
     label_voxel_blur: "Suavização",
     hint_voxel_blur: "Acima de zero apaga voxels isolados e detalhes finos",
+    label_uv_display: "Mostrar UVs como",
+    hint_uv_display: "Costuras em vermelho. Onde o layout estica, os quadrados deixam de ser quadrados.",
     section_lattice: "GAIOLA",
     action_cage: "Gaiola de deformação",
     action_bend: "Deformar",
@@ -1737,6 +1748,7 @@ const EN_US: Strings = Strings {
     cut_gesture_names: ["Line", "Lasso", "Rectangle"],
     smooth_mode_names: ["Form", "Detail only", "Form with detail"],
     voxel_display_names: ["Voxels", "Smooth"],
+    uv_display_names: ["Material", "Checker", "Islands"],
     gizmo_mode_names: ["Move", "Turn", "Scale"],
     tool_names: [
         "Standard",
@@ -1878,6 +1890,7 @@ const EN_US: Strings = Strings {
     log_rename: "the layer could not be renamed",
     log_door_reopen: "the agent door cannot be reopened in this session",
     log_voxel_display: "the voxel display could not be changed",
+    log_uv_preview: "the layer's UVs could not be read for the preview",
     log_stall: "the interface stalled",
     log_final_remesh: "final remesh",
     log_engine: "engine",
@@ -1995,6 +2008,8 @@ instead.",
     label_voxel_display: "Draw voxels as",
     label_voxel_blur: "Blur",
     hint_voxel_blur: "Above zero deletes isolated voxels and thin detail",
+    label_uv_display: "Show UVs as",
+    hint_uv_display: "Seams in red. Where the layout stretches, the squares stop being square.",
     section_lattice: "LATTICE",
     action_cage: "Deformation cage",
     action_bend: "Deform",
@@ -2507,6 +2522,7 @@ const ES_419: Strings = Strings {
     cut_gesture_names: ["Línea", "Lazo", "Rectángulo"],
     smooth_mode_names: ["Forma", "Sólo detalle", "Forma con detalle"],
     voxel_display_names: ["Vóxeles", "Suave"],
+    uv_display_names: ["Material", "Ajedrez", "Islas"],
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
         "Estándar",
@@ -2648,6 +2664,7 @@ const ES_419: Strings = Strings {
     log_rename: "no se pudo renombrar la capa",
     log_door_reopen: "la puerta del agente no se puede reabrir en esta sesión",
     log_voxel_display: "no se pudo cambiar la visualización de vóxeles",
+    log_uv_preview: "no se pudieron leer las UVs de la capa para la vista previa",
     log_stall: "la interfaz se bloqueó",
     log_final_remesh: "remallado final",
     log_engine: "motor",
@@ -2765,6 +2782,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     label_voxel_display: "Mostrar vóxeles como",
     label_voxel_blur: "Suavizado",
     hint_voxel_blur: "Por encima de cero borra vóxeles aislados y detalles finos",
+    label_uv_display: "Mostrar UVs como",
+    hint_uv_display: "Costuras en rojo. Donde el layout estira, los cuadrados dejan de ser cuadrados.",
     section_lattice: "GAIOLA",
     action_cage: "Gaiola de deformação",
     action_bend: "Deformar",
@@ -3658,6 +3677,10 @@ impl Strings {
         )
     }
 
+    pub fn uv_display_name(&self, how: clayspace_model::UvDisplay) -> &'static str {
+        Self::at(&self.uv_display_names, clayspace_model::UvDisplay::ALL, how)
+    }
+
     /// The name sitting at `value`'s position in `all`.
     ///
     /// Falls back to the first entry rather than panicking: a missing name is
@@ -3799,6 +3822,8 @@ impl Strings {
             self.label_voxel_display,
             self.label_voxel_blur,
             self.hint_voxel_blur,
+            self.label_uv_display,
+            self.hint_uv_display,
             self.section_lattice,
             self.action_cage,
             self.action_bend,
@@ -4040,6 +4065,7 @@ impl Strings {
             self.log_rename,
             self.log_door_reopen,
             self.log_voxel_display,
+            self.log_uv_preview,
             self.log_stall,
             self.log_final_remesh,
             self.log_engine,

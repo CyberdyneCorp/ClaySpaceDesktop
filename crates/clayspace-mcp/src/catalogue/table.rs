@@ -279,6 +279,9 @@ fn view_presets() -> Vec<&'static str> {
 fn voxel_displays() -> Vec<&'static str> {
     tags::tags_of(tags::VOXEL_DISPLAYS)
 }
+fn uv_displays() -> Vec<&'static str> {
+    tags::tags_of(tags::UV_DISPLAYS)
+}
 fn directions() -> Vec<&'static str> {
     tags::tags_of(tags::DIRECTIONS)
 }
@@ -1813,6 +1816,18 @@ pub const TABLE: &[ActionSpec] = &[
             ),
         ],
         example: r#"{"display":"smooth","blur_passes":0}"#,
+    },
+    ActionSpec {
+        group: "view",
+        name: "set_uv_display",
+        summary: "How the active mesh layer's UVs are drawn: off, a checker, or the \
+                  checker tinted by island, with the seams over either.",
+        arguments: &[r(
+            "display",
+            Kind::Choice(uv_displays),
+            "off, checker or islands",
+        )],
+        example: r#"{"display":"checker"}"#,
     },
     ActionSpec {
         group: "view",

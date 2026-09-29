@@ -14,7 +14,9 @@ use crate::matcap::MatCap;
 use crate::palette;
 use crate::profiler::{GpuFrameTiming, GpuPass, GpuProfiler};
 use crate::quality::{ShadingMode, StudioMaterial, ViewportQuality};
-use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity, Transform};
+use clayspace_model::{
+    GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity, Transform, UvDisplay, UvPreview,
+};
 
 mod ao;
 mod overlays;
@@ -22,6 +24,7 @@ mod pipelines;
 pub mod polyframe;
 mod shadow;
 mod textures;
+mod uv_preview;
 
 use ao::*;
 pub use overlays::ScreenMetric;
@@ -30,6 +33,8 @@ pub use overlays::{frame_about, BRACKET_REACH, RING_REACH, SCALE_BOX_REACH, VIEW
 use pipelines::*;
 pub use textures::Reference;
 use textures::*;
+use uv_preview::UvPreviewMesh;
+pub use uv_preview::{island_tint, uv_geometry, UvGeometry, UvVertex, SEAM_COLOR};
 
 /// A box, as `(min, max)`.
 pub type Aabb = ([f32; 3], [f32; 3]);
@@ -901,6 +906,12 @@ pub struct Renderer {
     wire_layout: polyframe::LineLayout,
     /// Whether to draw them.
     polyframe: bool,
+    /// A mesh layer's UV layout as a checker, drawn in place of its span.
+    uv_pipeline: wgpu::RenderPipeline,
+    /// That layout's seams, as coloured lines over it.
+    seam_pipeline: wgpu::RenderPipeline,
+    /// The layout being previewed, when one is.
+    uv_preview: Option<UvPreviewMesh>,
     /// The triangles the edges were last built from, when they have not been
     /// built for the triangles currently uploaded.
     ///
@@ -1376,6 +1387,28 @@ impl Renderer {
             "wire_fs",
             PipelineState::wire(),
         );
+        // The UV preview: the surface's state over the preview's own vertex
+        // type, and the seams as the polyframe draws its lines — biased onto
+        // the surface — but in their own colour.
+        let uv_pipeline = make_pipeline_for(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "uv_vs",
+            "uv_checker_fs",
+            PipelineState::opaque(wgpu::PrimitiveTopology::TriangleList),
+            UvVertex::layout(),
+        );
+        let seam_pipeline = make_pipeline(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "overlay_fs",
+            PipelineState::wire(),
+        );
 
         // The occlusion passes. Their own module: they bind depth textures and
         // a uniform of their own, so they share no layout with the scene.
@@ -1645,6 +1678,9 @@ impl Renderer {
             wire_layout: polyframe::LineLayout::default(),
             polyframe: false,
             pending_edges: None,
+            uv_pipeline,
+            seam_pipeline,
+            uv_preview: None,
             membrane_pipeline,
             cursor_pipeline,
             reduce_pipeline,
@@ -2154,6 +2190,54 @@ impl Renderer {
         self.active_subtool = layer;
     }
 
+    /// Shows one mesh layer's UV layout on it, or stops showing one.
+    ///
+    /// Drawn in place of that layer's span of the carried buffer, so the
+    /// layer must also be among the carried ones for anything to change: a
+    /// preview of a layer that is not drawn draws nothing. `None`, or a
+    /// display of [`UvDisplay::Off`], puts the layer's own material back and
+    /// frees the preview's buffers.
+    pub fn set_uv_preview(&mut self, gpu: &Gpu, preview: Option<(&UvPreview, UvDisplay)>) {
+        self.uv_preview =
+            preview
+                .filter(|(_, display)| display.is_on())
+                .map(|(preview, display)| {
+                    let geometry = uv_geometry(preview, display);
+                    UvPreviewMesh::upload(gpu, preview.layer, &geometry)
+                });
+    }
+
+    /// The layer whose UV layout is drawn this frame, if any.
+    ///
+    /// Only while the surface is solid: drawn through, the checker would be
+    /// the one opaque thing in a ghosted scene, so a cage or a dialled-back
+    /// opacity draws the layer's own material instead.
+    pub fn uv_preview_layer(&self) -> Option<LayerKey> {
+        let preview = self.uv_preview.as_ref()?;
+        let carried = self
+            .mesh_spans
+            .iter()
+            .any(|span| span.layer == preview.layer);
+        (carried && self.drawn_opacity().is_solid()).then_some(preview.layer)
+    }
+
+    /// Draws the previewed layout and its seams, when there is one to draw.
+    fn draw_uv_preview(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let Some(preview) = self
+            .uv_preview
+            .as_ref()
+            .filter(|_| self.uv_preview_layer().is_some())
+        else {
+            return;
+        };
+        pass.set_pipeline(&self.uv_pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, preview.vertices.slice(..));
+        pass.set_index_buffer(preview.indices.slice(..), wgpu::IndexFormat::Uint32);
+        self.draw_indexed(pass, 0..preview.index_count, Primitive::Triangles);
+        self.draw_mesh(pass, &preview.seams, &self.seam_pipeline, Primitive::Lines);
+    }
+
     /// Whether the surface is drawn through.
     ///
     /// On while a deformation cage is up: the sculptor is aiming at control
@@ -2335,7 +2419,12 @@ impl Renderer {
             self.draw_indexed(pass, 0..self.mesh_layers.index_count, Primitive::Triangles);
             return;
         }
+        let previewed = self.uv_preview_layer();
         for span in &self.mesh_spans {
+            // The previewed layer is drawn by `draw_uv_preview` instead.
+            if Some(span.layer) == previewed {
+                continue;
+            }
             // A span with no bounds is never culled: a caller that has not
             // said where its triangles are has not said they are elsewhere.
             if let Some((min, max)) = span.bounds {
@@ -2585,6 +2674,10 @@ impl Renderer {
                 // Back to the plain material, which a tinted span may have
                 // replaced: everything after this belongs to no subtool.
                 pass.set_bind_group(0, &self.bind_group, &[]);
+                self.draw_uv_preview(&mut pass);
+                // The polyframe reads the carried buffer, which the preview
+                // replaced as the bound one.
+                pass.set_vertex_buffer(0, self.mesh_layers.vertices.slice(..));
 
                 // And its edges over it, when the polyframe is on. The same
                 // vertex buffer, read as a line list through its own indices.
