@@ -163,7 +163,7 @@ pub fn home_of(command: &Command) -> Home {
         RunBoolean => Home::In("boolean", "run"),
 
         // -- layer ----------------------------------------------------------
-        SelectLayer(_) => Home::In("layer", "select"),
+        SelectLayer(_) | SelectLayerSettlingCage(..) => Home::In("layer", "select"),
         SetLayerVisible(..) => Home::In("layer", "set_visible"),
         SoloLayer(_) => Home::In("layer", "solo"),
         AddLayer(_) => Home::In("layer", "add"),
@@ -187,12 +187,17 @@ pub fn home_of(command: &Command) -> Home {
         NewDocument => Home::In("document", "new"),
         OpenRecent(_) => Home::In("document", "open"),
         Save => Home::In("document", "save"),
+        SaveTo(_) => Home::In("document", "save_as"),
         Quit => Home::In("document", "quit"),
         OpenDocument => {
             Home::NotOffered("this opens a file panel; document.open takes the path instead")
         }
-        SaveAs => Home::NotOffered(
-            "this opens a file panel; document.save writes where the document already is",
+        SaveAs => {
+            Home::NotOffered("this opens a file panel; document.save_as takes the path instead")
+        }
+        AnswerRecovery(_) => Home::NotOffered(
+            "it answers the person's own question about work a crashed session left \
+             behind, which is theirs to decide at the window",
         ),
 
         // -- exchange -------------------------------------------------------
@@ -200,8 +205,14 @@ pub fn home_of(command: &Command) -> Home {
         ToggleExport => Home::In("exchange", "toggle_export"),
         SetImportSettings(_) => Home::In("exchange", "set_import"),
         SetExportSettings(_) => Home::In("exchange", "set_export"),
-        RunImport => Home::In("exchange", "run_import"),
-        RunExport => Home::In("exchange", "run_export"),
+        ImportFrom(_) => Home::In("exchange", "run_import"),
+        ExportTo(_) => Home::In("exchange", "run_export"),
+        RunImport => {
+            Home::NotOffered("this opens a file panel; exchange.run_import takes the path instead")
+        }
+        RunExport => {
+            Home::NotOffered("this opens a file panel; exchange.run_export takes the path instead")
+        }
 
         // -- repair ---------------------------------------------------------
         ToggleRepair => Home::In("repair", "toggle_panel"),
@@ -606,7 +617,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("boolean", "run") => C::RunBoolean,
 
         // -- layer ----------------------------------------------------------
-        ("layer", "select") => C::SelectLayer(LayerKey(args.layer("layer")?)),
+        ("layer", "select") => select_layer(args)?,
         ("layer", "set_visible") => {
             C::SetLayerVisible(LayerKey(args.layer("layer")?), args.boolean("visible")?)
         }
@@ -648,6 +659,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("document", "new") => C::NewDocument,
         ("document", "open") => C::OpenRecent(args.text("path")?.into()),
         ("document", "save") => C::Save,
+        ("document", "save_as") => C::SaveTo(args.text("path")?.into()),
         ("document", "quit") => C::Quit,
 
         // -- exchange -------------------------------------------------------
@@ -669,8 +681,8 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
             resolution: args.number_or("resolution", ExportSettings::default().resolution)?,
             decimate_to: args.optional_number("decimate_to")?,
         }),
-        ("exchange", "run_import") => C::RunImport,
-        ("exchange", "run_export") => C::RunExport,
+        ("exchange", "run_import") => C::ImportFrom(args.text("path")?.into()),
+        ("exchange", "run_export") => C::ExportTo(args.text("path")?.into()),
 
         // -- repair ---------------------------------------------------------
         ("repair", "toggle_panel") => C::ToggleRepair,
@@ -725,6 +737,11 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
                 "in_place",
                 clayspace_model::RetopoSettings::default().in_place,
             )?,
+            // Off unless asked for, as in the panel: a production mesh
+            // without UVs costs no layout.
+            uv: args
+                .boolean_or("uvs", false)?
+                .then(clayspace_model::UvSettings::default),
         }),
         ("retopo", "run") => C::RunRetopology,
         ("uv", "set") => C::SetUvSettings(clayspace_model::UvSettings {
@@ -872,6 +889,21 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
 
 fn optional_index(args: &Args<'_>, name: &str) -> Result<Option<usize>, Refusal> {
     args.optional_whole(name)
+}
+
+/// A switch of the active layer, with what becomes of a standing cage said up
+/// front where the caller says it.
+///
+/// Two commands rather than one with an optional field: the pointer's switch
+/// asks the person, and only the door's says the answer beforehand.
+fn select_layer(args: &Args<'_>) -> Result<Command, Refusal> {
+    let key = LayerKey(args.layer("layer")?);
+    Ok(match args.optional_text("cage")? {
+        None => Command::SelectLayer(key),
+        Some(given) => {
+            Command::SelectLayerSettlingCage(key, args.choose("cage", &given, tags::CAGE_FATES)?)
+        }
+    })
 }
 
 /// One of the brush's numbers, with what the brush will make of it reported.

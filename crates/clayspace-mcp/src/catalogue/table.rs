@@ -282,6 +282,9 @@ fn voxel_displays() -> Vec<&'static str> {
 fn directions() -> Vec<&'static str> {
     tags::tags_of(tags::DIRECTIONS)
 }
+fn cage_fates() -> Vec<&'static str> {
+    tags::tags_of(tags::CAGE_FATES)
+}
 fn import_as() -> Vec<&'static str> {
     tags::tags_of(tags::IMPORT_AS)
 }
@@ -1113,8 +1116,17 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "layer",
         name: "select",
-        summary: "Makes a layer the active one.",
-        arguments: &[r("layer", Kind::Integer, "the layer's key")],
+        summary: "Makes a layer the active one. Where a dragged cage stands on \
+                  the active layer, `cage` says what becomes of it; without it \
+                  the switch is refused rather than asked about at the window.",
+        arguments: &[
+            r("layer", Kind::Integer, "the layer's key"),
+            o(
+                "cage",
+                Kind::Choice(cage_fates),
+                "apply the standing cage's deformation, or discard it",
+            ),
+        ],
         example: r#"{"layer":1}"#,
     },
     ActionSpec {
@@ -1292,9 +1304,18 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "document",
         name: "save",
-        summary: "Writes the document where it already is. Gated.",
+        summary: "Writes the document where it already is. Gated. Refused for a \
+                  document that has never been saved: save_as names the path.",
         arguments: &[],
         example: "{}",
+    },
+    ActionSpec {
+        group: "document",
+        name: "save_as",
+        summary: "Writes the document to a path and makes it the document's own. \
+                  Gated; no file panel opens.",
+        arguments: &[r("path", Kind::Path, "the .clayspace file to write")],
+        example: r#"{"path":"/Users/me/head.clayspace"}"#,
     },
     ActionSpec {
         group: "document",
@@ -1348,16 +1369,18 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "exchange",
         name: "run_import",
-        summary: "Runs the import the panel is set to. Gated.",
-        arguments: &[],
-        example: "{}",
+        summary: "Brings a mesh file in with the settings set_import holds. \
+                  Gated; no file panel opens.",
+        arguments: &[r("path", Kind::Path, "the mesh file to read")],
+        example: r#"{"path":"/Users/me/scan.obj"}"#,
     },
     ActionSpec {
         group: "exchange",
         name: "run_export",
-        summary: "Runs the export the panel is set to. Gated.",
-        arguments: &[],
-        example: "{}",
+        summary: "Writes the document to a mesh file with the settings set_export \
+                  holds. Gated; no file panel opens.",
+        arguments: &[r("path", Kind::Path, "the mesh file to write")],
+        example: r#"{"path":"/Users/me/head.obj"}"#,
     },
     // -- repair -------------------------------------------------------------
     ActionSpec {
@@ -1433,6 +1456,11 @@ pub const TABLE: &[ActionSpec] = &[
                 "in_place",
                 Kind::Boolean,
                 "replace the source layer instead of adding a new one",
+            ),
+            o(
+                "uvs",
+                Kind::Boolean,
+                "lay out UVs on the result; off by default",
             ),
         ],
         example: r#"{"target_quads":10000,"method":"quadcover"}"#,

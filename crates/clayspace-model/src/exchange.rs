@@ -195,6 +195,8 @@ pub enum ExportWarningKind {
     MissingNormals,
     NonManifold(usize),
     OpenBoundary(usize),
+    /// A visible layer carried UVs and the written file carries none.
+    DroppedUvs,
 }
 
 impl ExportWarning {
@@ -294,6 +296,14 @@ impl ExportWarning {
                 kind: ExportWarningKind::OpenBoundary(mesh.boundary_edges),
             });
         }
+        if mesh.dropped_uvs {
+            warnings.push(Self {
+                message: "a visible layer's UVs were dropped because the rest of the export \
+                          carries none; hide the other layers to export them"
+                    .to_string(),
+                kind: ExportWarningKind::DroppedUvs,
+            });
+        }
         warnings
     }
 }
@@ -311,6 +321,13 @@ pub struct WrittenMesh {
     pub manifold: bool,
     pub non_manifold_edges: usize,
     pub boundary_edges: usize,
+    /// A visible mesh layer carried UVs, the format stores them, and the file
+    /// has none.
+    ///
+    /// The engine's concat rule drops an attribute that any input lacks, and
+    /// the meshed field never carries UVs — so a retopology's layout exported
+    /// beside a visible sculpt is lost without this saying so.
+    pub dropped_uvs: bool,
 }
 
 /// Reading and writing geometry.
@@ -421,6 +438,7 @@ mod tests {
             manifold: true,
             non_manifold_edges: 0,
             boundary_edges: 0,
+            dropped_uvs: false,
         })
         .is_empty());
     }
@@ -437,6 +455,7 @@ mod tests {
             manifold: false,
             non_manifold_edges: 6,
             boundary_edges: 0,
+            dropped_uvs: false,
         });
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].message.contains('6'), "{warnings:?}");
@@ -456,6 +475,7 @@ mod tests {
             manifold: true,
             non_manifold_edges: 0,
             boundary_edges: 12,
+            dropped_uvs: false,
         });
         assert_eq!(open.len(), 1, "{open:?}");
         assert!(open[0].message.contains("watertight"), "{open:?}");
@@ -465,8 +485,23 @@ mod tests {
             manifold: false,
             non_manifold_edges: 3,
             boundary_edges: 12,
+            dropped_uvs: false,
         });
         assert_eq!(both.len(), 2, "{both:?}");
+    }
+
+    /// A layout lost on the way out is a finding of its own, beside a mesh
+    /// that is otherwise sound.
+    #[test]
+    fn a_dropped_layout_is_said() {
+        let warnings = ExportWarning::for_written_mesh(WrittenMesh {
+            watertight: true,
+            manifold: true,
+            dropped_uvs: true,
+            ..WrittenMesh::default()
+        });
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].kind, ExportWarningKind::DroppedUvs);
     }
 
     /// What is predicted and what is observed do not say the same thing twice.
@@ -491,6 +526,7 @@ mod tests {
             manifold: false,
             non_manifold_edges: 4,
             boundary_edges: 0,
+            dropped_uvs: false,
         });
         for p in &predicted {
             assert!(

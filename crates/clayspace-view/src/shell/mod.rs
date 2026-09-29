@@ -76,7 +76,7 @@ pub use shelf::{
     tool_rail, ShelfFilter,
 };
 pub use widgets::{chip_id, close_id, heading_id, readout_id, slider_id, slider_widget_id};
-pub use windows::{agent_access_window, agent_ask_window};
+pub use windows::{agent_access_window, agent_ask_window, recovery_window};
 pub use windows::{
     attribution_window, convert_window, deform_window, diagnostics_window, export_window,
     import_window, reference_slider_name, reference_window, repair_window, ReferenceSlot,
@@ -288,6 +288,8 @@ pub struct ShellState<'a> {
     pub agent_acted: Option<u64>,
     /// Whether the address and secret are on screen.
     pub agent_access: bool,
+    /// Whether a previous session's unsaved work is on offer.
+    pub recovery_offered: bool,
     pub strings: &'a Strings,
     /// The bindings in force, so a menu item can show the chord that does the
     /// same thing. Borrowed rather than copied because remapping replaces the

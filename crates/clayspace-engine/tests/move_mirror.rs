@@ -355,3 +355,52 @@ fn two_falloff_curves_are_two_different_pulls() {
          were first labelled backwards"
     );
 }
+
+/// A drag centred on the mirror plane, pulling along it, moves the surface as
+/// far as the same drag with no mirror (#170, F10).
+///
+/// On the plane the drag's reflection is the drag itself, and the engine gives
+/// the item under it one grab per image, so the same grab twice: measured on
+/// v0.120.1, 0.2307 against 0.1458 (1.58x), live and held alike. The images are
+/// resolved inside the engine and the host has no lever on them, so this waits
+/// on ClayCore #663.
+#[test]
+#[ignore = "ClayCore #663: a drag's reflected image coincides with it on the plane"]
+fn a_move_on_the_plane_is_applied_once() {
+    let along_the_plane = |symmetry: [bool; 3]| {
+        let mut document = sphere();
+        document.set_symmetry(symmetry).expect("symmetry");
+        let rest = radius_along(&document, [0.0, 1.0, 0.0]).expect("the pole");
+        let samples: Vec<GestureSample> = (0..=6)
+            .map(|step| {
+                let t = step as f32 / 6.0;
+                GestureSample {
+                    position: [0.0, 1.0 + t * 0.25, 0.0],
+                    pressure: 1.0,
+                    time: t,
+                }
+            })
+            .collect();
+        document
+            .apply_stroke(
+                ToolKind::Mover,
+                BrushSettings {
+                    size: 0.35,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &samples,
+                symmetry,
+            )
+            .expect("a drag");
+        radius_along(&document, [0.0, 1.0, 0.0]).expect("the dragged pole") - rest
+    };
+
+    let unmirrored = along_the_plane([false; 3]);
+    let mirrored = along_the_plane([true, false, false]);
+    assert!(
+        (mirrored - unmirrored).abs() < unmirrored * 0.1,
+        "a drag on the mirror plane moved the surface +{mirrored:.4} where the \
+         unmirrored drag moves it +{unmirrored:.4}"
+    );
+}

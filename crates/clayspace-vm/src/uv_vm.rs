@@ -4,10 +4,11 @@
 //! document is an `Rc<RefCell>` that cannot cross to a worker. Read the source
 //! here, unwrap there, record the report here.
 //!
-//! **What comes back is a report and not a mesh.** ClayCore's mesh layers carry
-//! no UV attribute, so the atlas stays in the engine that computed it and this
-//! carries up the figures a sculptor judges the layout by. A layout living in
-//! two places is a layout that can disagree with itself.
+//! **What comes back is a report and not a mesh.** The atlas stays in the
+//! engine that computed it and this carries up the figures a sculptor judges
+//! the layout by: a layout written onto a subtool still being shaped is one the
+//! next stroke invalidates. A retopology asked for UVs is where a layout is
+//! kept on the layer — see `RetopoSettings::uv`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

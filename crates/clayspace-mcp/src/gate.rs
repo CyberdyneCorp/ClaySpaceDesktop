@@ -22,14 +22,15 @@ use crate::session::GateKind;
 /// is not named here is one the history covers.
 pub fn gate_of(command: &Command) -> Option<GateKind> {
     match command {
-        // Writes over whatever is at the document's own path.
-        Command::Save => Some(GateKind::Overwrite),
+        // Writes over whatever is at the document's own path, or at the one
+        // named — which may hold a file already.
+        Command::Save | Command::SaveTo(_) => Some(GateKind::Overwrite),
         // Reads a document over the one that is open.
         Command::OpenRecent(_) => Some(GateKind::Open),
         // Reads a mesh in, over or beside what is open.
-        Command::RunImport => Some(GateKind::Open),
+        Command::RunImport | Command::ImportFrom(_) => Some(GateKind::Open),
         // Writes a mesh out of the document.
-        Command::RunExport => Some(GateKind::Export),
+        Command::RunExport | Command::ExportTo(_) => Some(GateKind::Export),
         // Loses whatever is unsaved.
         Command::NewDocument => Some(GateKind::DiscardUnsaved),
         Command::Quit => Some(GateKind::Quit),
@@ -82,7 +83,19 @@ mod tests {
     #[test]
     fn what_leaves_the_document_is_gated() {
         assert_eq!(gate_of(&Command::Save), Some(GateKind::Overwrite));
+        assert_eq!(
+            gate_of(&Command::SaveTo("/tmp/a.clayspace".into())),
+            Some(GateKind::Overwrite)
+        );
         assert_eq!(gate_of(&Command::RunExport), Some(GateKind::Export));
+        assert_eq!(
+            gate_of(&Command::ExportTo("/tmp/a.obj".into())),
+            Some(GateKind::Export)
+        );
+        assert_eq!(
+            gate_of(&Command::ImportFrom("/tmp/a.obj".into())),
+            Some(GateKind::Open)
+        );
         assert_eq!(
             gate_of(&Command::OpenRecent("/tmp/a.clayspace".into())),
             Some(GateKind::Open)

@@ -572,8 +572,10 @@ write the *active* subtool's axes, and switching subtools restores that
 subtool's own setting rather than carrying the previous one's along. A new
 subtool starts with X on, which is what the design asks. One exception, and it
 is the rig's: a rig's own subtool starts with symmetry **off**, because a rig
-does its own mirroring (`add_zsphere` places the reflected node itself) and a
-layer mirror on top of that hangs a second arm off the first.
+does its own mirroring (`add_zsphere` places the reflected node itself). For
+the same reason the rig's item stays out of the layer mirror, so a stroke made
+with symmetry on on the rig's subtool mirrors the stroke and never gives a
+sphere added one-sided a twin (#170, A5).
 
 The setting and the engine's mirror are two things, and the mirror is written
 by the stroke that wants it rather than by the toggle that asked for it.
@@ -614,10 +616,13 @@ sphere (whose reflection is itself) costs nothing extra; marking the whole
 layer re-meshed all 1043 of its keys on the next dab. The gap is a node whose
 box is symmetric about the plane while its shape is not.
 
-Still open on #170: turning symmetry *off*, or moving it to another axis,
-re-points the layer's mirror and so still changes items made under the old
-one; a Move drag exactly on the mirror plane is applied once per image; and rig
-edits.
+Still open on #170, both waiting on the engine: turning symmetry *off*, or
+moving it to another axis, re-points the layer's mirror and so still changes
+items made under the old one, because an item's participation is one bool and
+a host cannot express a reflected copy to bake it (ClayCore #664); and a Move
+drag exactly on the mirror plane is applied once per image, 1.58x the
+unmirrored pull, because on the plane the reflected image is the drag itself
+(ClayCore #663, pinned by the ignored `a_move_on_the_plane_is_applied_once`).
 
 On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
@@ -2961,10 +2966,33 @@ reports is what a sculptor judges it by: charts, angle distortion, coverage, and
 the **flipped-chart count** — which is a *defect* rather than a figure on a
 scale, so it is stated as a sentence only when there is one.
 
-**The atlas stays in the retopology engine.** ClayCore's mesh layers carry no UV
-attribute, so writing it back would mean inventing one, and a layout living in
-two places is a layout that can disagree with itself. The report crosses back;
-the atlas is written at export from the engine that holds it.
+**The standalone layout is a report.** Run from the UV panel on an existing
+subtool, the atlas stays in the retopology engine and only its figures cross
+back: writing it onto a layer the sculptor is still shaping would be a layout
+the next stroke invalidates.
+
+**UVs on a retopology are kept.** *Gerar UVs* in the retopology panel (the
+agent's `retopo set` `uvs`) is **off by default** — a production mesh without
+UVs costs no layout. Asked for, the job lays the quads out after
+retopologising them, in the same cancellable run, and the accepted layer
+carries the UVs through a save and an open, an undo and a redo, and an export.
+The retopology engine writes a layout per face *corner*; a mesh layer stores
+one UV per *vertex*, so the vertices on a seam are duplicated, one copy per
+distinct UV and nothing else, each carrying the welded mesh's normal so the cut
+is not shaded into the surface. The report sits under the result — charts,
+distortion, coverage, and flipped or projected charts named as defects when
+there are any. A layout the engine refuses does **not** cost the retopology:
+the quads are placed without UVs, and the panel, the notice and the agent's
+`outcomes.retopology.uv` (`not_requested` / `laid` / `failed` with its reason)
+all say so.
+
+**Exporting a layout.** The engine's combined export concatenates the meshed
+field and every visible mesh layer, and an attribute any input lacks is dropped
+from all of them — the field never carries UVs. So export the result on its
+own: hide the other layers, and a document whose visible geometry is mesh
+layers alone is written from those layers. An export that did drop a visible
+layer's UVs says so rather than writing the file quietly. The checker preview
+and a seam display are not drawn yet; the viewport has no UV attribute.
 
 **Cozer mapas** bakes normal, ambient occlusion, curvature and cavity **from the
 field**, with no high-poly mesh at all. This is the half of the pipeline nothing
@@ -3209,14 +3237,24 @@ at the speed of the hand and the surface catches up **once**, when the pointer
 comes up — the same answer the region-based brushes already give, and for the
 same reason.
 
-One of the thirteen operations is dearer than the rest to drag. The engine
-drops a node's finite influence bound for a non-local operation anywhere in the
-subtree, so an object set to **Interseção** dirties the whole layer on every
-frame while the same object subtracting dirties its own box. Measured on the
-same object and the same scene: 21.3 ms a frame subtracting against 49.1 ms
-intersecting — `object.drag_frame` and `object.drag_frame_intersect` in
-`benchmarks/archive/linux-x86_64-cuda-engine-0.52.2.json`, better than twice the cost (#282 tracks it). It is not
-visible from the interface, which is why it is worth saying here.
+One of the operations is still dearer than the rest to drag. An object set to
+**Interseção** has the whole layer as its influence, because an intersection
+removes material wherever the layer has any, and a frame that refilled that
+region cost more than twice the subtracting frame: 21.3 ms against 49.1 ms in
+`benchmarks/archive/linux-x86_64-cuda-engine-0.52.2.json`, 2.73x on the
+`macos-14` runner at engine 0.120.1, and about a second a frame on
+`reference-10x`.
+
+A move changes less than an arbitrary edit. The surface can only have moved
+inside the sweep of where the object was and where it went. The engine reports
+that region (`clay_layer_set_transform_bound`), dilated by a pad for the
+blended strokes further down the layer, and a frame refills where that region
+overlaps the influence bound (#282). On the benchmark scenes that is 3,360
+bricks a frame against the layer's 5,040 at the reference size, and 23,520 to
+26,880 against 84,672 at ten times the area. The subtracting control is 1,012,
+and the engine's pad is what stands between the two (CyberdyneCorp/ClayCore#666).
+A stretched object, with different scales per axis, still refills its layer:
+the engine has no narrow answer for one.
 
 ### A model as an operand
 
@@ -3690,6 +3728,12 @@ which is what makes rigging feel like modelling rather than filling in a form.
   the one a redo has to put right, and re-reading only the rigged ones left it
   in the surface and out of reach. A rig a step brings back takes the sculptor
   with it, since a rig is offered for the active subtool alone.
+- **A rig edit keeps what was sculpted on the rig's subtool.** Every edit
+  removes the armature and places it again, and it used to be placed at the
+  end of the layer, so it was combined after every stroke made there since: a
+  carve into the rig was filled in on the next edit. The rewritten armature is
+  moved back to where it stood in the layer's order (`clay_layer_move`) in the
+  same undo step (#170, A5).
 - An edit naming a sphere the rig does not have is refused rather than ignored.
   Every rig edit rewrites the whole armature, so a resize or a reparent of a
   sphere nobody has used to place the tree again unchanged — an undo step for a
@@ -4572,6 +4616,29 @@ Allowing once does not stand for the next one; allowing always records the kind
 in the session store and can be undone by editing `agente.consentimentos`.
 Nobody answering it refuses it after a bound rather than holding the connection
 open on an unattended machine.
+
+The bound is inside the call's own: eight seconds of waiting against a
+ten-second call, so a client is told before it gives up. It used to be twenty,
+and a person agreeing at second twelve agreed to a call nobody was waiting on.
+The ask stays up when the wait ends, and the retry picks up the answer.
+
+A gated operation takes its path rather than opening a file panel after
+consent: `document.save_as`, `document.open`, `exchange.run_import` and
+`exchange.run_export` each take `path`, and the person sees that path in the
+ask. The panel versions stay on the pointer path. Nothing the door does opens a
+native dialog, because a dialog holds the thread that serves the door and asks
+a question the caller cannot answer. Where the pointer's path would stop to
+ask, the door refuses and names the call that answers up front: a document
+never saved has no path for `document.save`, so `save_as` names one; opening or
+quitting over unsaved work is refused, and `document.new` is the route gated on
+discarding it; switching layers away from a dragged cage takes `cage: "apply"`
+or `"discard"` on `layer.select`.
+
+The crash-recovery offer is a window in the application, not an alert. The
+alert came up before the first frame and held the interface thread until
+somebody dismissed it, and every agent call timed out meanwhile. Nothing is
+autosaved over the file on offer while it stands, and an offer nobody answered
+is made again next time rather than cleared by a clean quit.
 
 Everything the edit history can bring back is ungated — sculpting, masking,
 transforming, selecting, navigating, undoing. That is what the session is for.

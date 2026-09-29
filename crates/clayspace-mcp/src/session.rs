@@ -843,6 +843,37 @@ pub struct RetopoOutcomeState {
     pub faces: usize,
     /// Whether the result came back as quads rather than triangles.
     pub quads: bool,
+    /// The optional UV layout: `not_requested`, `laid` or `failed`.
+    pub uv: RetopoUvState,
+}
+
+/// What became of a retopology's optional UV step.
+///
+/// A failure carries its reason and no figures, so an agent cannot read a
+/// refused layout as one that was laid.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RetopoUvState {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<UvReportState>,
+}
+
+/// A laid layout's quality, as the engine measured it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UvReportState {
+    pub charts: u32,
+    pub seam_edges: usize,
+    pub max_angle_distortion: f32,
+    pub rms_angle_distortion: f32,
+    /// Charts whose layout turned inside out: a defect, not a figure.
+    pub flipped_charts: u32,
+    /// Charts the unwrap could not flatten and projected instead.
+    pub fallback_charts: u32,
+    pub dropped_charts: u32,
+    /// The fraction of the UV square the charts cover.
+    pub packed_area: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

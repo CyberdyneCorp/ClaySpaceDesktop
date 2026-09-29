@@ -1666,33 +1666,48 @@ pub(super) fn uv_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut 
     // The report, on its own line because there are four numbers and they do
     // not fit beside a button.
     if let Some(outcome) = state.uv_outcome {
-        ui.label(
-            egui::RichText::new(format!(
-                "{} {} · {} {:.3} · {} {:.0}%",
-                outcome.charts,
-                s.uv_charts,
-                s.uv_distortion,
-                outcome.max_angle_distortion,
-                s.uv_coverage,
-                outcome.packed_area * 100.0
-            ))
-            .size(type_scale::LABEL)
-            .color(Tokens::text_dim()),
-        );
-        // A flipped chart is a parameterisation that turned inside out, which
-        // is a defect and not a figure on a scale. Shown on its own line only
-        // when there is one, rather than folded into the report above where a
-        // zero would read as another statistic — the same way the rebuild
-        // states "the result did not come out closed" as a sentence rather
-        // than as a number.
-        //
-        // In `text_dim` like every other notice in this panel, and not in a
-        // warning colour: this design system has no warning token, and
-        // inventing one here would put a colour on screen that nothing else
-        // uses and that no other defect gets.
-        if outcome.flipped_charts > 0 {
+        uv_report(ui, state.strings, &outcome);
+    }
+}
+
+/// A layout's report: charts, distortion and coverage on one line, and each
+/// defect on a line of its own when there is one.
+///
+/// Shared by the UV panel and a retopology that laid UVs out, so a layout
+/// reads the same wherever it was made.
+fn uv_report(ui: &mut egui::Ui, s: &Strings, outcome: &clayspace_model::UvOutcome) {
+    ui.label(
+        egui::RichText::new(format!(
+            "{} {} · {} {:.3} · {} {:.0}%",
+            outcome.charts,
+            s.uv_charts,
+            s.uv_distortion,
+            outcome.max_angle_distortion,
+            s.uv_coverage,
+            outcome.packed_area * 100.0
+        ))
+        .size(type_scale::LABEL)
+        .color(Tokens::text_dim()),
+    );
+    // A flipped chart is a parameterisation that turned inside out, which
+    // is a defect and not a figure on a scale. Shown on its own line only
+    // when there is one, rather than folded into the report above where a
+    // zero would read as another statistic — the same way the rebuild
+    // states "the result did not come out closed" as a sentence rather
+    // than as a number. A projected chart is the same kind of fact: the
+    // unwrap could not flatten it and stretched it onto a plane instead.
+    //
+    // In `text_dim` like every other notice in this panel, and not in a
+    // warning colour: this design system has no warning token, and
+    // inventing one here would put a colour on screen that nothing else
+    // uses and that no other defect gets.
+    for (count, what) in [
+        (outcome.flipped_charts, s.uv_flipped),
+        (outcome.fallback_charts, s.uv_fallback),
+    ] {
+        if count > 0 {
             ui.label(
-                egui::RichText::new(format!("{} {}", outcome.flipped_charts, s.uv_flipped))
+                egui::RichText::new(format!("{count} {what}"))
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
@@ -1796,6 +1811,7 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
             changed = true;
         }
         in_place.on_hover_text(s.retopo_in_place_hint);
+        changed |= retopo_uv_toggle(ui, s, &mut settings);
 
         for (label, hint, value, range) in [
             (
@@ -1871,7 +1887,7 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
         // rather than triangles, because faces are what a sculptor asked for
         // and the quad share is the answer to "did that actually give me
         // quads".
-        if let Some(outcome) = state.retopo_outcome {
+        if let Some(outcome) = &state.retopo_outcome {
             ui.label(
                 egui::RichText::new(format!(
                     "{} {} · {:.0}%",
@@ -1884,6 +1900,49 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
             );
         }
     });
+
+    if let Some(outcome) = &state.retopo_outcome {
+        retopo_uv_outcome(ui, s, &outcome.uv);
+    }
+}
+
+/// The retopology's optional layout. Off by default: a production mesh
+/// without UVs costs no layout. Returns whether the sculptor changed it.
+fn retopo_uv_toggle(
+    ui: &mut egui::Ui,
+    s: &Strings,
+    settings: &mut clayspace_model::RetopoSettings,
+) -> bool {
+    let mut with_uvs = settings.uv.is_some();
+    let toggle = ui.checkbox(
+        &mut with_uvs,
+        egui::RichText::new(s.retopo_uvs)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    let changed = toggle.changed();
+    if changed {
+        settings.uv = with_uvs.then(clayspace_model::UvSettings::default);
+    }
+    toggle.on_hover_text(s.retopo_uvs_hint);
+    changed
+}
+
+/// The layout, where one was asked for: its report when it was laid, and the
+/// refusal when it was not — never a result that looks as though it carries
+/// UVs when it does not.
+fn retopo_uv_outcome(ui: &mut egui::Ui, s: &Strings, uv: &clayspace_model::RetopoUv) {
+    match uv {
+        clayspace_model::RetopoUv::Laid(report) => uv_report(ui, s, report),
+        clayspace_model::RetopoUv::Failed(why) => {
+            ui.label(
+                egui::RichText::new(format!("{}: {why}", s.retopo_no_uvs))
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        }
+        clayspace_model::RetopoUv::NotRequested => {}
+    }
 }
 
 pub(super) fn remesh_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {

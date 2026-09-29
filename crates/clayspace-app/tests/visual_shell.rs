@@ -252,6 +252,7 @@ fn state<'a>(
         agent_ask: None,
         agent_acted: None,
         agent_access: false,
+        recovery_offered: false,
         colour: colours(),
         shortcuts: shortcuts(),
         mask_gesture: clayspace_model::MaskGesture::default(),

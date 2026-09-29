@@ -25,7 +25,7 @@
 //! mirror plane: an object placed at 0.9 reported its position as the origin.
 //! The bound answers what to dirty. The table answers where things are.
 
-use claycore::{NodeId, Primitive};
+use claycore::{Influence, NodeId, Primitive};
 use clayspace_model::{CombineSettings, ItemKind, ObjectId, ObjectSource, SceneObject, Shape};
 
 /// A placed object's state, as only the application knows it.
@@ -257,6 +257,39 @@ pub fn union(
     }
 }
 
+/// What a move reached, held inside a second bound that also covers it.
+///
+/// The region an object move changed is inside the engine's surface-delta box
+/// (`clay_layer_set_transform_bound`) and inside the union of the node's
+/// influence bounds before and after the move, so it is inside their overlap.
+/// The two answers are loose in different directions. For an intersect on a
+/// worked form, the delta box is the sweep dilated by the engine's chain pad
+/// and can reach past the layer, and the influence bound is the layer. Taking
+/// the overlap means a frame never refills more than either one alone.
+///
+/// `None` for `within` means no finite box, which bounds nothing.
+pub fn clip(reached: Influence, within: Option<([f32; 3], [f32; 3])>) -> Influence {
+    let Some((wmin, wmax)) = within else {
+        return reached;
+    };
+    match reached {
+        Influence::Nothing => Influence::Nothing,
+        Influence::Everything => Influence::Box {
+            min: wmin,
+            max: wmax,
+        },
+        Influence::Box { min, max } => {
+            let min: [f32; 3] = std::array::from_fn(|i| min[i].max(wmin[i]));
+            let max: [f32; 3] = std::array::from_fn(|i| max[i].min(wmax[i]));
+            if (0..3).any(|i| min[i] > max[i]) {
+                Influence::Nothing
+            } else {
+                Influence::Box { min, max }
+            }
+        }
+    }
+}
+
 // -- the side-car -----------------------------------------------------------
 
 /// Where an object table lives for a document at `path`.
@@ -442,6 +475,48 @@ mod tests {
         assert_eq!(kind_of(claycore::prim::STROKE), ItemKind::Stroke);
         assert_eq!(kind_of(claycore::prim::SWEPT), ItemKind::Curve);
         assert_eq!(kind_of(claycore::prim::ARMATURE), ItemKind::Armature);
+    }
+
+    #[test]
+    fn a_move_is_clipped_to_the_overlap_of_its_two_bounds() {
+        let reached = Influence::Box {
+            min: [-1.3, -1.2, -0.7],
+            max: [1.3, 3.0, 0.7],
+        };
+        let layer = Some(([-1.0, -1.0, -1.0], [1.0, 2.5, 1.1]));
+        assert_eq!(
+            clip(reached, layer),
+            Influence::Box {
+                min: [-1.0, -1.0, -0.7],
+                max: [1.0, 2.5, 0.7],
+            }
+        );
+    }
+
+    #[test]
+    fn an_unbounded_side_leaves_the_other_one() {
+        let layer = ([-1.0; 3], [1.0; 3]);
+        assert_eq!(
+            clip(Influence::Everything, Some(layer)),
+            Influence::Box {
+                min: layer.0,
+                max: layer.1,
+            }
+        );
+        assert_eq!(clip(Influence::Everything, None), Influence::Everything);
+        assert_eq!(clip(Influence::Nothing, Some(layer)), Influence::Nothing);
+    }
+
+    #[test]
+    fn boxes_that_do_not_meet_clip_to_nothing() {
+        let reached = Influence::Box {
+            min: [2.0; 3],
+            max: [3.0; 3],
+        };
+        assert_eq!(
+            clip(reached, Some(([-1.0; 3], [1.0; 3]))),
+            Influence::Nothing
+        );
     }
 
     /// One object, with a scale to round-trip.

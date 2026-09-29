@@ -53,6 +53,8 @@ const EXCHANGE: Duration = Duration::from_secs(90);
 struct Running {
     child: Child,
     root: PathBuf,
+    /// The child's session directory, where its address and consents live.
+    store: PathBuf,
     port: u16,
     secret: String,
 }
@@ -105,6 +107,7 @@ fn start() -> Option<Running> {
     let mut running = Running {
         child,
         root: root.clone(),
+        store: PathBuf::new(),
         port: 0,
         secret: String::new(),
     };
@@ -118,7 +121,11 @@ fn start() -> Option<Running> {
 
     let deadline = Instant::now() + STARTUP;
     while Instant::now() < deadline {
-        if let Some((port, secret)) = candidates.iter().find_map(|path| read_access(path)) {
+        if let Some((path, (port, secret))) = candidates
+            .iter()
+            .find_map(|path| read_access(path).map(|access| (path, access)))
+        {
+            running.store = path.parent().expect("a session directory").to_path_buf();
             running.port = port;
             running.secret = secret;
             return Some(running);
@@ -743,7 +750,10 @@ fn an_agent_drives_the_running_application() {
     // would lift it.
     let body = json!({
         "jsonrpc": "2.0", "id": 9, "method": "tools/call",
-        "params": { "name": "exchange", "arguments": { "action": "run_export" } },
+        "params": {
+            "name": "exchange",
+            "arguments": { "action": "run_export", "path": running.root.join("head.obj") },
+        },
     })
     .to_string();
     let started = Instant::now();
@@ -762,9 +772,13 @@ fn an_agent_drives_the_running_application() {
         "the refusal does not say what would lift it: {answer}"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(60),
-        "the gate held the connection for {:?}",
+        started.elapsed() < Duration::from_secs(10),
+        "the gate held the connection for {:?}, past the call bound",
         started.elapsed()
+    );
+    assert!(
+        !running.root.join("head.obj").exists(),
+        "the export wrote its file with nobody consenting to it"
     );
 
     // -- the door does not let an agent open its own gate -------------------
@@ -1198,5 +1212,323 @@ fn a_retopology_is_a_job_with_a_new_layer_and_one_undo() {
         history_depth(&running, &session),
         depth,
         "undoing the retopology took back more than the retopology"
+    );
+}
+
+/// Retopo → UV → a fixed mesh, driven the way an agent drives it: UVs are
+/// asked for, the layout's report reaches `state`, and a run that did not ask
+/// says so rather than reporting nothing.
+#[test]
+fn a_retopology_asked_for_uvs_reports_its_layout() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    call(
+        &running,
+        &session,
+        "convert",
+        json!({ "action": "set", "direction": "field-to-mesh", "cell_size": 0.05 }),
+    );
+    call(&running, &session, "convert", json!({ "action": "run" }));
+    settle(&running, &session);
+    let layers = layer_count(&running, &session);
+
+    let uv_of = |running: &Running| {
+        let state = call(
+            running,
+            &session,
+            "state",
+            json!({ "sections": ["outcomes"] }),
+        );
+        state["structuredContent"]["outcomes"]["retopology"]["uv"].clone()
+    };
+
+    call(
+        &running,
+        &session,
+        "retopo",
+        json!({ "action": "set", "target_quads": 600 }),
+    );
+    call(&running, &session, "retopo", json!({ "action": "run" }));
+    settle(&running, &session);
+    assert_eq!(uv_of(&running)["status"], "not_requested");
+
+    call(
+        &running,
+        &session,
+        "retopo",
+        json!({ "action": "set", "target_quads": 600, "uvs": true }),
+    );
+    call(&running, &session, "retopo", json!({ "action": "run" }));
+    settle(&running, &session);
+    let uv = uv_of(&running);
+    assert_eq!(uv["status"], "laid", "the layout did not land: {uv}");
+    assert!(
+        uv["report"]["charts"].as_u64().unwrap_or(0) > 0,
+        "a laid layout with no charts: {uv}"
+    );
+    assert_eq!(
+        layer_count(&running, &session),
+        layers + 2,
+        "each retopology should arrive as a new layer"
+    );
+}
+
+/// What a document says about itself over the door, with the parts that
+/// belong to the session rather than the document taken out.
+///
+/// The field is made active first, because the mask section is the active
+/// layer's. A layer's `objects` is left out: it is counted from the object
+/// ViewModel, which lists the active layer's forms, so it says which layer was
+/// last active rather than what the file holds.
+fn document_digest(running: &Running, session: &str) -> Value {
+    let scene = call(running, session, "state", json!({ "sections": ["scene"] }));
+    let field = scene["structuredContent"]["scene"]["layers"]
+        .as_array()
+        .expect("layers")
+        .iter()
+        .find(|layer| layer["representation"] == "field")
+        .map(|layer| layer["key"].clone())
+        .expect("a field layer");
+    call(
+        running,
+        session,
+        "layer",
+        json!({ "action": "select", "layer": field }),
+    );
+    let state = call(
+        running,
+        session,
+        "state",
+        json!({ "sections": ["scene", "mask"] }),
+    );
+    let mut digest = state["structuredContent"].clone();
+    for layer in digest["scene"]["layers"].as_array_mut().expect("layers") {
+        let layer = layer.as_object_mut().expect("a layer");
+        layer.remove("key");
+        layer.remove("objects");
+    }
+    for field in ["active_layer", "selected_object", "soloed"] {
+        digest["scene"]
+            .as_object_mut()
+            .expect("a scene")
+            .remove(field);
+    }
+    digest
+}
+
+/// Save, replace and reopen, all over the door, with nothing but paths.
+///
+/// The test the audit could not run: every operation behind a gate opened a
+/// file panel after consent, so persistence was never checked end to end.
+/// The consents are recorded in the session store, as a person who said
+/// "always" would have recorded them, so no window has to be answered.
+#[test]
+fn a_document_saved_over_the_door_reopens_as_it_was() {
+    let Some(running) = start() else {
+        return;
+    };
+    std::fs::write(
+        running.store.join("agente.consentimentos"),
+        "sobrescrever\nabrir\ndescartar\n",
+    )
+    .expect("record the consents");
+    let session = initialize(&running);
+
+    // A stroke and a mask on the field, and a second layer, named.
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "standard" }),
+    );
+    call(
+        &running,
+        &session,
+        "stroke",
+        json!({ "action": "begin", "at": [0.3, 0.2, 0.93], "pressure": 1.0 }),
+    );
+    call(&running, &session, "stroke", json!({ "action": "end" }));
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "mask" }),
+    );
+    call(
+        &running,
+        &session,
+        "stroke",
+        json!({ "action": "begin", "at": [0.0, -0.3, 0.95], "pressure": 1.0 }),
+    );
+    call(&running, &session, "stroke", json!({ "action": "end" }));
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "add", "representation": "grid" }),
+    );
+    let added = active_layer(&running, &session);
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "begin_rename", "layer": added }),
+    );
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "edit_name", "name": "Detalhe" }),
+    );
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "commit_rename" }),
+    );
+    settle(&running, &session);
+    let saved = document_digest(&running, &session);
+
+    // An untitled document has nowhere to save to, and says which call names one.
+    let refusal = refused(&running, &session, "document", json!({ "action": "save" }));
+    assert!(
+        refusal["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("save_as"),
+        "{refusal}"
+    );
+
+    let path = running.root.join("everything.clayspace");
+    call(
+        &running,
+        &session,
+        "document",
+        json!({ "action": "save_as", "path": path }),
+    );
+    assert!(path.exists(), "save_as answered and wrote nothing");
+    let named = call(
+        &running,
+        &session,
+        "state",
+        json!({ "sections": ["document"] }),
+    );
+    assert_eq!(
+        named["structuredContent"]["document"]["modified"], false,
+        "{named}"
+    );
+
+    call(&running, &session, "document", json!({ "action": "new" }));
+    settle(&running, &session);
+    assert_ne!(
+        document_digest(&running, &session),
+        saved,
+        "a new document reads the same as the saved one, so this compares nothing"
+    );
+
+    call(
+        &running,
+        &session,
+        "document",
+        json!({ "action": "open", "path": path }),
+    );
+    settle(&running, &session);
+    assert_eq!(
+        document_digest(&running, &session),
+        saved,
+        "what came back is not what was saved"
+    );
+}
+
+/// A dragged cage and a switch of layer: refused with the argument named, and
+/// then settled by it, with no prompt opened on the person's screen.
+#[test]
+fn a_standing_cage_is_settled_by_an_argument_rather_than_a_prompt() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    let first = active_layer(&running, &session);
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "add", "representation": "field" }),
+    );
+    let second = active_layer(&running, &session);
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "select", "layer": first }),
+    );
+    call(&running, &session, "lattice", json!({ "action": "toggle" }));
+    call(
+        &running,
+        &session,
+        "lattice",
+        json!({ "action": "select_point", "index": 0 }),
+    );
+    call(
+        &running,
+        &session,
+        "lattice",
+        json!({ "action": "drag", "to": [0.1, 0.2, 0.0] }),
+    );
+
+    let refusal = refused(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "select", "layer": second }),
+    );
+    assert!(
+        refusal["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cage"),
+        "{refusal}"
+    );
+    assert_eq!(active_layer(&running, &session), first);
+
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "select", "layer": second, "cage": "discard" }),
+    );
+    assert_eq!(active_layer(&running, &session), second);
+}
+
+/// The banner printed on the way up says one thing about the door, and it is
+/// the address the door is listening on.
+#[test]
+fn the_startup_banner_states_the_door_once() {
+    let Some(mut running) = start() else {
+        return;
+    };
+    let stdout = running.child.stdout.take().expect("the child's output");
+    let mut agent_lines = Vec::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line.expect("a line");
+        if line.starts_with("agent") {
+            agent_lines.push(line.clone());
+        }
+        // The line after the agent's in the report.
+        if line.starts_with("fallback") {
+            break;
+        }
+    }
+    assert_eq!(agent_lines.len(), 1, "{agent_lines:?}");
+    assert!(
+        agent_lines[0].starts_with(&format!(
+            "agent: listening on http://127.0.0.1:{}/mcp",
+            running.port
+        )),
+        "{agent_lines:?}"
     );
 }

@@ -1319,6 +1319,30 @@ impl Document {
         )
     }
 
+    /// Moves a placed node to `index` among `parent`'s children, undoably.
+    ///
+    /// `parent` is [`NodeId::ROOT`] for a layer's top level. Order is
+    /// evaluation order, so this is what puts a node that was removed and
+    /// placed again back where it stood: a node appended at the end is
+    /// combined after everything the layer already holds, and a union placed
+    /// after a carve fills the carve in.
+    pub fn move_node(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        parent: NodeId,
+        index: usize,
+    ) -> Result<()> {
+        let index = i32::try_from(index).map_err(|_| {
+            crate::raw_failure("clay_layer_move", crate::ErrorKind::InvalidArgument)
+        })?;
+        // SAFETY: valid handle; the engine range-checks the ids and the index.
+        check(
+            unsafe { sys::clay_layer_move(self.as_ptr(), layer.0, node.0, parent.0, index) },
+            "clay_layer_move",
+        )
+    }
+
     /// Re-places an existing node.
     pub fn set_node_transform(
         &mut self,
@@ -1398,6 +1422,59 @@ impl Document {
             },
             "clay_layer_set_transform_nonuniform",
         )
+    }
+
+    /// [`Self::set_node_transform`], and the region this move changed.
+    ///
+    /// The same edit — one `SetTransformCmd`, one undo step — answering the
+    /// question [`Self::node_influence_bound`] cannot: not where the node can
+    /// influence the field, but where *this move* changed the surface. For an
+    /// [`Op::Intersect`] operand the two differ by the whole layer: its
+    /// influence is everything the layer holds, and a move changes only the
+    /// swept union of where it was and where it went (ClayCore #471, ABI
+    /// 0.90.0). For every other op, and wherever the engine cannot prove the
+    /// narrow claim, the answer is the conservative before/after union the
+    /// influence query would have given — always safe to dirty.
+    ///
+    /// Uniform scale only, as the engine offers it. A squashed operand has no
+    /// fast path in the engine either, so a caller with a per-axis scale keeps
+    /// [`Self::set_node_transform_nonuniform`] and the influence bounds.
+    pub fn set_node_transform_bound(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: f32,
+    ) -> Result<Influence> {
+        let (mut min, mut max) = ([0.0f32; 3], [0.0f32; 3]);
+        let (mut has, mut infinite) = (0i32, 0i32);
+        // SAFETY: valid handle, two three-float inputs, two three-float
+        // out-parameters and two flags.
+        check(
+            unsafe {
+                sys::clay_layer_set_transform_bound(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    position.as_ptr(),
+                    rotation_axis.as_ptr(),
+                    rotation_angle,
+                    scale,
+                    min.as_mut_ptr(),
+                    max.as_mut_ptr(),
+                    &mut has,
+                    &mut infinite,
+                )
+            },
+            "clay_layer_set_transform_bound",
+        )?;
+        Ok(match (has != 0, infinite != 0) {
+            (false, _) => Influence::Nothing,
+            (true, true) => Influence::Everything,
+            (true, false) => Influence::Box { min, max },
+        })
     }
 
     /// Replaces an existing node's shape.

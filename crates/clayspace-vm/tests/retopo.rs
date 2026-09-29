@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use clayspace_model::{
-    ModelError, RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource,
-    Retopologiser,
+    ModelError, RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, RetopoUv,
+    Retopologiser, UvOutcome, UvSettings,
 };
 use clayspace_vm::{Command, RetopoViewModel};
 
@@ -85,6 +85,8 @@ struct Double {
     /// asked for *while* the run is in flight rather than before it — which is
     /// the only moment a cancellation means anything.
     hold: Option<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+    /// Why a layout asked for is refused, when the test wants it refused.
+    uv_refusal: Option<String>,
 }
 
 impl Retopologiser for Double {
@@ -109,6 +111,25 @@ impl Retopologiser for Double {
         if let Some(why) = &self.fail {
             return Err(why.clone());
         }
+        let (uv, uvs) = match (settings.uv, &self.uv_refusal) {
+            (None, _) => (RetopoUv::NotRequested, Vec::new()),
+            (Some(_), Some(why)) => (RetopoUv::Failed(why.clone()), Vec::new()),
+            (Some(_), None) => (
+                RetopoUv::Laid(UvOutcome {
+                    charts: 1,
+                    seam_edges: 0,
+                    max_angle_distortion: 0.0,
+                    rms_angle_distortion: 0.0,
+                    flipped_charts: 0,
+                    fallback_charts: 0,
+                    dropped_charts: 0,
+                    packed_area: 0.5,
+                    packed_box_area: 0.5,
+                    texel_density: 1.0,
+                }),
+                vec![[0.0; 2]; source.positions.len()],
+            ),
+        };
         Ok(RetopoResult {
             positions: source.positions.clone(),
             indices: source.indices.clone(),
@@ -118,11 +139,14 @@ impl Retopologiser for Double {
             // returns. The engine test that asserts the edges are *not* the
             // triangulation is `the_edges_are_the_quads_and_not_their_triangulation`.
             edges: Vec::new(),
+            normals: Vec::new(),
+            uvs,
             outcome: RetopoOutcome {
                 triangles_before: 1,
                 faces: 1,
                 triangles: 2,
                 vertices: source.positions.len(),
+                uv,
             },
             name: format!("{} · quads · {}", source.name, settings.target_quads),
         })
@@ -138,6 +162,7 @@ fn held(watch_cancel: bool) -> (Double, std::sync::mpsc::Sender<()>) {
             fail: None,
             watch_cancel,
             hold: Some(std::sync::Mutex::new(hold)),
+            uv_refusal: None,
         },
         release,
     )
@@ -173,6 +198,7 @@ fn the_source_is_read_here_and_the_result_is_placed_here() {
         fail: None,
         watch_cancel: false,
         hold: None,
+        uv_refusal: None,
     });
     vm.dispatch(&Command::SetRetopoSettings(RetopoSettings {
         target_quads: 750,
@@ -194,7 +220,7 @@ fn the_source_is_read_here_and_the_result_is_placed_here() {
         "the worker ran with settings the ViewModel did not send: {}",
         subtool.placed[0].name
     );
-    assert_eq!(vm.last().get().map(|o| o.faces), Some(1));
+    assert_eq!(vm.last().get().as_ref().map(|o| o.faces), Some(1));
 }
 
 /// An unavailable subtool is refused before any work starts.
@@ -205,6 +231,7 @@ fn an_unavailable_subtool_is_refused_without_running_anything() {
         fail: None,
         watch_cancel: false,
         hold: None,
+        uv_refusal: None,
     });
     subtool.lock().expect("not poisoned").available = Some("esta camada é Sdf".to_string());
     vm.refresh();
@@ -262,6 +289,7 @@ fn a_refused_retopology_reports_and_places_nothing() {
         fail: Some("o campo cruzado não convergiu".to_string()),
         watch_cancel: false,
         hold: None,
+        uv_refusal: None,
     });
     vm.dispatch(&Command::RunRetopology);
     settle(&mut vm);
@@ -281,6 +309,7 @@ fn a_second_retopology_is_refused_while_one_runs() {
         fail: None,
         watch_cancel: false,
         hold: None,
+        uv_refusal: None,
     });
     vm.dispatch(&Command::RunRetopology);
     // Without polling, so the first is still in flight.
@@ -385,5 +414,76 @@ fn a_run_lands_where_it_was_asked_to() {
         subtool.lock().expect("not poisoned").in_place,
         vec![false],
         "the default run did not land as a new layer"
+    );
+}
+
+fn plain(uv_refusal: Option<&str>) -> Double {
+    Double {
+        runs: AtomicU32::new(0),
+        fail: None,
+        watch_cancel: false,
+        hold: None,
+        uv_refusal: uv_refusal.map(str::to_string),
+    }
+}
+
+#[test]
+fn uv_generation_is_optional() {
+    // Off unless asked for: the default run neither asks for nor places UVs.
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    {
+        let subtool = subtool.lock().expect("not poisoned");
+        assert!(subtool.placed[0].uvs.is_empty(), "UVs nobody asked for");
+    }
+    assert_eq!(
+        vm.last().get().as_ref().map(|o| o.uv.clone()),
+        Some(RetopoUv::NotRequested)
+    );
+
+    // Asked for, the placed result carries them and the report reaches the
+    // sculptor.
+    vm.dispatch(&Command::SetRetopoSettings(RetopoSettings {
+        uv: Some(UvSettings::default()),
+        ..RetopoSettings::default()
+    }));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    let subtool = subtool.lock().expect("not poisoned");
+    assert_eq!(subtool.placed.len(), 2);
+    assert_eq!(
+        subtool.placed[1].uvs.len(),
+        subtool.placed[1].positions.len()
+    );
+    assert!(vm.last().get().as_ref().is_some_and(|o| o.uv.carries_uvs()));
+    assert_eq!(*vm.notice().get(), None);
+}
+
+#[test]
+fn a_failed_uv_run_leaves_the_mesh() {
+    let (mut vm, subtool) = fixture(plain(Some("o atlas recusou a malha")));
+    vm.dispatch(&Command::SetRetopoSettings(RetopoSettings {
+        uv: Some(UvSettings::default()),
+        ..RetopoSettings::default()
+    }));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+
+    // The quads are still placed, without UVs.
+    let subtool = subtool.lock().expect("not poisoned");
+    assert_eq!(
+        subtool.placed.len(),
+        1,
+        "a refused layout cost the retopology"
+    );
+    assert!(subtool.placed[0].uvs.is_empty());
+    // And the reason is stated, never a UV-carrying success.
+    let outcome = vm.last().get().clone().expect("an outcome");
+    assert!(!outcome.uv.carries_uvs());
+    let notice = vm.notice().get().clone().expect("the failure is reported");
+    assert!(
+        notice.contains("o atlas recusou a malha"),
+        "the notice does not say why: {notice}"
     );
 }
