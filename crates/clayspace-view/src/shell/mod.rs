@@ -168,6 +168,9 @@ pub struct ShellState<'a> {
     /// What the retopology panel is set to, what the last one came to, and why
     /// the tool is unavailable where it is.
     pub retopo: clayspace_model::RetopoSettings,
+    pub retopo_tool: clayspace_model::RetopoToolState,
+    pub retopo_guidance: &'a clayspace_model::RetopoGuidance,
+    pub retopo_draft: &'a [[f32; 3]],
     pub retopo_outcome: Option<clayspace_model::RetopoOutcome>,
     pub retopo_unavailable: Option<String>,
     /// How far a running retopology has got, and its label. `None` when
@@ -821,6 +824,58 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
 /// `rect` is the viewport's own rectangle — the one the scene is drawn into
 /// and the one the pointer was measured against, so the line lands under the
 /// cursor rather than beside it.
+/// Draw retopology instructions over the sculpt, with their own colors and
+/// without changing any sculpt or mask attribute.
+pub fn retopo_overlay(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    camera: &crate::Camera,
+    state: &ShellState<'_>,
+) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    let matrix = camera.view_projection(rect.width() / rect.height());
+    let project = |point: [f32; 3]| {
+        let clip = matrix * glam::Vec3::from(point).extend(1.0);
+        (clip.w > 0.0).then(|| {
+            egui::pos2(
+                rect.center().x + clip.x / clip.w * rect.width() * 0.5,
+                rect.center().y - clip.y / clip.w * rect.height() * 0.5,
+            )
+        })
+    };
+    let painter = ui.painter().with_clip_rect(rect);
+    let guide_color = egui::Color32::from_rgb(72, 220, 236);
+    let density_color = egui::Color32::from_rgb(248, 179, 62);
+    for guide in &state.retopo_guidance.guides {
+        let points: Vec<_> = guide
+            .points
+            .iter()
+            .filter_map(|point| project(*point))
+            .collect();
+        for edge in points.windows(2) {
+            painter.line_segment([edge[0], edge[1]], egui::Stroke::new(2.5, guide_color));
+        }
+        for point in points {
+            painter.circle_filled(point, 3.0, guide_color);
+        }
+    }
+    let draft: Vec<_> = state
+        .retopo_draft
+        .iter()
+        .filter_map(|point| project(*point))
+        .collect();
+    for edge in draft.windows(2) {
+        painter.line_segment([edge[0], edge[1]], egui::Stroke::new(2.0, guide_color));
+    }
+    for dab in &state.retopo_guidance.density {
+        if let Some(point) = project(dab.position) {
+            painter.circle_filled(point, 3.0, density_color);
+        }
+    }
+}
+
 pub fn outline_overlay(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
     let Some(draft) = state.outline else {
         return;

@@ -845,6 +845,14 @@ impl clayspace_model::CutModel for SharedDocument {
 }
 
 impl clayspace_model::RetopoModel for SharedDocument {
+    fn retopo_guidance(&self) -> clayspace_model::RetopoGuidance {
+        self.document.borrow().retopo_guidance()
+    }
+
+    fn set_retopo_guidance(&mut self, guidance: clayspace_model::RetopoGuidance) {
+        self.document.borrow_mut().set_retopo_guidance(guidance);
+    }
+
     fn can_retopologise(&self) -> Result<(), String> {
         self.document.borrow().can_retopologise()
     }

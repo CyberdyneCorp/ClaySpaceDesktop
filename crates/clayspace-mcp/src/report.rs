@@ -1695,6 +1695,7 @@ mod tests {
             triangles: 80,
             vertices: 42,
             uv: clayspace_model::RetopoUv::Failed("o atlas recusou".to_string()),
+            guidance_warnings: Vec::new(),
         };
         let state = outcome_state(None, Some(&outcome), None);
         let uv = state.retopology.expect("a retopology").uv;

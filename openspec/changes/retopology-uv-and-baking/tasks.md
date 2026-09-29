@@ -191,9 +191,18 @@ field evaluator with no field. We are the first of either.
       second visible subtool — the sculpt a new-layer result keeps beside it —
       was folded into the next run and made every conform refuse on its
       vertex count. (#211)
-- [ ] 11.3 Store editable flow guides and density painting as retopology input,
+- [x] 11.3 Store editable flow guides and density painting as retopology input,
       independently of sculpt brushes, with undo and visual feedback; test
       that each changes the output in the intended region. (#212)
+      - [x] Define guide, density and session domain types with validation and
+            undoable edit operations.
+      - [x] Read temporary active-subtool geometry from each sculptable
+            representation without publishing a conversion layer.
+      - [x] Bind CyberRemesher mode-bearing guidance and painted density;
+            compare guided and unguided output on a fixed fixture.
+      - [x] Add retopology pointer mode, guide editing, density painting and
+            distinct viewport overlays, with no sculpt dispatch.
+      - [x] Save and reopen guidance beside the document and test its round trip.
 - [x] 11.4 Add optional atlas generation to the retopology job, report UV
       metrics and failures, and preserve accepted UV coordinates through
       save/load and undo/redo. (#213) `RetopoSettings::uv`, off by default

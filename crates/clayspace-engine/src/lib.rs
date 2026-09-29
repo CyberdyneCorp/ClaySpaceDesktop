@@ -24,6 +24,7 @@ pub mod multires;
 pub mod objects;
 mod reference;
 mod retopo;
+mod retopo_session;
 mod rigs;
 mod sculptors;
 mod seed;

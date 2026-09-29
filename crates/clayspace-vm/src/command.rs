@@ -367,6 +367,8 @@ pub enum Command {
     RunDeform,
     /// What the retopology panel is set to.
     SetRetopoSettings(clayspace_model::RetopoSettings),
+    SetRetopoTool(clayspace_model::RetopoToolState),
+    EditRetopo(RetopoEdit),
     /// Rebuilds the active mesh subtool's topology as quads, off the
     /// interface thread, rebuilding the subtool in place.
     RunRetopology,
@@ -551,6 +553,30 @@ pub enum Command {
     ExportProfile,
 }
 
+/// Pointer and panel edits to the retopology session. None is a sculpt stroke.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RetopoEdit {
+    AddGuidePoint([f32; 3]),
+    FinishGuide,
+    BeginGesture,
+    EndGesture,
+    MoveGuidePoint {
+        guide: usize,
+        point: usize,
+        position: [f32; 3],
+    },
+    DeleteGuide(usize),
+    SetGuide {
+        index: usize,
+        mode: clayspace_model::FlowGuideMode,
+        strength: f32,
+        radius: f32,
+    },
+    PaintDensity([f32; 3]),
+    Undo,
+    Redo,
+}
+
 impl Command {
     /// Whether this command can change the document.
     ///
@@ -610,6 +636,8 @@ impl Command {
                 // path for the same reason a conversion is — and its own undo
                 // entry is made where the placement happens rather than here.
                 | Self::SetRetopoSettings(_)
+                | Self::SetRetopoTool(_)
+                | Self::EditRetopo(_)
                 | Self::RunRetopology
                 | Self::CancelRetopology
                 | Self::SetUvSettings(_)
@@ -864,6 +892,8 @@ impl Command {
             Self::RunUvAtlas => "desdobrar UV",
             Self::CancelUvAtlas => "cancelar desdobramento",
             Self::SetRetopoSettings(_) => "retopologia",
+            Self::SetRetopoTool(_) => "modo de retopologia",
+            Self::EditRetopo(_) => "editar orientação da retopologia",
             Self::RunRetopology => "remalhar para quads",
             Self::CancelRetopology => "cancelar retopologia",
             Self::SetCutGesture(_) => "gesto de corte",

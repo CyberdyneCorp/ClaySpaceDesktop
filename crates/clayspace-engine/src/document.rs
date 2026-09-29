@@ -1576,6 +1576,8 @@ pub struct ClayDocument {
     /// byte-identical. Beside-placement never needed this, which is part of
     /// what made it the easier first shape.
     retopo_target: Option<(LayerKey, u64)>,
+    /// Surface guidance for the next retopology, separate from sculpt history.
+    pub(crate) retopo_guidance: clayspace_model::RetopoGuidance,
     crossing_redo: Vec<Crossing>,
     /// Layers an undone crossing has taken off the scene.
     ///
@@ -1782,6 +1784,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
             retopo_target: None,
+            retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -12880,6 +12883,14 @@ impl DocumentModel for ClayDocument {
         // `.clayspace` holds the triangles each was read from and nothing a
         // stroke has done since.
         self.write_surfaces(path)?;
+        let guidance_path = crate::retopo_session::sidecar_for(path);
+        crate::retopo_session::write_guidance(&guidance_path, &self.retopo_guidance).map_err(
+            |error| {
+                ModelError::engine(format!(
+                "a orientação da retopologia não pôde ser gravada em {guidance_path:?}: {error}"
+            ))
+            },
+        )?;
         Ok(())
     }
 
@@ -12894,6 +12905,8 @@ impl DocumentModel for ClayDocument {
         // not a failed open: the sculpture is all there, and what is lost is
         // which of its shapes can be picked up again.
         opened.objects = crate::objects::read_table(&crate::objects::sidecar_for(path));
+        opened.retopo_guidance =
+            crate::retopo_session::read_guidance(&crate::retopo_session::sidecar_for(path));
         // The hierarchies are *not* overlaid here, unlike the objects. They
         // are applied inside `from_file`, before the passes that measure each
         // layer, because a hierarchy changes what the row **is**: the engine
@@ -13062,6 +13075,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
             retopo_target: None,
+            retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -16392,6 +16406,80 @@ impl ClayDocument {
         Ok((positions, normals, indices))
     }
 
+    /// Temporary triangles for the selected sculpt, without publishing a
+    /// conversion layer or changing the sculpt's representation.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn active_retopo_geometry(
+        &mut self,
+    ) -> Result<(Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>), ModelError> {
+        let index = self.active;
+        let mesh = match self.layers[index].representation {
+            Representation::Mesh => return self.active_mesh_geometry(),
+            Representation::Voxel => {
+                let name = self.layers[index].engine_name.clone();
+                let (_, grid) = self
+                    .document
+                    .voxel_reader(&name)
+                    .map_err(ModelError::engine)?;
+                grid.mesh().map_err(ModelError::engine)?
+            }
+            Representation::Multires => {
+                let hierarchy = self.layers[index]
+                    .multires
+                    .as_mut()
+                    .ok_or_else(|| ModelError::engine("a hierarquia não carrega uma superfície"))?;
+                let level = hierarchy.levels().display;
+                hierarchy
+                    .surface_mut()
+                    .copy_level_mesh(level)
+                    .map_err(ModelError::engine)?
+            }
+            Representation::Dynamic => self.layers[index]
+                .dynamic
+                .as_ref()
+                .ok_or_else(|| ModelError::engine("a superfície dinâmica está vazia"))?
+                .to_mesh()?,
+            Representation::Sdf => {
+                let source = self.layers[index].id;
+                let hidden: Vec<LayerId> = self
+                    .layers
+                    .iter()
+                    .filter(|layer| {
+                        layer.id != source
+                            && layer.visible
+                            && layer.representation == Representation::Sdf
+                    })
+                    .map(|layer| layer.id)
+                    .collect();
+                let cell = self.cache.config().voxel_size;
+                let sampled = self.meshed_alone(&hidden, cell);
+                for id in hidden {
+                    self.document
+                        .set_layer_visible(id, true)
+                        .map_err(ModelError::engine)?;
+                }
+                sampled?
+            }
+        };
+        if mesh.is_empty() {
+            return Err(ModelError::engine(
+                "esta camada ainda não tem superfície para retopologizar",
+            ));
+        }
+        Ok((
+            mesh.positions().to_vec(),
+            mesh.normals_or_derived(),
+            mesh.indices().to_vec(),
+        ))
+    }
+
+    pub(crate) fn active_retopo_placement(
+        &self,
+    ) -> (clayspace_model::Representation, clayspace_model::Transform) {
+        let layer = &self.layers[self.active];
+        (layer.representation, layer.transform)
+    }
+
     /// The field meshed with every visible mesh layer beside it — or, where
     /// the engine refuses because there is no field to mesh, the visible mesh
     /// layers alone.
@@ -16470,10 +16558,8 @@ impl ClayDocument {
                 "não há camada registada para receber esta retopologia",
             ));
         };
-        let id = self.layers[self.index_of(key)?].id;
-        self.document
-            .mesh_layer_revision(id)
-            .map_err(ModelError::engine)
+        self.index_of(key)?;
+        Ok(self.mesh_revision())
     }
 
     /// The revision the active mesh layer is at, and the key it belongs to.
@@ -16482,11 +16568,8 @@ impl ClayDocument {
     /// compare-and-swap. See [`ClayDocument::retopo_target`].
     pub(crate) fn remember_retopo_target(&mut self) -> Result<(), ModelError> {
         let key = self.active_layer().key;
-        let id = self.layers[self.index_of(key)?].id;
-        let revision = self
-            .document
-            .mesh_layer_revision(id)
-            .map_err(ModelError::engine)?;
+        self.index_of(key)?;
+        let revision = self.mesh_revision();
         self.retopo_target = Some((key, revision));
         Ok(())
     }
@@ -16511,6 +16594,11 @@ impl ClayDocument {
         expected_revision: u64,
         result: &clayspace_model::RetopoResult,
     ) -> Result<(), ModelError> {
+        if self.mesh_revision() != expected_revision {
+            return Err(ModelError::engine(
+                "a camada mudou enquanto a retopologia corria, por isso não foi aplicada",
+            ));
+        }
         let index = self.index_of(key)?;
         let layer = &self.layers[index];
         if layer.representation != Representation::Mesh {
@@ -16522,6 +16610,10 @@ impl ClayDocument {
             return Err(ModelError::engine(refusal));
         }
         let id = layer.id;
+        let engine_revision = self
+            .document
+            .mesh_layer_revision(id)
+            .map_err(ModelError::engine)?;
 
         // Before the replacement, as a rebuild does it: the sculptor holds an
         // adjacency and a BVH over triangles that are about to stop existing,
@@ -16531,7 +16623,7 @@ impl ClayDocument {
 
         let mesh = crate::retopo::retopo_mesh(result)?;
         self.document
-            .replace_mesh_layer(id, &mesh, expected_revision)
+            .replace_mesh_layer(id, &mesh, engine_revision)
             .map_err(|e| {
                 ModelError::engine(format!(
                     "a camada mudou enquanto a retopologia corria, por isso não foi \
@@ -16571,10 +16663,7 @@ impl ClayDocument {
                  por isso o resultado não foi publicado",
             )
         })?;
-        let revision = self
-            .document
-            .mesh_layer_revision(self.layers[index].id)
-            .map_err(ModelError::engine)?;
+        let revision = self.mesh_revision();
         if revision != expected_revision {
             return Err(ModelError::engine(
                 "a camada de origem mudou enquanto a retopologia corria, por \

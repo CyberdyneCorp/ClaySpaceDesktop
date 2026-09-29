@@ -98,3 +98,27 @@ exist and are read for exactly that.
   as a new subtool here, because a retopology a sculptor cannot compare against
   the sculpt is one they cannot judge. Replacement can be added later; the
   reverse cannot be undone.
+
+## Guided retopology session (#212)
+
+Flow guides and density samples are authored at picked world positions and kept as
+retopology session data, independent of brush settings and ClayCore geometry.
+The session stores each guide's control points, mode, strength and influence
+radius, plus density samples. A versioned companion file beside the
+document keeps that data on save and reopen. Empty or invalid entries are
+rejected on read rather than sent to the remesher.
+
+The host meshes only the selected subtool for a run. Mesh, Dynamic and Multires
+already expose their current triangles; Voxel uses its grid mesher; SDF uses a
+temporary isolated mesh with other visible SDF layers restored immediately.
+No conversion layer is published and no sculpt stroke is recorded. The model
+maps world guidance into the selected layer's local coordinates, then hands
+owned geometry and guidance to the worker. The adapter samples density
+onto that geometry's vertices and passes mode-bearing guides through the
+remesher's guided C ABI. Its warnings reach the job notice.
+
+The retopology interaction mode captures pointer gestures before the sculpt
+dispatcher. Guides and density have separate overlays and their edits remain
+visible before a run. The existing job publishes a result on completion; the
+separate explicit accept/discard preview from #211 remains a follow-up to that
+workflow.

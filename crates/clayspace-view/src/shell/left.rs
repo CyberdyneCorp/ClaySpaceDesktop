@@ -1737,6 +1737,10 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
 
     let mut settings = state.retopo;
     let mut changed = false;
+    if layer.representation != Representation::Mesh && settings.in_place {
+        settings.in_place = false;
+        changed = true;
+    }
 
     ui.add_enabled_ui(unavailable.is_none() && !running, |ui| {
         ui.horizontal(|ui| {
@@ -1801,16 +1805,18 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
         }
         pure.on_hover_text(s.retopo_pure_hint);
 
-        let in_place = ui.checkbox(
-            &mut settings.in_place,
-            egui::RichText::new(s.retopo_in_place)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
-        if in_place.changed() {
-            changed = true;
-        }
-        in_place.on_hover_text(s.retopo_in_place_hint);
+        ui.add_enabled_ui(layer.representation == Representation::Mesh, |ui| {
+            let in_place = ui.checkbox(
+                &mut settings.in_place,
+                egui::RichText::new(s.retopo_in_place)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            if in_place.changed() {
+                changed = true;
+            }
+            in_place.on_hover_text(s.retopo_in_place_hint);
+        });
         changed |= retopo_uv_toggle(ui, s, &mut settings);
 
         for (label, hint, value, range) in [
@@ -1845,6 +1851,8 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
     if changed {
         queue.push(Command::SetRetopoSettings(settings));
     }
+
+    retopo_guidance_controls(ui, state, queue);
 
     ui.horizontal(|ui| {
         if running {
@@ -1903,6 +1911,116 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
 
     if let Some(outcome) = &state.retopo_outcome {
         retopo_uv_outcome(ui, s, &outcome.uv);
+    }
+}
+
+fn retopo_guidance_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let mut tool = state.retopo_tool;
+    let before = tool;
+    let modes = [
+        clayspace_model::RetopoEditMode::Off,
+        clayspace_model::RetopoEditMode::DrawGuide,
+        clayspace_model::RetopoEditMode::PaintDensity,
+        clayspace_model::RetopoEditMode::EditGuide,
+    ];
+    egui::ComboBox::from_id_salt("retopo-edit-mode")
+        .selected_text(
+            s.retopo_guidance_modes[modes
+                .iter()
+                .position(|mode| *mode == tool.mode)
+                .unwrap_or(0)],
+        )
+        .show_ui(ui, |ui| {
+            for (index, mode) in modes.into_iter().enumerate() {
+                ui.selectable_value(&mut tool.mode, mode, s.retopo_guidance_modes[index]);
+            }
+        });
+    match tool.mode {
+        clayspace_model::RetopoEditMode::DrawGuide | clayspace_model::RetopoEditMode::EditGuide => {
+            ui.horizontal(|ui| {
+                for (index, mode) in [
+                    clayspace_model::FlowGuideMode::Orientation,
+                    clayspace_model::FlowGuideMode::Topology,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    ui.selectable_value(&mut tool.guide_mode, mode, s.retopo_guide_modes[index]);
+                }
+            });
+            ui.label(s.retopo_guide_strength);
+            fitted_slider(ui, egui::Slider::new(&mut tool.guide_strength, 0.0..=1.0));
+            ui.label(s.retopo_guide_radius);
+            fitted_slider(ui, egui::Slider::new(&mut tool.guide_radius, 0.01..=2.0));
+        }
+        clayspace_model::RetopoEditMode::PaintDensity => {
+            ui.label(s.retopo_density_value);
+            fitted_slider(
+                ui,
+                egui::Slider::new(&mut tool.density_multiplier, 0.25..=4.0),
+            );
+            ui.label(s.retopo_density_radius);
+            fitted_slider(ui, egui::Slider::new(&mut tool.density_radius, 0.01..=2.0));
+        }
+        clayspace_model::RetopoEditMode::Off => {}
+    }
+    if tool != before {
+        queue.push(Command::SetRetopoTool(tool));
+    }
+
+    ui.horizontal(|ui| {
+        if ui.button(s.retopo_undo).clicked() {
+            queue.push(Command::EditRetopo(clayspace_vm::RetopoEdit::Undo));
+        }
+        if ui.button(s.retopo_redo).clicked() {
+            queue.push(Command::EditRetopo(clayspace_vm::RetopoEdit::Redo));
+        }
+    });
+    if !state.retopo_guidance.guides.is_empty() {
+        ui.label(s.retopo_guides);
+        for index in 0..state.retopo_guidance.guides.len() {
+            let guide = &state.retopo_guidance.guides[index];
+            let mut mode = guide.mode;
+            let mut strength = guide.strength;
+            let mut radius = guide.radius;
+            ui.horizontal(|ui| {
+                ui.label(format!("{} {}", s.retopo_guides, index + 1));
+                if ui.button(s.retopo_remove).clicked() {
+                    queue.push(Command::EditRetopo(clayspace_vm::RetopoEdit::DeleteGuide(
+                        index,
+                    )));
+                }
+            });
+            ui.horizontal(|ui| {
+                for (candidate, label) in [
+                    (
+                        clayspace_model::FlowGuideMode::Orientation,
+                        s.retopo_guide_modes[0],
+                    ),
+                    (
+                        clayspace_model::FlowGuideMode::Topology,
+                        s.retopo_guide_modes[1],
+                    ),
+                ] {
+                    ui.selectable_value(&mut mode, candidate, label);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(s.retopo_guide_strength);
+                fitted_slider(ui, egui::Slider::new(&mut strength, 0.0..=1.0));
+                ui.label(s.retopo_guide_radius);
+                fitted_slider(ui, egui::Slider::new(&mut radius, 0.01..=2.0));
+            });
+            if mode != guide.mode || strength != guide.strength || radius != guide.radius {
+                queue.push(Command::EditRetopo(clayspace_vm::RetopoEdit::SetGuide {
+                    index,
+                    mode,
+                    strength,
+                    radius,
+                }));
+            }
+        }
     }
 }
 

@@ -91,8 +91,9 @@ pub use reference::{
 };
 pub use retopo::{
     split_at_uv_seams, BakeMap, BakeModel, BakeResult, BakeSettings, BakedMap, Baker, ConformModel,
-    ConformOutcome, ConformResult, ConformSettings, ConformSource, Conformer, QuadMethod,
-    RetopoModel, RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, RetopoUv,
+    ConformOutcome, ConformResult, ConformSettings, ConformSource, Conformer, DensityDab,
+    FlowGuide, FlowGuideMode, QuadMethod, RetopoEditMode, RetopoGuidance, RetopoModel,
+    RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, RetopoToolState, RetopoUv,
     Retopologiser, SeamedMesh, Unwrapper, UvModel, UvOutcome, UvResult, UvSettings, UvSource,
 };
 pub use scene::{
