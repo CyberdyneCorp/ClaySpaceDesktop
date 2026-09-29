@@ -24,6 +24,27 @@ chain. The collapse would have to lower that price, and an undo over a baked
 patch still measures 4.4x one over the chain on this pin. The floor stays at
 zero.
 
+**Re-measured to forty gestures on v0.120.1, and it still loses at every
+point.** `measure_the_collapse_against_the_chain` (ignored, run by hand) works
+one patch forty mirrored Move gestures deep with the floor at zero and at
+`CHAIN_FLOOR`, for the calibration's brush (0.45) and the undo series' (0.12).
+Over the chain, an undo at gestures 1/10/20/40 took 6.3/5.4/7.1/14.0 ms (0.45)
+and 0.34/0.90/1.07/1.79 ms (0.12). Collapsing, the same undos took
+3.9/43/27/238 ms and 0.47/147/84/78 ms: a collapse gesture's undo re-meshes the
+closure, 6,384–10,752 bricks against 144–980, and between collapses a brick
+refilled at 27.6 µs over the baked patch against 7.2 µs over the chain. One
+collapse after forty chain gestures took 2.5–2.8 s and left bricks at
+50–125 µs against 8.5–17 µs; a bake sampled at four times the cache's spacing
+still left 32–133 µs. A 30-sample Snake Hook pull on the worked patch runs
+3.3–8.3x dearer at its first segment after forty edits than after one, in
+milliseconds (5.7–7.4 ms), against the audit's four seconds. The collapse is
+not enabled. `a_baked_patch_has_no_decisive_per_brick_win` now watches the
+price of a brick apart from the brick count, and the undo series and a grown-
+layer pull are pinned at 1, 10, 20 and 40 edits
+(`an_undo_after_forty_edits_stays_in_its_class`,
+`a_stroke_on_a_grown_layer_begins_near_the_first`). The full table is in
+`compaction.rs`.
+
 ## 1. Calibrate the floor, before anything is wired
 
 - [x] 1.1 Extend the existing decay fixture to record, per gesture on a worked patch: chain length, `safe_step_scale`, and whether a raycast still finds the surface. Mirrored and unmirrored. — `tests/chain_compaction.rs`, `calibrate_the_floor_on_a_worked_patch`, 512 rays through the engine's own march.

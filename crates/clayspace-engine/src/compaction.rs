@@ -61,6 +61,38 @@
 //! `tests/undo_series.rs`. Over twenty edits the bricks an undo re-meshes are
 //! flat (126 to 144), and the undo's 2.0–2.3x growth is all the price of one
 //! brick over a longer chain. That price is the one a baked patch raises.
+//!
+//! ## Re-measured on v0.120.1, to forty gestures
+//!
+//! `measure_the_collapse_against_the_chain` (`tests/chain_compaction.rs`,
+//! ignored, run by hand) works one patch forty mirrored Move gestures deep,
+//! with the floor at zero and at [`CHAIN_FLOOR`], and times each gesture and
+//! the fastest of three undos of it. Mac, release:
+//!
+//! | brush | gesture | undo, chain | undo, collapsing | a brick, chain | a brick, collapsing |
+//! |---|---:|---:|---:|---:|---:|
+//! | 0.45 | 1 | 6.3 ms | 3.9 ms | 7.0 µs | 4.4 µs |
+//! | 0.45 | 10 | 5.4 ms | 43 ms (a collapse, 9,152 bricks) | 5.5 µs | 4.7 µs |
+//! | 0.45 | 20 | 7.1 ms | 27 ms | 7.2 µs | 27.6 µs |
+//! | 0.45 | 40 | 14.0 ms | 238 ms (a collapse, 10,752 bricks) | 14.3 µs | 22.2 µs |
+//! | 0.12 | 1 | 0.34 ms | 0.47 ms | 2.3 µs | 3.3 µs |
+//! | 0.12 | 10 | 0.90 ms | 147 ms (a collapse, 6,384 bricks) | 6.3 µs | 23.0 µs |
+//! | 0.12 | 20 | 1.07 ms | 84 ms (a collapse) | 7.4 µs | 13.1 µs |
+//! | 0.12 | 40 | 1.79 ms | 78 ms (a collapse) | 12.4 µs | 12.2 µs |
+//!
+//! The chain's own growth over forty gestures is 2.2x (0.45) and 5.3x (0.12)
+//! an undo, in milliseconds. The collapse bounds the chain and not the cost: a
+//! gesture that collapses takes 51–370 ms, and its undo re-meshes the whole
+//! closure, 6,384–10,752 bricks against the chain's 144–980. The one row that
+//! falls between collapses (0.45, gesture 20) refilled a brick at 27.6 µs over
+//! the baked patch against 7.2 µs over the chain. A single collapse after forty
+//! chain gestures (the floor set for one gesture) took 2.5 s (0.45) and 2.8 s
+//! (0.12), and the undos of the nine gestures after it refilled a brick at
+//! 50–125 µs and 60–85 µs against the chain's 17.2 µs and 8.5 µs at gesture
+//! 40. Sampling the bake at four times the cache's spacing, which softens it,
+//! still left 32–47 µs and 58–133 µs. On this pin the floor stays at zero, and
+//! `a_baked_patch_has_no_decisive_per_brick_win` holds the price of a brick
+//! apart from the brick count the undo series already pins.
 
 use std::collections::HashMap;
 use std::time::Duration;
