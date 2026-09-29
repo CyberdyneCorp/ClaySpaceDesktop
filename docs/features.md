@@ -699,6 +699,10 @@ profile along a guide, `clay_item_add_loft_profile` supplies the profiles,
 gesture grows one tendril — otherwise dragging a control point would leave a
 tube behind on every move.
 
+Curve controls stay at the world positions shown by the viewport when their
+subtool is moved or stretched. The guide is converted into the subtool's frame
+before the engine applies that subtool's transform.
+
 | Control | What it does |
 |---|---|
 | Espessura | Thickness at the selected points, or at all of them where nothing is picked |

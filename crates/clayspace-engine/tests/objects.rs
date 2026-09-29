@@ -651,6 +651,41 @@ fn a_target_that_is_gone_has_no_transform() {
 
 // -- curves -----------------------------------------------------------------
 
+#[test]
+fn a_curve_on_a_stretched_subtool_follows_its_world_space_controls() {
+    use clayspace_model::CurveModel;
+
+    let mut document = document();
+    let layer = document
+        .add_layer("Curve", Representation::Sdf)
+        .expect("an empty subtool");
+    document
+        .set_target_transform(
+            GizmoTarget::Layer(layer),
+            Transform {
+                position: [2.0, 0.0, 0.0],
+                scale: [2.0, 1.0, 1.0],
+                ..Transform::default()
+            },
+        )
+        .expect("place the subtool");
+
+    document.begin_curve();
+    for x in [2.0, 2.2, 2.4] {
+        document
+            .add_curve_point([x, 3.0, 0.0], 0.12)
+            .expect("place a world-space control");
+    }
+    assert!(
+        inside(&document, [2.2, 3.0, 0.0]),
+        "the sweep must meet its control points after the subtool is placed"
+    );
+    assert!(
+        !inside(&document, [6.4, 3.0, 0.0]),
+        "the subtool transform must not be applied twice"
+    );
+}
+
 /// A curve turns and scales as a cage does, because it goes through the same
 /// arithmetic. Worth a test rather than a comment: the point of routing it
 /// that way is that neither has its own implementation to drift from.
