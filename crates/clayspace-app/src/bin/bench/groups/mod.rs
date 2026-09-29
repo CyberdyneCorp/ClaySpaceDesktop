@@ -8,6 +8,7 @@
 pub mod authoring;
 pub mod bake;
 pub mod brushes;
+pub mod cage;
 pub mod convert;
 pub mod cut;
 pub mod dab;

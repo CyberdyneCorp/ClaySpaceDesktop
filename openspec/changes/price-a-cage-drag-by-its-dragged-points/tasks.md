@@ -3,7 +3,8 @@
 - [x] 1.1 ClayCore#655: sum a mesh cage over its dragged points with an O(n) basis per axis, with unit tests and `BM_MeshLatticeDrag`.
 - [ ] 1.2 Move the engine pin to the ClayCore release carrying 1.1.
 - [ ] 1.3 Flip `a_mesh_cage_evaluation_is_priced_by_every_point_the_cage_holds` to assert a 32³ and a 3³ cage cost within a small multiple of each other.
-- [ ] 1.4 Assert the 16 ms frame for a single-point 32³ drag on the reference mesh, and add the `cage` benchmark group at 3³, 8³ and 32³.
+- [ ] 1.4 Assert the 16 ms frame for a single-point 32³ drag on the reference mesh (enforce the `cage.drag_32` budget).
+- [x] 1.5 Add the `cage` benchmark group at 3³, 8³ and 32³ with the frame budget attached (`measure-a-cage-drag`).
 
 ## 2. Reporting
 
