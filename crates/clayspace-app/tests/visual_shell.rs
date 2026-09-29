@@ -241,6 +241,12 @@ fn colours() -> &'static clayspace_model::ColourState {
     COLOURS.get_or_init(clayspace_model::ColourState::default)
 }
 
+fn retopo_guidance() -> &'static clayspace_model::RetopoGuidance {
+    static GUIDANCE: std::sync::OnceLock<clayspace_model::RetopoGuidance> =
+        std::sync::OnceLock::new();
+    GUIDANCE.get_or_init(clayspace_model::RetopoGuidance::default)
+}
+
 fn state<'a>(
     strings: &'a Strings,
     scene: &'a Scene,
@@ -293,7 +299,7 @@ fn state<'a>(
         repair_outcome: None,
         retopo: clayspace_model::RetopoSettings::default(),
         retopo_tool: clayspace_model::RetopoToolState::default(),
-        retopo_guidance: &clayspace_model::RetopoGuidance::default(),
+        retopo_guidance: retopo_guidance(),
         retopo_draft: &[],
         retopo_outcome: None,
         retopo_unavailable: None,

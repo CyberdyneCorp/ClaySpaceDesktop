@@ -855,7 +855,7 @@ pub fn retopo_overlay(
             .filter_map(|point| project(*point))
             .collect();
         for edge in points.windows(2) {
-            painter.line_segment([edge[0], edge[1]], egui::Stroke::new(2.5, guide_color));
+            painter.line_segment([edge[0], edge[1]], egui::Stroke::new(2.5_f32, guide_color));
         }
         for point in points {
             painter.circle_filled(point, 3.0, guide_color);
@@ -867,7 +867,7 @@ pub fn retopo_overlay(
         .filter_map(|point| project(*point))
         .collect();
     for edge in draft.windows(2) {
-        painter.line_segment([edge[0], edge[1]], egui::Stroke::new(2.0, guide_color));
+        painter.line_segment([edge[0], edge[1]], egui::Stroke::new(2.0_f32, guide_color));
     }
     for dab in &state.retopo_guidance.density {
         if let Some(point) = project(dab.position) {
