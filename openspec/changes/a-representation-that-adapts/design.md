@@ -172,9 +172,27 @@ the buffer whole, as before. A Dynamic stroke no longer bumps
 history change, so neither forces a rebuild.
 
 **The renderer writes the runs in place** (`Renderer::patch_mesh_layers`),
-widening the patched subtool's culling box, and declines — writing nothing —
-while the polyframe is on or no copy of the index list is kept for it, because
-its lines are derived from the whole index list.
+widening the patched subtool's culling box.
+
+**The polyframe follows the patch** (`renderer::polyframe`). An ordinary
+subtool's lines are its unique edges packed, so every line's place depends on
+every triangle before it and a change re-derives the list. A span the document
+marks `chunked` — a Dynamic region, whose slots each carry vertices of their
+own — has its lines laid out in the same slots instead: two line indices per
+index position, so six per triangle, each an edge no earlier triangle of the
+slot drew or a zero-length line on the triangle's first corner (a real vertex
+the polyframe already draws through). A slot's lines are then derivable from
+the slot alone and sit at a fixed place, so each index run of a patch is
+followed by its lines beside it. Deduplicating per slot equals deduplicating
+per span because slots share no vertex, so the patched list draws the edges a
+fresh derivation draws. While the polyframe has not been built the kept index
+copy is patched as before. A run outside a chunked span, or not whole
+triangles, is still declined while the lines are built. The cost is resident
+memory while the polyframe is on: on a 96×96 sheet (18,432 triangles) the
+region's lines take 319,488 indices against 61,442 packed, because slot
+headroom and the region's spare room are padded with zero-length lines. Per
+dab with the polyframe on, the renderer test sends 223,056 bytes (triangles
+and lines) against 2,015,232 for the rebuild it replaces.
 
 **Index rebuilds follow the engine's word.** After a gesture banks, if
 `index_quality().wants_rebuild`, an `IndexRebuild` is queued with the surface's
@@ -191,7 +209,11 @@ at 100k (held to 16 ms) and 15.3 ms at 1M.
 **Limits.** A surface carrying vertex colour is still copied whole when it
 moves: neither `clay_dynamic_surface_copy_chunk` nor
 `clay_surface_view_copy_chunk` copies an attribute, so a chunked colour surface
-would lose its paint — an engine gap. A full rebuild of a Dynamic region costs
+would lose its paint — an engine gap. Mapping colour app-side does not
+close it: a chunk copies as unwelded triangles with no vertex identity, and the
+only colour readback is a whole-surface `to_mesh`, which is the whole copy the
+chunks replace; a split vertex's colour is the engine's interpolation, not a
+lookup. A full rebuild of a Dynamic region costs
 more than the old whole copy (headroom and seam duplicates: 7.9 MB against
 about 3.3 MB at 100k), paid on layout changes rather than per dab. On a surface with an open
 boundary the first segment of a gesture still serializes the whole surface as

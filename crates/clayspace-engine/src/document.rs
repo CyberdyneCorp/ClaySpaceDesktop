@@ -1167,6 +1167,12 @@ pub struct CarriedSpan {
     /// triangulation. `None` for every layer whose faces really are
     /// triangles, where deriving is the right answer.
     pub edges: Option<Vec<u32>>,
+    /// Whether the range is an adaptive surface's region: chunk slots, each
+    /// with vertices of its own, that [`ClayDocument::carried_patch`]
+    /// rewrites whole. The viewport lays the polyframe's lines out in the
+    /// same slots so they follow a patch; a coloured surface, copied whole,
+    /// is not one.
+    pub chunked: bool,
 }
 
 /// What [`ClayDocument::carried_patch`] hands the viewport: runs to write
@@ -8246,10 +8252,16 @@ impl ClayDocument {
                             .collect(),
                     )
                 });
+                let chunked = representation == Representation::Dynamic
+                    && self.layers[index]
+                        .dynamic
+                        .as_ref()
+                        .is_some_and(|adaptive| adaptive.is_chunked());
                 spans.push(CarriedSpan {
                     layer,
                     indices: first..last,
                     edges,
+                    chunked,
                 });
             }
         }

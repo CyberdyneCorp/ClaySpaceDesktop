@@ -2553,6 +2553,7 @@ impl App {
                         // buffer being uploaded, so a later rebuild that moved
                         // it cannot leave them pointing at the old one.
                         clayspace_view::MeshSpan::with_edges(span.layer, span.indices, span.edges)
+                            .chunked(span.chunked)
                     })
                     .collect();
                 (vertices, indices, spans)
