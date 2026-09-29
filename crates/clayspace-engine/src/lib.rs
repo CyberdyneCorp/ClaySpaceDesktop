@@ -14,6 +14,7 @@
 pub mod adaptive;
 pub mod alpha;
 pub mod backend;
+pub mod chunked;
 pub mod compaction;
 pub mod document;
 mod extrude_region;
@@ -29,11 +30,12 @@ mod retopo_session;
 mod rigs;
 mod sculptors;
 mod seed;
+pub mod slots;
 
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
 pub use compaction::{Collapse, CompactionTotals, Declined};
-pub use document::{CarriedSpan, ClayDocument, RefillBudget};
+pub use document::{CarriedPatch, CarriedSpan, ClayDocument, RefillBudget};
 pub use grid_to_field::{FieldFromGrid, GridToField};
 pub use live::LiveSurface;
 pub use reference::read_reference;

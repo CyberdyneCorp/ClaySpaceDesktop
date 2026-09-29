@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod canonical;
+pub mod carried;
 pub mod geometry;
 pub mod input;
 pub mod json;

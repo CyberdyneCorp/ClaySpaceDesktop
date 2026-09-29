@@ -4,8 +4,9 @@
 //! as the engine's reversible topology delta; an open sheet records the
 //! surface's bytes instead (see `clayspace_engine::adaptive`), and
 //! `tests/dynamic.rs` already covers that path. Every "exactly" below is a
-//! digest over the drawn triangle indices and the bits of every position,
-//! which is what the engine promises a replay reproduces.
+//! digest over the drawn triangles by the bits of their positions, whatever
+//! order the chunked buffer holds them in — the engine promises a replay
+//! reproduces the surface exactly, not the buffer's layout.
 
 use clayspace_engine::adaptive::{mesh_digest, Adaptive, Record, Replay};
 use clayspace_engine::{BackendPolicy, ClayDocument};
@@ -153,10 +154,35 @@ fn draw(document: &mut ClayDocument, symmetry: [bool; 3]) -> bool {
     )
 }
 
-/// The drawn surface as (digest over indices and position bits, triangles).
+/// The drawn surface as (digest, triangles), independent of how the buffer
+/// lays it out.
+///
+/// A chunked surface is drawn from slots with spare room (degenerate
+/// triangles), with seam vertices duplicated per chunk, and a delta undo is
+/// patched into those slots in place — so the same surface can sit in the
+/// buffer in a different order. Each real triangle is read as its three
+/// positions' bits, rotated to start at the least (winding kept), and the
+/// sorted list is digested: equal exactly when the same triangles are drawn.
 fn digest(document: &mut ClayDocument) -> (u64, usize) {
     let (positions, _, _, indices, _) = document.visible_mesh_geometry();
-    (mesh_digest(&positions, &indices), indices.len() / 3)
+    let bits = |i: u32| positions[i as usize].map(f32::to_bits);
+    let mut triangles: Vec<[[u32; 3]; 3]> = indices
+        .chunks_exact(3)
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .map(|t| {
+            let corners = [bits(t[0]), bits(t[1]), bits(t[2])];
+            let least = (0..3).min_by_key(|&k| corners[k]).unwrap_or(0);
+            [0, 1, 2].map(|k| corners[(least + k) % 3])
+        })
+        .collect();
+    triangles.sort_unstable();
+    let flat: Vec<[f32; 3]> = triangles
+        .iter()
+        .flatten()
+        .map(|corner| corner.map(f32::from_bits))
+        .collect();
+    let order: Vec<u32> = (0..flat.len() as u32).collect();
+    (mesh_digest(&flat, &order), triangles.len())
 }
 
 // -- the gesture ------------------------------------------------------------

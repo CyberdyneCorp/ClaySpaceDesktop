@@ -206,16 +206,30 @@ fn with_a_dynamic_layer() -> Option<SharedDocument> {
     Some(SharedDocument::new(document))
 }
 
-/// The drawn triangles and every position's bits: an adaptive stroke changes
-/// the connectivity, so positions alone would not say it was taken back.
-fn topology_digest(document: &SharedDocument) -> (Vec<u32>, Vec<[u32; 3]>) {
+/// The drawn triangles, each as its three positions' bits: an adaptive stroke
+/// changes the connectivity, so positions alone would not say it was taken
+/// back.
+///
+/// Sorted, each rotated to start at its least corner (winding kept), and with
+/// the degenerate triangles left out: a chunked surface is drawn from slots
+/// with spare room and seam vertices duplicated per chunk, and a replay is
+/// patched into those slots in place, so the same surface can sit in the
+/// buffer in another order.
+fn topology_digest(document: &SharedDocument) -> Vec<[[u32; 3]; 3]> {
     document.with(|document| {
         let (positions, _, _, indices, _) = document.visible_mesh_geometry();
-        let bits = positions
-            .into_iter()
-            .map(|position| position.map(f32::to_bits))
+        let bits = |i: u32| positions[i as usize].map(f32::to_bits);
+        let mut triangles: Vec<[[u32; 3]; 3]> = indices
+            .chunks_exact(3)
+            .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+            .map(|t| {
+                let corners = [bits(t[0]), bits(t[1]), bits(t[2])];
+                let least = (0..3).min_by_key(|&k| corners[k]).unwrap_or(0);
+                [0, 1, 2].map(|k| corners[(least + k) % 3])
+            })
             .collect();
-        (indices, bits)
+        triangles.sort_unstable();
+        triangles
     })
 }
 
@@ -232,15 +246,15 @@ fn cancelling_a_dynamic_stroke_leaves_no_partial_topology() {
         .expect("tool");
     let present = subtools(&document);
     let bare = topology_digest(&document);
-    assert!(!bare.0.is_empty(), "the adaptive layer is not being drawn");
+    assert!(!bare.is_empty(), "the adaptive layer is not being drawn");
 
     if !drag(&mut vm, -0.15, true) || !drag(&mut vm, 0.15, true) {
         return;
     }
     let committed = topology_digest(&document);
     assert_ne!(
-        committed.0.len(),
-        bare.0.len(),
+        committed.len(),
+        bare.len(),
         "neither committed gesture changed the topology, so this proves nothing"
     );
 

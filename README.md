@@ -384,7 +384,9 @@ stretching the ones there are. Its shelf is the mesh's less Layer — whose
 ceiling is measured against vertices that existed when the stroke began, which
 an adaptive stroke creates as it goes — and the shelf says so rather than
 leaving a gap. It is reported, saved and offered as itself, never as a mesh.
-See [features.md](docs/features.md#sculpting-an-adaptive-surface).
+A stroke redraws only the chunks it touched — about 175–195 KB a dab whether
+the surface holds 100 thousand triangles or a million — rather than the whole
+surface. See [features.md](docs/features.md#sculpting-an-adaptive-surface).
 
 The same shelf on a field, on a grid and on a mesh. The filter column on the
 left switches between what the active layer can run, each representation's own

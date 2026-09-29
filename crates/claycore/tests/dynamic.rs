@@ -16,9 +16,9 @@
 //! vertex moved, which chunks went dirty, what a refusal *named*.
 
 use claycore::{
-    DetailMode, DynamicDesc, DynamicError, DynamicSurface, DynamicTopology, MaintenanceKind,
-    MaintenanceQueue, Mask, MeshBrush, MeshStamp, Pressure, SculptMemoryProfile, SculptStage,
-    SurfaceKind, SurfaceView, WorldFrame,
+    DetailMode, DynamicDesc, DynamicError, DynamicSession, DynamicSurface, DynamicTopology,
+    MaintenanceKind, MaintenanceQueue, Mask, MeshBrush, MeshStamp, Pressure, SculptMemoryProfile,
+    SculptStage, SurfaceKind, SurfaceView, WorldFrame,
 };
 
 // -- fixtures ---------------------------------------------------------------
@@ -510,6 +510,44 @@ fn automask_sources_are_set_and_cleared() {
 }
 
 // -- the chunk group --------------------------------------------------------
+
+/// A session keeps one sculptor for the surface's life, so the chunks one
+/// stroke dirtied are still in the set when the next stroke begins — what a
+/// sculptor made per stroke loses — and the surface reads back through it.
+#[test]
+fn a_session_keeps_its_dirty_set_across_strokes() {
+    let mut session = DynamicSession::new(adaptive(8)).expect("a session");
+    let faces = session.surface().stats().expect("stats").faces;
+    assert!(session.sculptor().chunk_count() > 0);
+    assert!(session.sculptor().dirty_chunks().expect("dirty").is_empty());
+
+    session
+        .with_sculptor(|sculptor| sculptor.stamp(draw(), Some(&splitting_topology()), None))
+        .expect("the first stroke");
+    let first = session.sculptor().dirty_chunks().expect("dirty");
+    assert!(
+        !first.is_empty(),
+        "the set outlives the stroke that made it"
+    );
+    assert!(
+        session.surface().stats().expect("stats").faces > faces,
+        "and the surface read through the session is the one stroked"
+    );
+
+    session
+        .with_sculptor(|sculptor| sculptor.stamp(draw(), Some(&splitting_topology()), None))
+        .expect("the second stroke");
+    let both = session.sculptor().dirty_chunks().expect("dirty");
+    assert!(
+        first.iter().all(|chunk| both.contains(chunk)),
+        "nothing was dropped"
+    );
+
+    session
+        .with_sculptor(|sculptor| sculptor.clear_dirty())
+        .expect("clear");
+    assert!(session.sculptor().dirty_chunks().expect("dirty").is_empty());
+}
 
 #[test]
 fn a_stamp_marks_chunks_dirty_and_clear_dirty_clears_them() {

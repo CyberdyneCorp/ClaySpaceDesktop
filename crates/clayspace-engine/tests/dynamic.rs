@@ -130,10 +130,30 @@ fn dab(document: &mut ClayDocument, tool: ToolKind) -> bool {
     stroke(document, tool, [-0.2, 0.0, 0.0], [0.2, 0.0, 0.0])
 }
 
-/// The triangles the viewport is handed, as (positions, triangle count).
+/// The triangles the viewport is handed, as (corner positions, triangle
+/// count).
+///
+/// Degenerate triangles are left out — an adaptive surface is drawn in chunk
+/// slots whose headroom is zero-area triangles — and the rest are put in a
+/// canonical order, each starting at its smallest corner with its winding
+/// kept, so two drawings of the same surface compare equal whatever the
+/// vertex numbering or the chunk layout.
 fn drawn(document: &mut ClayDocument) -> (Vec<[f32; 3]>, usize) {
     let (positions, _, _, indices, _) = document.visible_mesh_geometry();
-    (positions, indices.len() / 3)
+    let mut triangles: Vec<[[f32; 3]; 3]> = indices
+        .chunks_exact(3)
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .map(|t| {
+            let corners = [t[0], t[1], t[2]].map(|i| positions[i as usize]);
+            let first = (0..3)
+                .min_by(|&a, &b| corners[a].partial_cmp(&corners[b]).expect("finite"))
+                .unwrap_or(0);
+            std::array::from_fn(|k| corners[(first + k) % 3])
+        })
+        .collect();
+    triangles.sort_by(|a, b| a.partial_cmp(b).expect("finite positions"));
+    let count = triangles.len();
+    (triangles.into_iter().flatten().collect(), count)
 }
 
 fn representation_of(document: &ClayDocument, key: LayerKey) -> Representation {

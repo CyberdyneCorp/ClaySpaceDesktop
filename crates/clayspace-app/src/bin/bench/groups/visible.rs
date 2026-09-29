@@ -18,6 +18,12 @@ use crate::skip::Skip;
 pub struct Screen {
     geometry: SurfaceGeometry,
     renderer: Renderer,
+    /// The build of the carried buffer the renderer holds, as the
+    /// application keeps it, so an adaptive stroke is patched in place the
+    /// way the application patches it.
+    built: Option<u64>,
+    /// What the last refresh sent for adaptive surfaces, in bytes.
+    adaptive_bytes: u64,
 }
 
 impl Screen {
@@ -25,7 +31,14 @@ impl Screen {
         Self {
             geometry: SurfaceGeometry::new(gpu),
             renderer: Renderer::new(gpu, OffscreenTarget::FORMAT),
+            built: None,
+            adaptive_bytes: 0,
         }
+    }
+
+    /// What the last refresh sent to the device for adaptive surfaces.
+    pub fn adaptive_bytes(&self) -> u64 {
+        self.adaptive_bytes
     }
 
     /// Brings the surface up before anything is timed.
@@ -66,19 +79,39 @@ impl Screen {
                 self.upload(gpu, document);
                 Ok(())
             }
-            // An adaptive surface is drawn from its own triangles, through the
-            // same whole-buffer rebuild.
+            // An adaptive surface is drawn from its own triangles: the chunks
+            // a stroke dirtied, written in place, and the same whole-buffer
+            // rebuild when a patch cannot follow.
             Representation::Dynamic => {
-                self.upload(gpu, document);
+                if !self.patch(gpu, document) {
+                    self.upload(gpu, document);
+                }
                 Ok(())
             }
         }
+    }
+
+    /// The application's patch path: `false` where it has to rebuild.
+    fn patch(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> bool {
+        let Some(built) = self.built else {
+            return false;
+        };
+        let Some(patch) = clayspace_app::carried::patch_upload(document, built) else {
+            return false;
+        };
+        if !patch.apply(gpu, &mut self.renderer) {
+            return false;
+        }
+        self.adaptive_bytes = patch.bytes();
+        true
     }
 
     /// The one buffer a grid and a mesh are both drawn from.
     fn upload(&mut self, gpu: &Gpu, document: &mut ClayDocument) {
         let _ = document.mesh_revision();
         let (positions, normals, colors, indices, spans) = document.visible_mesh_geometry();
+        self.built = Some(document.carried_build());
+        self.adaptive_bytes = clayspace_app::carried::rebuilt_bytes(document.dynamic_upload());
         let frozen = document.mask_at(&positions);
         let vertices: Vec<Vertex> = positions
             .into_iter()

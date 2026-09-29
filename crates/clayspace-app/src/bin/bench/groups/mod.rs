@@ -12,6 +12,7 @@ pub mod cage;
 pub mod convert;
 pub mod cut;
 pub mod dab;
+pub mod dynamic;
 pub mod history;
 pub mod locality;
 pub mod maintenance;

@@ -12,6 +12,24 @@
 //! side-car saves. See [`crate::multires`], which made the same arrangement
 //! first and whose side-car format this one shares under its own header.
 //!
+//! # One sculptor for the surface's life
+//!
+//! The surface is held in a [`DynamicSession`] with the sculptor bound to it,
+//! rather than a sculptor being made per stroke segment. The sculptor owns the
+//! spatial index and the chunk table, so a sculptor per segment paid the index
+//! build per segment — 117 ms over 100,352 triangles and 1.50 s over 1,002,528
+//! on the pinned engine — and started every segment with an empty dirty set,
+//! which left nothing for the viewport to upload incrementally.
+//!
+//! # Drawing
+//!
+//! Chunk by chunk ([`crate::chunked`]): the engine's dirty set is drained into
+//! a mirror, and only the chunks a stroke touched are sent again — their
+//! indices only when their topology changed. A surface that carries vertex
+//! colour is the exception and is still copied whole when it moves: the chunk
+//! transport copies positions, normals and indices and no attribute, so a
+//! chunked colour surface would lose its paint.
+//!
 //! # A missing side-car
 //!
 //! Opens, and the row comes back as the mesh layer it demonstrably is, with
@@ -47,8 +65,12 @@
 //! bytes starts a new chain. That only happens on an open surface, whose
 //! records are all snapshots.
 
-use claycore::{DynamicDelta, DynamicDesc, DynamicSurface, DynamicTopology};
+use claycore::{
+    DynamicDelta, DynamicDesc, DynamicSculptor, DynamicSession, DynamicSurface, DynamicTopology,
+};
 use clayspace_model::{CageFault, ModelError, Refusal};
+
+use crate::chunked::{Bounds, ChunkMirror, Region, RegionBuffers, RegionRuns};
 
 /// What a crossing into or out of an adaptive surface may peak at, on top of
 /// what the document already holds.
@@ -62,23 +84,57 @@ use clayspace_model::{CageFault, ModelError, Refusal};
 /// through `ClayDocument::set_surface_budget`.
 pub const CROSSING_BUDGET: u64 = crate::multires::LEVEL_BUDGET;
 
-/// The triangles the viewport is drawing, and the surface state they were
-/// copied at.
+/// The triangles the viewport is drawing for a coloured surface, and the
+/// surface state they were copied at.
 struct Drawn {
     watched: (claycore::SurfaceRevision, u64),
-    /// Whether the surface carries a colour attribute at all, rather than the
-    /// white this side fills in for one that does not.
-    coloured: bool,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 3]>,
     indices: Vec<u32>,
 }
 
+/// How a surface reaches the viewport.
+enum Drawing {
+    /// Copied whole whenever it moves: a surface carrying vertex colour,
+    /// which the chunk transport cannot carry.
+    Whole(Option<Drawn>),
+    /// Chunk by chunk, following the engine's dirty set.
+    Chunked(Chunked),
+}
+
+/// The chunked drawing's state.
+#[derive(Default)]
+struct Chunked {
+    mirror: ChunkMirror,
+    /// The surface generation the mirror holds, or `None` before the first
+    /// copy. A different one is a new chunk table to copy whole.
+    mirrored: Option<u64>,
+    /// Where the chunks sit in the carried buffer, as the last full build
+    /// laid them out. `None` for a surface that build did not draw.
+    region: Option<Region>,
+}
+
+/// What a surface's region needs after its chunks were drained.
+#[derive(Debug, PartialEq)]
+pub enum RegionPatch {
+    /// The last full build did not draw this surface — hidden, or drawn
+    /// whole — so there is nothing of it to patch.
+    Undrawn,
+    /// These runs bring the drawn region up to the surface.
+    Runs(RegionRuns),
+    /// The region cannot take the change in place; lay it out again.
+    Rebuild,
+}
+
 /// An adaptive surface, and everything this side has to remember about it.
 pub struct Adaptive {
-    surface: DynamicSurface,
-    drawn: Option<Drawn>,
+    session: DynamicSession,
+    /// Whether the surface carries a colour attribute at all. Fixed for the
+    /// surface's life: no stroke adds one, and a colour brush is refused over
+    /// a surface without it.
+    coloured: bool,
+    drawing: Drawing,
     /// How many times this side has replaced the surface underneath itself.
     ///
     /// A surface put back from bytes is a new identity whose revisions start
@@ -86,6 +142,10 @@ pub struct Adaptive {
     /// having happened. This is monotone across every restore.
     generation: u64,
     open: Option<OpenGesture>,
+    /// What rebuilding this surface's index cost the last time, for the
+    /// maintenance queue to weigh the next request against. `None` before
+    /// the first, which is filed with no estimate so it can be measured.
+    rebuild_micros: Option<u64>,
 }
 
 /// A gesture that is open, and what it has done so far.
@@ -135,14 +195,30 @@ pub enum Replay {
 pub type Pass<'a> = (Vec<[f32; 5]>, claycore::MeshStamp<'a>);
 
 impl Adaptive {
-    /// Wraps a surface the caller has already built.
-    pub fn holding(surface: DynamicSurface) -> Self {
-        Self {
-            surface,
-            drawn: None,
+    /// Wraps a surface the caller has already built, binding the sculptor
+    /// that will serve it for as long as it is held.
+    ///
+    /// Asks once whether it carries colour, which is a whole export: paid
+    /// here, where the surface was just read or loaded whole anyway, and
+    /// never again for this surface.
+    pub fn holding(surface: DynamicSurface) -> Result<Self, ModelError> {
+        let coloured = surface
+            .to_mesh()
+            .map(|mesh| mesh.colors().is_some())
+            .map_err(ModelError::engine)?;
+        let session = DynamicSession::new(surface).map_err(ModelError::engine)?;
+        Ok(Self {
+            session,
+            coloured,
+            drawing: if coloured {
+                Drawing::Whole(None)
+            } else {
+                Drawing::Chunked(Chunked::default())
+            },
             generation: 0,
             open: None,
-        }
+            rebuild_micros: None,
+        })
     }
 
     /// How every surface this application builds reads its mesh: the engine's
@@ -163,28 +239,37 @@ impl Adaptive {
 
     /// Reads a mesh into a surface, or says in the domain's words why not.
     pub fn from_mesh(mesh: &claycore::Mesh) -> Result<Self, ModelError> {
-        DynamicSurface::from_mesh(mesh, Self::desc())
-            .map(Self::holding)
-            .map_err(refused)
+        let surface = DynamicSurface::from_mesh(mesh, Self::desc()).map_err(refused)?;
+        Self::holding(surface)
     }
 
     pub fn surface(&self) -> &DynamicSurface {
-        &self.surface
+        self.session.surface()
     }
 
-    pub fn surface_mut(&mut self) -> &mut DynamicSurface {
-        &mut self.surface
+    /// Lends the surface's sculptor for a stroke. See
+    /// [`DynamicSession::with_sculptor`].
+    pub fn with_sculptor<R>(&mut self, f: impl for<'a> FnOnce(&mut DynamicSculptor<'a>) -> R) -> R {
+        self.session.with_sculptor(f)
     }
 
     /// The half-edge census: what the inspector and the agent are told.
     pub fn stats(&self) -> claycore::DynamicStats {
-        self.surface.stats().unwrap_or_default()
+        self.surface().stats().unwrap_or_default()
     }
 
     /// What the viewport watches: the engine's three revisions and this
     /// side's own generation.
     pub fn watched(&self) -> (claycore::SurfaceRevision, u64) {
-        (self.surface.revision().unwrap_or_default(), self.generation)
+        (
+            self.surface().revision().unwrap_or_default(),
+            self.generation,
+        )
+    }
+
+    /// Whether the surface is drawn chunk by chunk rather than whole.
+    pub fn is_chunked(&self) -> bool {
+        matches!(self.drawing, Drawing::Chunked(_))
     }
 
     /// A number that moves whenever what is drawn moves, for a redraw hash.
@@ -197,22 +282,40 @@ impl Adaptive {
             .wrapping_add(generation.wrapping_mul(0x9E37_79B9))
     }
 
-    /// What the viewport draws, copied whole and kept until the surface moves.
-    ///
-    /// Whole rather than per chunk for now: the dirty-chunk transport is a
-    /// drawing change of its own, and this is correct at every size the
-    /// crossing produces today — it is only not yet incremental.
+    /// The part of [`drawn_revision`](Self::drawn_revision) a region patch
+    /// cannot follow, so a change to it means the carried buffer is built
+    /// again: everything for a surface drawn whole, and only the generation
+    /// — a new chunk table — for one drawn in chunks.
+    pub fn layout_revision(&self) -> u64 {
+        match self.drawing {
+            Drawing::Whole(_) => self.drawn_revision(),
+            Drawing::Chunked(_) => self.generation.wrapping_mul(0x9E37_79B9),
+        }
+    }
+
+    /// The part a region patch does follow: the engine's revisions, for a
+    /// surface drawn in chunks, and nothing for one drawn whole.
+    pub fn chunk_revision(&self) -> u64 {
+        match self.drawing {
+            Drawing::Whole(_) => 0,
+            Drawing::Chunked(_) => self.drawn_revision(),
+        }
+    }
+
+    /// A coloured surface's triangles, copied whole and kept until the
+    /// surface moves; `None` for a surface drawn in chunks.
     #[allow(clippy::type_complexity)]
-    pub fn triangles(&mut self) -> Option<(&[[f32; 3]], &[[f32; 3]], &[[f32; 3]], &[u32])> {
+    pub fn whole_triangles(&mut self) -> Option<(&[[f32; 3]], &[[f32; 3]], &[[f32; 3]], &[u32])> {
         let watched = self.watched();
-        let stale = !matches!(&self.drawn, Some(drawn) if drawn.watched == watched);
-        if stale {
-            let mesh = self.surface.to_mesh().ok()?;
+        let Drawing::Whole(drawn) = &mut self.drawing else {
+            return None;
+        };
+        if !matches!(drawn, Some(held) if held.watched == watched) {
+            let mesh = self.session.surface().to_mesh().ok()?;
             let positions = mesh.positions().to_vec();
             let count = positions.len();
-            self.drawn = Some(Drawn {
+            *drawn = Some(Drawn {
                 watched,
-                coloured: mesh.colors().is_some(),
                 normals: mesh.normals_or_derived(),
                 colors: mesh
                     .colors()
@@ -222,13 +325,127 @@ impl Adaptive {
                 positions,
             });
         }
-        let drawn = self.drawn.as_ref()?;
+        let drawn = drawn.as_ref()?;
         Some((
             &drawn.positions,
             &drawn.normals,
             &drawn.colors,
             &drawn.indices,
         ))
+    }
+
+    /// Brings the chunk mirror up to the surface: every chunk for a surface
+    /// it has not mirrored, the dirty ones otherwise. Nothing for a surface
+    /// drawn whole.
+    fn sync_chunks(&mut self) -> Result<(), ModelError> {
+        let generation = self.generation;
+        let Drawing::Chunked(chunked) = &mut self.drawing else {
+            return Ok(());
+        };
+        let mirror = &mut chunked.mirror;
+        if chunked.mirrored == Some(generation) {
+            self.session
+                .with_sculptor(|sculptor| mirror.drain(sculptor))
+                .map_err(ModelError::engine)?;
+        } else {
+            self.session
+                .with_sculptor(|sculptor| mirror.refill(sculptor))
+                .map_err(ModelError::engine)?;
+            chunked.mirrored = Some(generation);
+        }
+        Ok(())
+    }
+
+    /// Lays the whole surface out as a region of the carried buffer starting
+    /// at the given place, and remembers where; `None` for a surface drawn
+    /// whole, or one with nothing to draw.
+    pub fn lay_out_region(&mut self, vertex_base: u32, index_base: u32) -> Option<RegionBuffers> {
+        if let Err(e) = self.sync_chunks() {
+            eprintln!("a superfície adaptativa não pôde ser copiada: {e}");
+        }
+        let generation = self.generation;
+        let Drawing::Chunked(chunked) = &mut self.drawing else {
+            return None;
+        };
+        let (region, buffers) =
+            Region::lay_out(&chunked.mirror, vertex_base, index_base, generation)?;
+        // Everything is in the fresh layout, so nothing is pending for it.
+        chunked.mirror.forget_pending();
+        chunked.region = Some(region);
+        Some(buffers)
+    }
+
+    /// Forgets where the last full build put the region, for a build that
+    /// is about to lay the carried buffer out again.
+    pub fn forget_region(&mut self) {
+        if let Drawing::Chunked(chunked) = &mut self.drawing {
+            chunked.region = None;
+        }
+    }
+
+    /// Drains the chunks the engine marked dirty and says what the drawn
+    /// region needs for them.
+    pub fn patch_region(&mut self) -> RegionPatch {
+        let drawn = matches!(&self.drawing, Drawing::Chunked(chunked) if chunked.region.is_some());
+        if !drawn {
+            return RegionPatch::Undrawn;
+        }
+        if self.sync_chunks().is_err() {
+            return RegionPatch::Rebuild;
+        }
+        let generation = self.generation;
+        let Drawing::Chunked(chunked) = &mut self.drawing else {
+            return RegionPatch::Undrawn;
+        };
+        let Some(region) = chunked.region.as_mut() else {
+            return RegionPatch::Undrawn;
+        };
+        if region.generation() != generation {
+            return RegionPatch::Rebuild;
+        }
+        match region.patch(&mut chunked.mirror) {
+            Some(runs) => RegionPatch::Runs(runs),
+            None => RegionPatch::Rebuild,
+        }
+    }
+
+    /// Whether the engine says the spatial index has degraded enough to be
+    /// worth rebuilding (`clay_dynamic_sculptor_index_quality`). Its opinion,
+    /// read between strokes; the maintenance queue decides when.
+    pub fn wants_index_rebuild(&self) -> bool {
+        self.session
+            .sculptor()
+            .index_quality()
+            .is_ok_and(|quality| quality.wants_rebuild)
+    }
+
+    /// What the last index rebuild cost, in microseconds; zero before one.
+    pub fn rebuild_micros(&self) -> u64 {
+        self.rebuild_micros.unwrap_or(0)
+    }
+
+    /// Rebuilds the spatial index, between strokes.
+    ///
+    /// A rebuild clears the engine's dirty set and renumbers the chunks, so
+    /// the drawn region no longer describes the chunk table: this counts as a
+    /// new generation, and the next upload lays the surface out afresh.
+    pub fn rebuild_index(&mut self) -> Result<(), ModelError> {
+        let started = std::time::Instant::now();
+        self.session
+            .with_sculptor(|sculptor| sculptor.rebuild_index())
+            .map_err(ModelError::engine)?;
+        self.rebuild_micros = Some(started.elapsed().as_micros() as u64);
+        self.generation = self.generation.wrapping_add(1);
+        Ok(())
+    }
+
+    /// How many times the chunk mirror has had to grow a buffer; zero for a
+    /// surface drawn whole.
+    pub fn buffer_growths(&self) -> u64 {
+        match &self.drawing {
+            Drawing::Chunked(chunked) => chunked.mirror.buffer_growths(),
+            Drawing::Whole(_) => 0,
+        }
     }
 
     /// Whether the surface carries vertex colour for the colour brushes to
@@ -238,20 +455,49 @@ impl Adaptive {
     /// paint over one remeshes and colours nothing — a stroke that changes the
     /// topology and not what it was for. So the colour brushes are refused
     /// there, as they are on a mesh with no colour attribute.
-    pub fn carries_colour(&mut self) -> bool {
-        self.triangles().is_some() && self.drawn.as_ref().is_some_and(|drawn| drawn.coloured)
+    pub fn carries_colour(&self) -> bool {
+        self.coloured
     }
 
-    /// The triangles last drawn, for a caller that may not rebuild them — a
-    /// pick is a question and takes `&self`.
-    pub fn drawn_triangles(&self) -> Option<(&[[f32; 3]], &[u32])> {
-        let drawn = self.drawn.as_ref()?;
-        Some((&drawn.positions, &drawn.indices))
+    /// Where a ray meets the triangles last drawn, in the surface's own
+    /// coordinates. A pick is a question and takes `&self`, so it walks what
+    /// was copied rather than copying again.
+    pub fn pick(
+        &self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+        nearest: impl Fn([f32; 3], [f32; 3], &[[f32; 3]], &[u32]) -> Option<[f32; 3]>,
+    ) -> Option<[f32; 3]> {
+        match &self.drawing {
+            Drawing::Whole(drawn) => {
+                let drawn = drawn.as_ref()?;
+                nearest(origin, direction, &drawn.positions, &drawn.indices)
+            }
+            Drawing::Chunked(chunked) => chunked
+                .mirror
+                .triangles()
+                .filter(|(_, _, bounds)| bounds.is_none_or(|b| ray_meets_box(origin, direction, b)))
+                .filter_map(|(positions, indices, _)| {
+                    nearest(origin, direction, positions, indices)
+                })
+                .min_by(|a, b| {
+                    along(origin, direction, *a).total_cmp(&along(origin, direction, *b))
+                }),
+        }
     }
 
     /// The box the surface occupies, in its own coordinates.
-    pub fn bounds(&mut self) -> Option<([f32; 3], [f32; 3])> {
-        let (positions, ..) = self.triangles()?;
+    pub fn bounds(&mut self) -> Option<Bounds> {
+        if self.is_chunked() {
+            if let Err(e) = self.sync_chunks() {
+                eprintln!("a superfície adaptativa não pôde ser copiada: {e}");
+            }
+            let Drawing::Chunked(chunked) = &self.drawing else {
+                return None;
+            };
+            return chunked.mirror.bounds();
+        }
+        let (positions, ..) = self.whole_triangles()?;
         let first = *positions.first()?;
         Some(positions.iter().fold((first, first), |(min, max), point| {
             (
@@ -265,7 +511,7 @@ impl Adaptive {
     /// paid for.
     pub fn to_mesh(&self) -> Result<claycore::Mesh, ModelError> {
         let priced = self
-            .surface
+            .surface()
             .preflight_to_mesh(0)
             .map_err(ModelError::engine)?;
         if !priced.allowed {
@@ -274,13 +520,13 @@ impl Adaptive {
                 priced.peak_bytes / (1024 * 1024)
             )));
         }
-        self.surface.to_mesh().map_err(ModelError::engine)
+        self.surface().to_mesh().map_err(ModelError::engine)
     }
 
     /// The surface as bytes, priced before it allocates.
     pub fn bytes(&self, budget: u64) -> Result<Vec<u8>, ModelError> {
         let priced = self
-            .surface
+            .surface()
             .preflight_encode(budget)
             .map_err(ModelError::engine)?;
         if !priced.allowed {
@@ -289,7 +535,7 @@ impl Adaptive {
                 priced.persistent_bytes / (1024 * 1024)
             )));
         }
-        self.surface.serialize().map_err(ModelError::engine)
+        self.surface().serialize().map_err(ModelError::engine)
     }
 
     /// A connectivity-and-position digest of the surface as it exports.
@@ -298,17 +544,22 @@ impl Adaptive {
     /// replay bit-exact over `to_mesh`, and explicitly not over the serialized
     /// bytes, which keep the slots an undone stroke allocated.
     pub fn digest(&self) -> Result<u64, ModelError> {
-        let mesh = self.surface.to_mesh().map_err(ModelError::engine)?;
+        let mesh = self.surface().to_mesh().map_err(ModelError::engine)?;
         Ok(mesh_digest(mesh.positions(), mesh.indices()))
     }
 
     /// Puts the surface back to bytes taken from it earlier.
     ///
     /// A new identity, whose revisions start again — hence the generation —
-    /// and onto which no earlier delta replays.
+    /// onto which no earlier delta replays, and so a new sculptor, whose
+    /// index is built here and whose chunk table the mirror copies whole on
+    /// its next drain. The mirror's buffers are kept for it.
     fn restore(&mut self, bytes: &[u8]) -> Result<(), ModelError> {
-        self.surface = DynamicSurface::deserialize(bytes).map_err(ModelError::engine)?;
-        self.drawn = None;
+        let surface = DynamicSurface::deserialize(bytes).map_err(ModelError::engine)?;
+        self.session = DynamicSession::new(surface).map_err(ModelError::engine)?;
+        if let Drawing::Whole(drawn) = &mut self.drawing {
+            *drawn = None;
+        }
         self.generation = self.generation.wrapping_add(1);
         Ok(())
     }
@@ -340,7 +591,9 @@ impl Adaptive {
     /// Strokes one segment, every mirror of it, into the open gesture, and
     /// says whether anything changed.
     ///
-    /// One sculptor for all the passes, and each captured into the gesture's
+    /// Through the sculptor the surface keeps for its whole life, so the index
+    /// is not rebuilt per segment and the chunks this stroke dirties stay in
+    /// the set the viewport drains. Each pass is captured into the gesture's
     /// delta where it has one: a delta that ends where the surface stands is
     /// *continued*, so the segments and mirrors of one gesture are one record.
     pub fn stroke(
@@ -355,24 +608,25 @@ impl Adaptive {
             Some(Record::Delta(delta)) => Some(delta),
             _ => None,
         };
-        let mut sculptor = self.surface.sculptor().map_err(ModelError::engine)?;
-        let mut changed = false;
-        for (path, stamp) in passes {
-            let (applied, _) = match delta.as_deref_mut() {
-                Some(delta) => sculptor.apply_stroke_recorded(
-                    path,
-                    preset,
-                    *stamp,
-                    Some(topology),
-                    mask,
-                    delta,
-                ),
-                None => sculptor.apply_stroke(path, preset, *stamp, Some(topology), mask),
+        let changed = self.session.with_sculptor(|sculptor| {
+            let mut changed = false;
+            for (path, stamp) in passes {
+                let (applied, _) = match delta.as_deref_mut() {
+                    Some(delta) => sculptor.apply_stroke_recorded(
+                        path,
+                        preset,
+                        *stamp,
+                        Some(topology),
+                        mask,
+                        delta,
+                    ),
+                    None => sculptor.apply_stroke(path, preset, *stamp, Some(topology), mask),
+                }
+                .map_err(ModelError::engine)?;
+                changed |= applied > 0;
             }
-            .map_err(ModelError::engine)?;
-            changed |= applied > 0;
-        }
-        drop(sculptor);
+            Ok::<bool, ModelError>(changed)
+        })?;
         if let Some(open) = self.open.as_mut() {
             open.changed |= changed;
         }
@@ -428,20 +682,21 @@ impl Adaptive {
         }
     }
 
-    /// Puts the surface at one end of a delta, through a sculptor.
+    /// Puts the surface at one end of a delta, through the surface's own
+    /// sculptor.
     ///
-    /// A fresh sculptor, as every stroke here makes one: the replay's own
-    /// index work follows the surface, and a sculptor kept across a replay it
-    /// did not run would hold the index of the state before it. A delta from
-    /// another surface, or one replayed out of order, is refused by the
-    /// engine before anything is written.
+    /// The one the strokes use, so the replay keeps its index following the
+    /// surface and marks the chunks it touched in the dirty set the viewport
+    /// drains: an undo is patched like a stroke rather than laid out again. A
+    /// delta from another surface, or one replayed out of order, is refused by
+    /// the engine before anything is written.
     fn replay(&mut self, delta: &DynamicDelta, way: Replay) -> Result<(), ModelError> {
-        let mut sculptor = self.surface.sculptor().map_err(ModelError::engine)?;
-        match way {
-            Replay::Revert => delta.revert(&mut sculptor),
-            Replay::Apply => delta.apply(&mut sculptor),
-        }
-        .map_err(ModelError::engine)
+        self.session
+            .with_sculptor(|sculptor| match way {
+                Replay::Revert => delta.revert(sculptor),
+                Replay::Apply => delta.apply(sculptor),
+            })
+            .map_err(ModelError::engine)
     }
 }
 
@@ -461,6 +716,37 @@ pub fn mesh_digest(positions: &[[f32; 3]], indices: &[u32]) -> u64 {
         .fold(0xCBF2_9CE4_8422_2325, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(PRIME)
         })
+}
+
+/// How far along a ray a point on it lies.
+fn along(origin: [f32; 3], direction: [f32; 3], point: [f32; 3]) -> f32 {
+    (0..3).map(|i| (point[i] - origin[i]) * direction[i]).sum()
+}
+
+/// Whether a ray (forward of its origin) passes through a box — the slab
+/// test, so a pick walks only the chunks it could hit.
+fn ray_meets_box(origin: [f32; 3], direction: [f32; 3], (low, high): Bounds) -> bool {
+    // Widened a little, so a hit the triangle test accepts on a face of the
+    // box is not refused by the box.
+    let min = low.map(|v| v - 1e-4 * (1.0 + v.abs()));
+    let max = high.map(|v| v + 1e-4 * (1.0 + v.abs()));
+    let (mut near, mut far) = (0.0f32, f32::INFINITY);
+    for axis in 0..3 {
+        if direction[axis].abs() < 1e-12 {
+            if origin[axis] < min[axis] || origin[axis] > max[axis] {
+                return false;
+            }
+            continue;
+        }
+        let inverse = 1.0 / direction[axis];
+        let (a, b) = (
+            (min[axis] - origin[axis]) * inverse,
+            (max[axis] - origin[axis]) * inverse,
+        );
+        near = near.max(a.min(b));
+        far = far.min(a.max(b));
+    }
+    near <= far
 }
 
 impl std::fmt::Debug for Adaptive {
@@ -595,6 +881,47 @@ mod tests {
     }
 
     #[test]
+    fn a_restore_moves_the_generation_and_voids_the_drawn_region() {
+        let mut adaptive = Adaptive::from_mesh(&sheet(4)).expect("a sheet reads");
+        assert!(
+            adaptive.is_chunked(),
+            "an uncoloured sheet is drawn in chunks"
+        );
+        let before = adaptive.drawn_revision();
+        let layout = adaptive.layout_revision();
+        assert!(adaptive.lay_out_region(0, 0).is_some());
+        assert!(
+            matches!(
+                adaptive.patch_region(),
+                RegionPatch::Runs(runs) if runs.vertices.is_empty() && runs.indices.is_empty()
+            ),
+            "nothing moved, so nothing is written"
+        );
+        let bytes = adaptive.bytes(0).expect("bytes");
+        adaptive.restore(&bytes).expect("restore");
+        assert_eq!(adaptive.patch_region(), RegionPatch::Rebuild);
+        assert_ne!(adaptive.drawn_revision(), before);
+        assert_ne!(adaptive.layout_revision(), layout);
+    }
+
+    #[test]
+    fn an_index_rebuild_renumbers_the_chunks_and_voids_the_region() {
+        let mut adaptive = Adaptive::from_mesh(&sheet(16)).expect("a sheet reads");
+        adaptive.lay_out_region(0, 0).expect("a region");
+        let layout = adaptive.layout_revision();
+        adaptive.rebuild_index().expect("rebuild");
+        assert_ne!(
+            adaptive.layout_revision(),
+            layout,
+            "the viewport lays it out again"
+        );
+        assert_eq!(adaptive.patch_region(), RegionPatch::Rebuild);
+        let region = adaptive.lay_out_region(0, 0).expect("a region");
+        assert_eq!(region.census.0 as u64, adaptive.stats().faces);
+        assert!(adaptive.rebuild_micros() > 0, "and the cost was measured");
+    }
+
+    #[test]
     fn a_closed_surface_records_a_delta_and_an_open_one_a_snapshot() {
         let mut closed = Adaptive::from_mesh(&ball(8, 12)).expect("a ball reads");
         assert!(draw(&mut closed, [-0.3, 1.0, 0.0]));
@@ -642,6 +969,39 @@ mod tests {
         assert_ne!(adaptive.drawn_revision(), revision, "the viewport knows");
         assert!(adaptive.close_gesture().is_none(), "nothing left to bank");
         assert_valid(&adaptive);
+    }
+
+    /// A delta replays through the surface's own sculptor, so an undo and a
+    /// redo on a closed surface mark the chunks they touched and are patched
+    /// into the drawn region like a stroke, rather than laying it out again.
+    #[test]
+    fn a_delta_undo_and_redo_patch_the_drawn_region_in_place() {
+        let mut adaptive = Adaptive::from_mesh(&ball(96, 128)).expect("a ball reads");
+        assert!(adaptive.is_chunked());
+        adaptive.lay_out_region(0, 0).expect("a region");
+        let before = adaptive.digest().expect("digest");
+        assert!(draw(&mut adaptive, [-0.3, 1.0, 0.0]));
+        let mut record = adaptive.close_gesture().expect("a record");
+        assert!(matches!(record, Record::Delta(_)));
+        assert!(matches!(adaptive.patch_region(), RegionPatch::Runs(_)));
+        let layout = adaptive.layout_revision();
+
+        for way in [Replay::Revert, Replay::Apply] {
+            let revision = adaptive.drawn_revision();
+            record = adaptive.step(record, way).expect("the step");
+            assert_ne!(adaptive.drawn_revision(), revision, "the viewport knows");
+            assert_eq!(adaptive.layout_revision(), layout, "and need not re-lay");
+            let patch = adaptive.patch_region();
+            let RegionPatch::Runs(runs) = patch else {
+                panic!("the region should take the {way:?} in place: {patch:?}");
+            };
+            assert!(runs.chunks > 0, "the replay dirtied the chunks it touched");
+            assert_eq!(runs.census[1].0 as u64, adaptive.stats().faces);
+            assert_valid(&adaptive);
+        }
+        record = adaptive.step(record, Replay::Revert).expect("undo");
+        assert!(matches!(record, Record::Delta(_)));
+        assert_eq!(adaptive.digest().expect("digest"), before);
     }
 
     #[test]
