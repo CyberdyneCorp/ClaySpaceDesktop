@@ -354,6 +354,106 @@ fn a_collapse_keeps_the_surface_it_was_given() {
     );
 }
 
+/// The Move brush of the undo series: small against the form, so an undo
+/// refills a grab's neighbourhood and its time is the price of its bricks.
+fn small_move_brush() -> BrushSettings {
+    BrushSettings {
+        size: 0.12,
+        ..move_brush()
+    }
+}
+
+/// One undo of the newest gesture, taken back and put again: the time and the
+/// bricks it re-meshed.
+fn undo_newest(document: &mut ClayDocument, entries: usize) -> (f64, usize) {
+    document.take_dirty_keys();
+    let started = std::time::Instant::now();
+    for _ in 0..entries {
+        assert!(document.undo().expect("undo"), "nothing to undo");
+    }
+    let took = started.elapsed().as_secs_f64();
+    let bricks = document.take_dirty_keys().len();
+    for _ in 0..entries {
+        assert!(document.redo().expect("redo"), "nothing to redo");
+    }
+    (took, bricks)
+}
+
+/// TRIPWIRE: flags a decisive per-brick win for a baked patch.
+///
+/// The undo series (`tests/undo_series.rs`) splits an undo into the bricks it
+/// re-meshes and the price of one, and credits a collapse only with the second:
+/// the region is already the grab's own on v0.120.1. So this is the figure a
+/// collapse has to win. Two documents take the same twenty small mirrored Move
+/// gestures, one collapsing at the floor; then collapsing is switched off and
+/// both take a twenty-first, whose undo is timed brick for brick. The takes
+/// are interleaved, so that a loaded host loads both sides alike.
+///
+/// Measured on a Mac shared with parallel builds (release, v0.120.1): 18–32 µs
+/// a brick over the chain against 38–74 µs over the baked patch, 1.7–2.3x.
+/// The bound is the other tripwire's 0.6x, for the same reason: loaded runners
+/// have shown near parity where an idle host shows a clear loss, and only a
+/// decisive win is worth re-measuring for. When this fails, re-run
+/// `undo_series` and this file on an idle host before turning the floor on.
+#[test]
+fn a_baked_patch_has_no_decisive_per_brick_win() {
+    let mut plain = sphere();
+    let mut compacted = compacting_sphere();
+    let small = |document: &mut ClayDocument, index: usize| {
+        let depth = document.history().depth;
+        let wobble = (index as f32 * 0.9).sin() * 0.02;
+        let samples: Vec<GestureSample> = (0..4)
+            .map(|i| GestureSample {
+                position: [0.95 + i as f32 * 0.01, 0.1 + wobble, 0.2],
+                pressure: 1.0,
+                time: i as f32,
+            })
+            .collect();
+        gesture(
+            document,
+            ToolKind::Mover,
+            small_move_brush(),
+            &samples,
+            MIRRORED,
+        );
+        document.history().depth - depth
+    };
+    for index in 1..=20 {
+        small(&mut plain, index);
+        small(&mut compacted, index);
+    }
+    assert!(
+        compacted.compaction_totals().collapses > 0,
+        "the fixture never collapsed"
+    );
+    compacted.set_compaction_floor(0.0);
+    let plain_entries = small(&mut plain, 21);
+    let baked_entries = small(&mut compacted, 21);
+    assert_eq!(
+        baked_entries, plain_entries,
+        "a bake landed in the timed gesture"
+    );
+    let (mut chain, mut baked) = (f64::MAX, f64::MAX);
+    for _ in 0..5 {
+        let (took, bricks) = undo_newest(&mut plain, plain_entries);
+        chain = chain.min(took / bricks.max(1) as f64);
+        let (took, bricks) = undo_newest(&mut compacted, baked_entries);
+        baked = baked.min(took / bricks.max(1) as f64);
+    }
+    let ratio = baked / chain;
+    println!(
+        "a brick over the chain {:.1} us, over the baked patch {:.1} us: {ratio:.1}x",
+        chain * 1e6,
+        baked * 1e6
+    );
+    assert!(
+        ratio >= 0.6,
+        "a brick over a baked patch now refills at {ratio:.2}x one over the \
+         chain it replaced, a decisive win. Re-measure before enabling compaction: see \
+         `clayspace_engine::compaction`"
+    );
+}
+
 /// TRIPWIRE: flags a decisive undo win for a baked patch.
 ///
 /// A baked patch is a sampled volume, usually dearer per brick than the
@@ -411,4 +511,66 @@ fn a_baked_patch_has_no_decisive_undo_win() {
          replaced, a decisive win. Re-measure before enabling compaction: see \
          `clayspace_engine::compaction`"
     );
+}
+
+/// One gesture of the re-measurement: what it cost, and what its undo cost.
+fn timed_gesture(document: &mut ClayDocument, index: usize, size: f32) -> String {
+    let wobble = (index as f32 * 0.9).sin() * 0.05;
+    let samples: Vec<GestureSample> = (0..4)
+        .map(|i| GestureSample {
+            position: [0.95 + i as f32 * 0.015, 0.1 + wobble, 0.2 + i as f32 * 0.01],
+            pressure: 1.0,
+            time: i as f32,
+        })
+        .collect();
+    let brush = BrushSettings {
+        size,
+        ..move_brush()
+    };
+    let depth = document.history().depth;
+    let started = std::time::Instant::now();
+    gesture(document, ToolKind::Mover, brush, &samples, MIRRORED);
+    let took = started.elapsed().as_secs_f64();
+    let entries = document.history().depth - depth;
+    let (undo, bricks) = (0..3)
+        .map(|_| undo_newest(document, entries))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .expect("three takes");
+    format!(
+        "chain {:>2}, collapses {}, gesture {:>7.2} ms, undo {:>7.2} ms, {:>5} bricks, {:>6.1} us a brick",
+        chain_and_step(document).0,
+        document.compaction_totals().collapses,
+        took * 1e3,
+        undo * 1e3,
+        bricks,
+        undo * 1e6 / bricks.max(1) as f64
+    )
+}
+
+/// The re-measurement behind the floor staying at zero: forty mirrored Move
+/// gestures on one patch, with and without the collapse, for the calibration's
+/// brush and the undo series' small one, reported at 1, 10, 20 and 40.
+///
+/// A measurement rather than a check, and a slow one — a collapse gesture
+/// takes seconds — so it is run by hand on an idle host when a pin changes:
+///
+/// ```sh
+/// cargo test -p clayspace-engine --release --test chain_compaction \
+///     measure_the_collapse_against_the_chain -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "a measurement, run by hand on an idle host"]
+fn measure_the_collapse_against_the_chain() {
+    for size in [0.45, 0.12] {
+        for floor in [0.0, CHAIN_FLOOR] {
+            let mut document = sphere();
+            document.set_compaction_floor(floor);
+            for index in 1..=40 {
+                let row = timed_gesture(&mut document, index, size);
+                if [1, 10, 20, 40].contains(&index) {
+                    println!("size {size}, floor {floor}, gesture {index:>2}: {row}");
+                }
+            }
+        }
+    }
 }

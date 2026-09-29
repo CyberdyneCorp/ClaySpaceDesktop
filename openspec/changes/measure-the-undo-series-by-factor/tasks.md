@@ -15,3 +15,9 @@
 
 - [x] 3.1 Re-record the v0.120.1 figures in `bound-the-chain-by-region` and `docs/why-move-was-slow.md`.
 - [x] 3.2 Correct the tripwire's name to `a_baked_patch_has_no_decisive_undo_win` where the docs still use the old one.
+
+## 4. Forty edits, and a pull on the grown layer
+
+- [x] 4.1 Carry the series to forty gestures and report it at 1, 10, 20 and 40, asserting the region over all forty and the last three under 16x the first three. — `an_undo_after_forty_edits_stays_in_its_class`: 2.7–4.2x measured.
+- [x] 4.2 Time a Snake Hook pull begun on the worked patch at the same checkpoints, first segment and median, and assert neither passes 16x its figure after one edit. — `a_stroke_on_a_grown_layer_begins_near_the_first`: 3.3–8.3x first segment, 1.7–4.5x median.
+- [x] 4.3 Watch the price of a brick over a baked patch apart from the brick count. — `a_baked_patch_has_no_decisive_per_brick_win` in `tests/chain_compaction.rs`: 1.7–2.3x the chain's price on a loaded host.

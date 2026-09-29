@@ -177,6 +177,24 @@ which is the only part a collapse could claim. A baked patch still undoes at
 the same way, measured 0.42 ms a segment early and about 1.0 ms late: 2.3–2.5x,
 where the audit saw 3x at 24–72 ms on a larger layer.
 
+**Re-measured to forty gestures, the collapse still loses everywhere.**
+`measure_the_collapse_against_the_chain` in `tests/chain_compaction.rs` works one
+patch forty mirrored Move gestures deep with collapsing off and on. Over the
+chain, an undo at gestures 1/10/20/40 took 6.3/5.4/7.1/14.0 ms with the
+calibration's 0.45 brush and 0.34/0.90/1.07/1.79 ms with the series' 0.12 one.
+Collapsing, the same undos took 3.9/43/27/238 ms and 0.47/147/84/78 ms: a
+collapse gesture's undo re-meshes its whole closure (6,384–10,752 bricks against
+144–980), and between collapses a brick refilled at 27.6 µs over the baked patch
+against 7.2 µs over the chain. One collapse on a layer forty gestures deep took
+2.5–2.8 s and left every later brick at 50–125 µs, against 8.5–17 µs. Neither
+does `stroke/begin` on a grown layer need it: a Snake Hook pull begun on the
+patch after forty edits opens at 5.7–7.4 ms, 3.3–8.3x its figure after one edit,
+where the audit met four seconds. The floor stays at zero; the undo series,
+the grown-layer pull and the price of a brick over a baked patch are pinned
+separately (`an_undo_after_forty_edits_stays_in_its_class`,
+`a_stroke_on_a_grown_layer_begins_near_the_first`,
+`a_baked_patch_has_no_decisive_per_brick_win`).
+
 ### And one hardcoded literal was making it worse
 
 `front_only: true` was written at every Move call site, so the near side of a

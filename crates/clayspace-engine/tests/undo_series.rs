@@ -33,6 +33,13 @@ use clayspace_model::{BrushSettings, Drag, GestureSample, SceneModel, SculptMode
 /// The audit's series length.
 const EDITS: usize = 20;
 
+/// How far the series is carried past the audit's length, so that a cost that
+/// grows with the edit count shows as a trend and not as one ratio.
+const LONG: usize = 40;
+
+/// The gestures the series is reported at, one-based.
+const CHECKPOINTS: [usize; 4] = [1, 10, EDITS, LONG];
+
 /// Takes per figure; the fastest is kept.
 const TAKES: usize = 5;
 
@@ -139,10 +146,10 @@ fn undo_the_newest(document: &mut ClayDocument, entries: usize) -> Undo {
     }
 }
 
-/// Twenty gestures, and the undo of each measured right after it lands.
+/// Forty gestures, and the undo of each measured right after it lands.
 fn the_series() -> (Vec<Undo>, usize) {
     let mut document = sphere();
-    let series = (1..=EDITS)
+    let series = (1..=LONG)
         .map(|index| {
             let depth = document.history().depth;
             work_the_patch(&mut document, index);
@@ -180,9 +187,9 @@ fn an_undo_refills_the_grab_and_not_its_node() {
     let _turn = one_at_a_time();
     let (series, surface) = the_series();
     let first = series[0];
-    let chain_grew = series[EDITS - 1].chain - first.chain;
+    let chain_grew = series[LONG - 1].chain - first.chain;
     assert!(
-        chain_grew >= 2 * (EDITS as i32 - 1),
+        chain_grew >= 2 * (LONG as i32 - 1),
         "the fixture must grow a chain to prove anything: grew by {chain_grew}"
     );
     for (index, undo) in series.iter().enumerate() {
@@ -216,10 +223,14 @@ fn an_undo_after_twenty_edits_costs_near_the_first() {
     let _turn = one_at_a_time();
     let (series, _) = the_series();
     let early = mean(series[..3].iter().map(|u| u.took.as_secs_f64()));
-    let late = mean(series[EDITS - 3..].iter().map(|u| u.took.as_secs_f64()));
-    let bricks = mean(series[EDITS - 3..].iter().map(|u| u.bricks as f64))
+    let late = mean(
+        series[EDITS - 3..EDITS]
+            .iter()
+            .map(|u| u.took.as_secs_f64()),
+    );
+    let bricks = mean(series[EDITS - 3..EDITS].iter().map(|u| u.bricks as f64))
         / mean(series[..3].iter().map(|u| u.bricks as f64));
-    let per_brick = mean(series[EDITS - 3..].iter().map(Undo::per_brick))
+    let per_brick = mean(series[EDITS - 3..EDITS].iter().map(Undo::per_brick))
         / mean(series[..3].iter().map(Undo::per_brick));
     let ratio = late / early;
     println!(
@@ -230,6 +241,123 @@ fn an_undo_after_twenty_edits_costs_near_the_first() {
         ratio < 8.0,
         "an undo after {EDITS} edits costs {ratio:.1}x the first (bricks \
          {bricks:.2}x, a brick {per_brick:.2}x): the cost is growing with the \
+         edit count again"
+    );
+}
+
+/// The series carried to forty edits, reported at 1, 10, 20 and 40.
+///
+/// This is the figure a regional collapse would have to beat: past twenty
+/// edits nothing but the chain grows, so whatever the undo gains is the price
+/// of one brick over a longer chain. Measured on a Mac (release, v0.120.1,
+/// sharing the host with parallel builds): 0.39–0.83 ms at the first gesture
+/// and 1.3–3.7 ms at the fortieth, the bricks 126 then flat at 144, and the
+/// last three 2.7–4.2x the first three. The bound catches the 200x class, not
+/// the chain's own slope.
+#[test]
+fn an_undo_after_forty_edits_stays_in_its_class() {
+    let _turn = one_at_a_time();
+    let (series, _) = the_series();
+    for at in CHECKPOINTS {
+        let undo = series[at - 1];
+        println!(
+            "checkpoint {at:>2}: chain {:>2}, undo {:.2} ms, {} bricks, {:.1} us a brick",
+            undo.chain,
+            undo.took.as_secs_f64() * 1e3,
+            undo.bricks,
+            undo.per_brick() * 1e6
+        );
+    }
+    let early = mean(series[..3].iter().map(|u| u.took.as_secs_f64()));
+    let late = mean(series[LONG - 3..].iter().map(|u| u.took.as_secs_f64()));
+    let ratio = late / early;
+    println!("undo at {LONG} edits against the first three: {ratio:.2}x");
+    assert!(
+        ratio < 16.0,
+        "an undo after {LONG} edits costs {ratio:.1}x the first: the cost is \
+         growing with the edit count faster than the chain's own price"
+    );
+}
+
+/// A Snake Hook pull begun on the worked patch, as `stroke/begin` meets it: the
+/// first segment, and the median of the rest. The fastest of `TAKES`, each
+/// pull taken back before the next.
+fn pull_on_the_patch(document: &mut ClayDocument) -> (f64, f64) {
+    let brush = BrushSettings {
+        size: 0.18,
+        intensity: 0.9,
+        ..BrushSettings::default()
+    };
+    let path: Vec<GestureSample> = (0..30)
+        .map(|step| {
+            let t = step as f32 / 29.0;
+            GestureSample {
+                position: [1.0 + 0.4 * t, 0.1 + 0.2 * t, 0.2],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect();
+    let (mut begin, mut segment) = (f64::MAX, f64::MAX);
+    for _ in 0..TAKES {
+        let depth = document.history().depth;
+        document.begin_gesture();
+        let mut timed = (2..=path.len()).map(|end| {
+            let started = Instant::now();
+            document
+                .apply_stroke(ToolKind::Puxar, brush, &path[..end], [false; 3])
+                .expect("the pull was refused");
+            started.elapsed().as_secs_f64()
+        });
+        let first = timed.next().expect("a first segment");
+        let mut rest: Vec<f64> = timed.collect();
+        document.end_gesture();
+        rest.sort_by(f64::total_cmp);
+        begin = begin.min(first);
+        segment = segment.min(rest[rest.len() / 2]);
+        for _ in depth..document.history().depth {
+            assert!(document.undo().expect("undo"), "nothing to undo");
+        }
+    }
+    (begin, segment)
+}
+
+/// `stroke/begin` and a Snake Hook segment on a layer grown by forty edits.
+///
+/// The audit measured `stroke/begin` at 4,051 ms on a grown layer (F14). A
+/// pull begun on the worked patch is timed at 1, 10, 20 and 40 Move gestures.
+/// Measured on a Mac (release, v0.120.1, sharing the host with parallel
+/// builds): the first segment 0.68–2.1 ms after one edit and 5.7–7.4 ms after
+/// forty, 3.3–8.3x; the median segment 0.85–4.0 ms and 3.8–6.6 ms, 1.7–4.5x.
+/// Milliseconds against the audit's four seconds, and all of it the chain's
+/// price per brick again. The bound is set against the audit's class, not
+/// against that slope, and wide because the first figure is small enough for
+/// a loaded host to halve.
+#[test]
+fn a_stroke_on_a_grown_layer_begins_near_the_first() {
+    let _turn = one_at_a_time();
+    let mut document = sphere();
+    let mut figures = Vec::new();
+    for index in 1..=LONG {
+        work_the_patch(&mut document, index);
+        if CHECKPOINTS.contains(&index) {
+            let (begin, segment) = pull_on_the_patch(&mut document);
+            println!(
+                "after {index:>2} edits: chain {:>2}, begin {:.2} ms, segment {:.2} ms",
+                chain(&document),
+                begin * 1e3,
+                segment * 1e3
+            );
+            figures.push((begin, segment));
+        }
+    }
+    let (first, last) = (figures[0], figures[figures.len() - 1]);
+    let (begin, segment) = (last.0 / first.0, last.1 / first.1);
+    println!("after {LONG} edits against one: begin {begin:.2}x, segment {segment:.2}x");
+    assert!(
+        begin < 16.0 && segment < 16.0,
+        "a pull on a layer {LONG} edits deep begins at {begin:.1}x and runs at \
+         {segment:.1}x the cost on a fresh one: stroke cost is growing with the \
          edit count again"
     );
 }
