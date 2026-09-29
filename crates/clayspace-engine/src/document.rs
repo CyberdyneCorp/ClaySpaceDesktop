@@ -1590,6 +1590,9 @@ pub struct ClayDocument {
     /// What an adaptive crossing may peak at, on top of what the document
     /// already holds. See [`crate::adaptive::CROSSING_BUDGET`].
     surface_budget: u64,
+    /// What the document may hold with a hierarchy's new level, or a whole
+    /// new hierarchy, in it. See [`crate::multires::LEVEL_BUDGET`].
+    hierarchy_budget: u64,
     /// Layers an undone crossing has taken off the scene.
     ///
     /// Hidden rather than removed, and the difference is forced by the
@@ -1798,6 +1801,7 @@ impl ClayDocument {
             retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             surface_budget: crate::adaptive::CROSSING_BUDGET,
+            hierarchy_budget: crate::multires::LEVEL_BUDGET,
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),
@@ -2529,6 +2533,16 @@ impl ClayDocument {
     /// test pulls to reach the refusal without building a surface that large.
     pub fn set_surface_budget(&mut self, bytes: u64) {
         self.surface_budget = bytes;
+    }
+
+    /// What the document may hold with a new level or a new hierarchy in it.
+    pub fn hierarchy_budget(&self) -> u64 {
+        self.hierarchy_budget
+    }
+
+    /// Sets it, for the same two callers [`Self::set_surface_budget`] has.
+    pub fn set_hierarchy_budget(&mut self, bytes: u64) {
+        self.hierarchy_budget = bytes;
     }
 
     /// Runs a crossing of the active layer whose new layer `fill` makes.
@@ -3431,13 +3445,21 @@ impl ClayDocument {
     /// the file and the layer the sculpt is stored against would be two
     /// different meshes.
     fn mesh_to_multires(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let cage = crate::multires::Hierarchy::holding(self.cage_from_active()?);
+        self.attach_hierarchy(cage, name)
+    }
+
+    /// The active mesh layer as a hierarchy of one level, free-standing.
+    ///
+    /// Refuses rather than repairs, naming the fault, because a cage is the
+    /// thing whose topology is the work.
+    fn cage_from_active(&mut self) -> Result<claycore::Multires, ModelError> {
         let source = self.active_layer();
         if !source.carries_geometry {
             return Err(ModelError::Conversion(Refusal::SourceEmpty));
         }
         let id = source.id;
-        let mut hierarchy = self
-            .document
+        self.document
             .multires_from_mesh_layer(id, crate::multires::Hierarchy::desc())
             .map_err(
                 |refused| match crate::multires::cage_fault(refused.reason) {
@@ -3447,12 +3469,23 @@ impl ClayDocument {
                     }
                     None => ModelError::engine(refused.to_string()),
                 },
-            )?;
-        let cage = hierarchy.copy_level_mesh(0).map_err(ModelError::engine)?;
+            )
+    }
+
+    /// Makes the layer a free-standing hierarchy is held by, named `name`.
+    fn attach_hierarchy(
+        &mut self,
+        mut hierarchy: crate::multires::Hierarchy,
+        name: &str,
+    ) -> Result<LayerKey, ModelError> {
+        let cage = hierarchy
+            .surface_mut()
+            .copy_level_mesh(0)
+            .map_err(ModelError::engine)?;
         let key = self.attach_meshed_layer(cage, name)?;
         if let Ok(index) = self.index_of(key) {
             self.layers[index].representation = Representation::Multires;
-            self.layers[index].multires = Some(crate::multires::Hierarchy::holding(hierarchy));
+            self.layers[index].multires = Some(hierarchy);
         }
         // A hierarchy is drawn from its display level and never from the cage
         // its layer holds, so the box every manipulator sizes itself to comes
@@ -11926,6 +11959,7 @@ impl SceneModel for ClayDocument {
             Op::AddLevel => self.memory().map_or(0, |report| report.total),
             _ => 0,
         };
+        let budget = self.hierarchy_budget;
         let hierarchy = self.layers[index]
             .multires
             .as_mut()
@@ -11934,7 +11968,7 @@ impl SceneModel for ClayDocument {
             Op::SetSculptLevel(level) => hierarchy.set_sculpt_level(level)?,
             Op::SetDisplayLevel(level) => hierarchy.set_display_level(level)?,
             Op::AddLevel => {
-                let level = hierarchy.add_level(held, crate::multires::LEVEL_BUDGET)?;
+                let level = hierarchy.add_level(held, budget)?;
                 // What an artist means by subdividing is to work finer, so
                 // both numbers move to the level that arrived — which is also
                 // what the engine does, so a host that left the display where
@@ -12036,6 +12070,76 @@ impl SceneModel for ClayDocument {
         }
         self.refresh_stats();
         Ok(())
+    }
+
+    /// What Create Multires would cost on the active mesh layer, before
+    /// anything is built. See [`SceneModel::hierarchy_plan`].
+    ///
+    /// Two figures are measured here rather than estimated: the document's
+    /// ledger, and the cage — built as a hierarchy of one level, weighed and
+    /// dropped. Building it is cheap beside any level over it, and it is also
+    /// the one way to learn that the mesh is not a cage before the sculptor
+    /// presses anything: the refusal comes back from here, naming the fault.
+    ///
+    /// **Not for every frame**: the ledger walks every layer and the cage is a
+    /// copy of the mesh. The scene ViewModel asks once per change to the
+    /// document and keeps the answer.
+    fn hierarchy_plan(&mut self) -> Result<clayspace_model::HierarchyPlan, ModelError> {
+        let source = self.active_layer();
+        if source.representation != Representation::Mesh {
+            return Err(ModelError::Conversion(Refusal::WrongSource {
+                needs: Representation::Mesh,
+                active: source.representation,
+            }));
+        }
+        let cage = crate::multires::Hierarchy::holding(self.cage_from_active()?);
+        let first = cage.subdivision_cost().ok_or_else(|| {
+            ModelError::engine("the engine would not price a level over this cage")
+        })?;
+        let held = self.memory().map_or(0, |report| report.total);
+        let cage_faces = cage
+            .state()
+            .level_sizes
+            .first()
+            .map_or(0, |size| size.faces);
+        Ok(clayspace_model::HierarchyPlan::new(
+            held,
+            self.hierarchy_budget,
+            (cage.held_bytes()?, cage_faces),
+            first,
+        ))
+    }
+
+    /// Create Multires: the active mesh layer as a hierarchy `levels` deep,
+    /// priced as a whole before anything is built, and one undo step.
+    ///
+    /// Refused from the plan when the document and the hierarchy together
+    /// pass the budget, naming all three figures. Each level is then priced
+    /// again by the engine as it is built, on top of the ledger and what the
+    /// hierarchy already holds, because every level but the first was
+    /// projected; a level refused there leaves nothing behind, since the
+    /// hierarchy is built free-standing and the layer is made only once all
+    /// of it stands.
+    ///
+    /// Both numbers end on the top level, as a Subdivide click leaves them.
+    fn create_hierarchy(
+        &mut self,
+        settings: clayspace_model::HierarchySettings,
+    ) -> Result<LayerKey, ModelError> {
+        let settings = settings.sanitized();
+        let plan = self.hierarchy_plan()?;
+        plan.within(settings.levels)
+            .map_err(ModelError::Conversion)?;
+        let mut hierarchy = crate::multires::Hierarchy::holding(self.cage_from_active()?);
+        for _ in 0..settings.levels {
+            let held = plan.held_bytes.saturating_add(hierarchy.held_bytes()?);
+            hierarchy.add_level(held, self.hierarchy_budget)?;
+        }
+        self.cross_with(
+            Direction::MeshToMultires,
+            settings.in_place,
+            |document, name| document.attach_hierarchy(hierarchy, name),
+        )
     }
 
     fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
@@ -13119,6 +13223,7 @@ impl DocumentModel for ClayDocument {
         opened.remember_objects_after();
         // A host setting rather than part of the file, like the policy.
         opened.surface_budget = self.surface_budget;
+        opened.hierarchy_budget = self.hierarchy_budget;
         *self = opened;
         Ok(())
     }
@@ -13126,6 +13231,7 @@ impl DocumentModel for ClayDocument {
     fn reset(&mut self) -> Result<(), ModelError> {
         let mut fresh = Self::new(self.policy.clone()).and_then(Self::with_starting_form)?;
         fresh.surface_budget = self.surface_budget;
+        fresh.hierarchy_budget = self.hierarchy_budget;
         *self = fresh;
         Ok(())
     }
@@ -13282,6 +13388,7 @@ impl ClayDocument {
             retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             surface_budget: crate::adaptive::CROSSING_BUDGET,
+            hierarchy_budget: crate::multires::LEVEL_BUDGET,
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),

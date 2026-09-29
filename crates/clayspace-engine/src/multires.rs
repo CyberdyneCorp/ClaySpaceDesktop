@@ -360,9 +360,10 @@ impl Hierarchy {
 
     /// What subdividing once more would cost, from the engine's own preflight.
     ///
-    /// The peak is the figure that ends a session rather than the persistent
-    /// one, so both travel and the refusal is stated against the peak. `None`
-    /// where the engine will not price it at all.
+    /// The build peak and what the level holds once drawn both travel, and
+    /// the level is charged at the higher — see
+    /// [`SubdivisionCost::resident_bytes`] for the measurement that made the
+    /// second necessary. `None` where the engine will not price it at all.
     pub fn subdivision_cost(&self) -> Option<SubdivisionCost> {
         let preflight = self.surface.preflight_add_level().ok()?;
         Some(SubdivisionCost {
@@ -371,7 +372,22 @@ impl Hierarchy {
             faces: preflight.faces,
             persistent_bytes: preflight.persistent_bytes,
             peak_bytes: preflight.peak_bytes,
+            // The engine quotes the evaluated surface and the runtime index
+            // as held only while the level is resident, and a level this
+            // application builds is drawn at once, so it is resident.
+            resident_bytes: preflight
+                .persistent_bytes
+                .saturating_add(preflight.evaluated_bytes)
+                .saturating_add(preflight.runtime_bytes),
         })
+    }
+
+    /// Everything this hierarchy holds now, as the engine totals it.
+    pub fn held_bytes(&self) -> Result<u64, ModelError> {
+        self.surface
+            .memory()
+            .map(|memory| memory.total)
+            .map_err(ModelError::engine)
     }
 
     /// One more level, priced before it is attempted against `budget_bytes`,
@@ -970,7 +986,7 @@ mod tests {
     ///
     /// The budget is the fixture's lever rather than the document's contents,
     /// because the arithmetic is the property: a level is admitted against a
-    /// budget of exactly `held + peak` and refused one byte under it.
+    /// budget of exactly `held + charged` and refused one byte under it.
     #[test]
     fn a_level_over_budget_is_refused() {
         let mut surface = hierarchy(4, 0.0);
@@ -978,12 +994,12 @@ mod tests {
 
         let first = surface.subdivision_cost().expect("the engine prices it");
         surface
-            .add_level(held, held + first.peak_bytes)
+            .add_level(held, held + first.charged_bytes())
             .expect("a level that exactly fits is built");
         assert_eq!(surface.levels().count, 2);
 
         let second = surface.subdivision_cost().expect("and the next one");
-        let budget = held + second.peak_bytes - 1;
+        let budget = held + second.charged_bytes() - 1;
         let refused = surface
             .add_level(held, budget)
             .expect_err("one byte over is over");
@@ -992,10 +1008,10 @@ mod tests {
                 refused,
                 ModelError::Conversion(Refusal::LevelOverBudget {
                     held_bytes,
-                    peak_bytes,
+                    level_bytes,
                     budget_bytes,
                 }) if held_bytes == held
-                    && peak_bytes == second.peak_bytes
+                    && level_bytes == second.charged_bytes()
                     && budget_bytes == budget
             ),
             "priced on top of what is held, and refused in the domain's own \

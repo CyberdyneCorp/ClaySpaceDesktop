@@ -1779,6 +1779,35 @@ it is not among the representations a new layer can be; it arrives through
 `mesh → multires`, which refuses rather than repairs. See
 [Crossing between representations](#crossing-between-representations).
 
+**Create Multires, from a fixed mesh, priced before it is built.** Every mesh
+layer's inspector section — a retopology result included — offers **Criar
+Multires**: how many levels to build over the cage (0 to 4, two by default),
+whether the hierarchy replaces the mesh, and the price beside the button before
+anything is allocated: the faces at the top level, **what the document holds,
+what the hierarchy would add and the limit**. Over the limit the same line turns
+to the accent colour with the refusal, and pressing the button is refused in
+those words with nothing built. The document's ledger and the cage are measured
+(the cage is built as a hierarchy of one level, weighed and dropped, which is
+also how a mesh that is not a cage says so before anything is pressed); level
+1 is the engine's quote, and deeper levels are marked *projected* — four times
+the level below, which across levels 1–4 on 8², 16² and 32² cages was never
+under the engine's own later quote and at most 7.7% over it. Each level is
+priced again by the engine while the hierarchy is built free-standing, and the
+layer is made only once all of it stands, so a success is one crossing and
+**one undo** and a refusal leaves nothing behind. The plan charges every level
+as it is held once drawn, which errs high: at four levels over a 16×16 cage it
+quoted 55,127,094 bytes and the drawn hierarchy grew the document by
+27,879,079. An agent reads the same price in `state.scene.hierarchy_plan`
+(`hierarchy_plan_refused` where the mesh is not a cage) and creates with
+`hierarchy create {"levels":2}`.
+
+The benchmark's `multires` group times both halves at three cage sizes, 8, 16
+and 32 quads a side: pricing Create Multires (`multires.preflight_*`) took
+**0.04, 0.18 and 0.84 ms**, and creating two levels (`multires.create_*`)
+**0.50, 2.18 and 9.63 ms** on an M3 Pro under a load of 1.13 per core. The
+price is asked again only when the active layer, the history depth or the
+layer count moves.
+
 **Two levels, not one.** Where the brush writes and what the viewport draws are
 independent numbers, and that is the workflow rather than an implementation
 detail: dropping to the cage to move a jaw while still watching the pores is
@@ -1790,15 +1819,20 @@ working.
 
 **Adding a level is priced, and refused rather than attempted.** A level
 multiplies faces by four, so a 20k-quad cage is 5.1M faces at level 4 and 20.5M
-at level 5. The face count and the **peak** during the build stand beside the
-Subdividir button — the peak rather than what remains after it, because on a
-constrained machine it is the high-water mark that ends the session. A refused
+at level 5. The face count and what the level is **charged** stand beside the
+Subdividir button: the higher of the build's peak and what the level holds once
+drawn, rather than what remains after the build. The engine's peak prices the
+build alone, and a level is drawn the moment it arrives — measured at level 4
+over a 16×16 cage, the peak read 3,741,720 bytes and adding and drawing the
+level grew the document by 20,886,292. The engine's own evaluated and runtime
+figures for a resident level (40,623,342 bytes there) are the upper bound it is
+charged at now. A refused
 level leaves the hierarchy exactly as deep as it was — the engine builds and
 then publishes, so there is nothing half-built to clear up — and the reason
 arrives beside the viewport, on the same line that says why a tool cannot be
 used.
 
-The peak is priced **on top of what the document already holds** — every
+The charge is priced **on top of what the document already holds** — every
 layer, every surface beside it and the levels the hierarchy already has — and
 the refusal names all three figures: what is held, what the level adds and the
 budget. The engine's preflight prices the new level alone, and priced alone a

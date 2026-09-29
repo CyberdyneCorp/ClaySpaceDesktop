@@ -122,3 +122,51 @@ dispatcher. Guides and density have separate overlays and their edits remain
 visible before a run. The existing job publishes a result on completion; the
 separate explicit accept/discard preview from #211 remains a follow-up to that
 workflow.
+
+## From fixed mesh to hierarchy (#214)
+
+**Create Multires is one action, priced as a whole.** A crossing followed by a
+Subdivide click per level priced each level only when it was asked for, so the
+cost of the hierarchy a sculptor meant to make was never stated before the
+first allocation. `HierarchySettings { levels, in_place }` asks for the whole
+thing and `HierarchyPlan` prices it before anything is built: the document's
+ledger and the cage (built as a hierarchy of one level, weighed and dropped)
+are measured, level 1 is the engine's preflight of that cage, and every deeper
+level is projected at four times the one below — the engine prices a level
+from the one below it, and the one below does not exist yet. The build then
+prices every level again with the engine as it goes, on top of the ledger and
+what the free-standing hierarchy holds, and the layer is made only once all of
+it stands; so a refusal at any point leaves nothing behind, and a success is
+one crossing and one undo.
+
+**A level is charged at what it holds once drawn.** Measured on a 16×16 quad
+cage at level 4, the engine's `peak_bytes` quoted 3,741,720 bytes while adding
+and drawing the level grew the document by 20,886,292. The preflight prices the
+build alone, and this application draws the level it has just built. The same
+preflight quotes the evaluated surface and the runtime index as held while a
+level is resident; `SubdivisionCost::resident_bytes` is persistent + evaluated
++ runtime (40,623,342 there), and a level is charged at the higher of that and
+the peak. That holds for a Subdivide click as much as for Create Multires.
+
+**The plan charges every level drawn, and so errs high.** Charging only the top
+level drawn left the build's own per-level check able to refuse a plan that had
+been shown to fit: the levels below carry a runtime index the preflight does not
+itemise. Charging each level at its resident figure makes the plan a bound the
+build is held to (`a_plan_that_fits_is_built_and_holds_no_more_than_it_quoted`,
+at 8², 16² and 32² cages), at the price of quoting about twice what a drawn
+hierarchy measured: 55,127,094 bytes quoted against 27,879,079 held at four
+levels over the 16×16 cage.
+
+**The projection is measured, not trusted.** Four times each figure was never
+below the engine's own quote of the next level and at most 7.7% over it across
+levels 1–4 on the three cages (`the_projection_never_undercuts_the_engine`).
+
+**Kept between frames.** The plan walks the ledger and copies the cage, so the
+scene ViewModel keeps it keyed by the active layer, the history depth and the
+layer count, and asks again when one moves.
+
+**What the engine could give instead.** An exact figure for a level as it is
+held once drawn — or a preflight whose peak includes the evaluation a host
+needs to draw it — would replace the resident upper bound and let the plan
+charge levels below the top at what they actually hold. Nothing in this
+application depends on that; it would only make the quote tighter.

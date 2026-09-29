@@ -401,9 +401,27 @@ pub enum Refusal {
     /// the session, not the steady state after it — and it is priced on top of
     /// `held_bytes`, what the document already holds, because a level that
     /// fits an empty machine is not the question being asked.
+    ///
+    /// `level_bytes` is what the level is charged: the higher of its build
+    /// peak and what it holds once drawn, since a level is drawn the moment
+    /// it arrives — see [`crate::SubdivisionCost::charged_bytes`].
     LevelOverBudget {
         held_bytes: u64,
-        peak_bytes: u64,
+        level_bytes: u64,
+        budget_bytes: u64,
+    },
+    /// A hierarchy asked for in one go would not fit beside what the document
+    /// holds.
+    ///
+    /// Apart from [`Refusal::LevelOverBudget`] because the figure is the whole
+    /// hierarchy — the cage, the levels under the top as they remain and the
+    /// top as it is drawn — and because it is returned before anything is
+    /// built, from a plan the sculptor was shown. See
+    /// [`crate::HierarchyPlan`].
+    HierarchyOverBudget {
+        levels: u32,
+        held_bytes: u64,
+        hierarchy_bytes: u64,
         budget_bytes: u64,
     },
     /// The hierarchy is already as deep as this build will take it.
@@ -472,15 +490,28 @@ impl std::fmt::Display for Refusal {
             },
             Self::LevelOverBudget {
                 held_bytes,
-                peak_bytes,
+                level_bytes,
                 budget_bytes,
             } => write!(
                 f,
-                "that level peaks at {} MB on top of the {} MB the document \
+                "that level needs {} MB on top of the {} MB the document \
                  already holds, past the {} MB budget",
-                peak_bytes / (1024 * 1024),
+                level_bytes / (1024 * 1024),
                 held_bytes / (1024 * 1024),
                 budget_bytes / (1024 * 1024)
+            ),
+            Self::HierarchyOverBudget {
+                levels,
+                held_bytes,
+                hierarchy_bytes,
+                budget_bytes,
+            } => write!(
+                f,
+                "a hierarchy {levels} levels deep needs {} on top of the {} \
+                 the document already holds, past the {} budget",
+                megabytes(*hierarchy_bytes),
+                megabytes(*held_bytes),
+                megabytes(*budget_bytes)
             ),
             Self::CrossingOverBudget {
                 direction,
@@ -849,7 +880,7 @@ mod tests {
     fn a_level_past_the_budget_names_the_peak_and_the_budget() {
         let error = Refusal::LevelOverBudget {
             held_bytes: 300 * 1024 * 1024,
-            peak_bytes: 900 * 1024 * 1024,
+            level_bytes: 900 * 1024 * 1024,
             budget_bytes: 512 * 1024 * 1024,
         }
         .to_string();

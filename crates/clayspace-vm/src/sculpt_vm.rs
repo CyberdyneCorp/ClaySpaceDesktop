@@ -508,6 +508,7 @@ impl SculptViewModel {
             | Command::ToggleRepair
             | Command::SetConversion(_)
             | Command::RunConversion
+            | Command::CreateHierarchy(_)
             // Retopology belongs to its own ViewModel, which owns the job that
             // runs it off this thread. Nothing here reads or changes.
             | Command::SetRetopoSettings(_)

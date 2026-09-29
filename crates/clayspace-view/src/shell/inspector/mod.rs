@@ -41,7 +41,7 @@
 use super::*;
 
 mod dynamic;
-mod mesh;
+pub mod mesh;
 pub mod multires;
 mod sdf;
 mod voxel;
@@ -51,7 +51,7 @@ pub fn representation_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: 
     match state.representation {
         Representation::Sdf => sdf::show(ui, state),
         Representation::Voxel => voxel::show(ui, state, queue),
-        Representation::Mesh => mesh::show(ui, state),
+        Representation::Mesh => mesh::show(ui, state, queue),
         Representation::Multires => multires::show(ui, state, queue),
         Representation::Dynamic => dynamic::show(ui, state),
     }

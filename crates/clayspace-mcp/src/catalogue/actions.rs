@@ -14,9 +14,10 @@
 
 use clayspace_model::{
     BooleanSettings, BrushSettings, Colour, CombineSettings, ConversionSettings, DeformSettings,
-    ExportSettings, ExtrudeSettings, GizmoHandle, GizmoTarget, ImportSettings, LayerKey, MaskOp,
-    MultiresLevelOp, MultiresSculptLayerId, MultiresSculptLayerOp, ObjectId, OutlineFrame,
-    ReferenceSettings, RemeshSettings, SculptLayerOp, SmoothBlur, StrokeModifiers, SurfaceOpacity,
+    ExportSettings, ExtrudeSettings, GizmoHandle, GizmoTarget, HierarchySettings, ImportSettings,
+    LayerKey, MaskOp, MultiresLevelOp, MultiresSculptLayerId, MultiresSculptLayerOp, ObjectId,
+    OutlineFrame, ReferenceSettings, RemeshSettings, SculptLayerOp, SmoothBlur, StrokeModifiers,
+    SurfaceOpacity,
 };
 use clayspace_vm::Command;
 
@@ -180,6 +181,7 @@ pub fn home_of(command: &Command) -> Home {
         // -- passes and levels ----------------------------------------------
         SculptLayer(_) => Home::In("passes", "grid"),
         MultiresLevel(_) => Home::In("hierarchy", "level"),
+        CreateHierarchy(_) => Home::In("hierarchy", "create"),
         MultiresSculptLayer(_) => Home::In("hierarchy", "pass"),
         SetSmoothMode(_) => Home::In("hierarchy", "smooth_mode"),
 
@@ -655,6 +657,15 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         // -- passes and levels ----------------------------------------------
         ("passes", "grid") => C::SculptLayer(sculpt_layer_op(args)?),
         ("hierarchy", "level") => C::MultiresLevel(level_op(args)?),
+        ("hierarchy", "create") => C::CreateHierarchy(noted(
+            args,
+            HierarchySettings {
+                levels: args.whole_or("levels", HierarchySettings::default().levels)?,
+                in_place: args.boolean_or("in_place", HierarchySettings::default().in_place)?,
+            },
+            HierarchySettings::sanitized,
+            &[("levels", |s| f64::from(s.levels))],
+        )),
         ("hierarchy", "pass") => C::MultiresSculptLayer(multires_pass_op(args)?),
         ("hierarchy", "smooth_mode") => C::SetSmoothMode(smooth_mode(args)?),
 

@@ -401,6 +401,11 @@ pub enum Command {
     SetConversion(ConversionSettings),
     /// Crosses the active layer, adding a new one.
     RunConversion,
+    /// Create Multires: the active mesh layer as a hierarchy as deep as the
+    /// settings ask, priced as a whole before anything is built and refused
+    /// over budget. One undo step, taking the composition root's path as a
+    /// crossing does.
+    CreateHierarchy(clayspace_model::HierarchySettings),
     SetImportSettings(ImportSettings),
     SetExportSettings(ExportSettings),
     /// Asks for a file and brings it in with the settings as they stand.
@@ -625,6 +630,9 @@ impl Command {
                 // for the same reason import does.
                 | Self::SetConversion(_)
                 | Self::RunConversion
+                // Create Multires is a crossing with levels on it, and takes
+                // the same path for the same reason.
+                | Self::CreateHierarchy(_)
                 // Opening the panel and setting it change nothing; running it
                 // takes the composition root's own path, as the other layer
                 // operations do.
@@ -818,6 +826,7 @@ impl Command {
             || matches!(
                 self,
                 Self::RunConversion
+                    | Self::CreateHierarchy(_)
                     | Self::RunImport
                     | Self::ImportFrom(_)
                     | Self::InsertMesh
@@ -1035,6 +1044,7 @@ impl Command {
             Self::RunDeform => "deform",
             Self::SetConversion(_) => "conversion settings",
             Self::RunConversion => "convert",
+            Self::CreateHierarchy(_) => "criar multires",
             Self::RunImport => "import",
             Self::RunExport => "export",
             Self::ImportFrom(_) => "import",

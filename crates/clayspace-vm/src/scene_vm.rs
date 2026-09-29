@@ -4,7 +4,9 @@
 //! are different concerns: a test double for one need not implement the other,
 //! and the panels can be exercised without an engine at all.
 
-use clayspace_model::{LayerKey, ModelError, Protection, Scene, SceneModel};
+use clayspace_model::{
+    HierarchyPlan, LayerKey, ModelError, Protection, Representation, Scene, SceneModel,
+};
 
 use crate::command::Command;
 use crate::observable::Observable;
@@ -21,6 +23,19 @@ pub struct SceneViewModel {
     /// operation, waiting for the ViewModel that owns Cmd+Z to bank them. See
     /// [`crate::Unbanked`].
     unbanked: crate::Unbanked,
+    /// What Create Multires would cost on the active mesh layer, and the
+    /// state of the document it was asked of. See
+    /// [`SceneViewModel::hierarchy_plan`].
+    plan: Option<(PlanAsked, Result<HierarchyPlan, String>)>,
+}
+
+/// What a kept plan was asked of: the layer, and two counts that move with
+/// anything that changes what the document holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlanAsked {
+    layer: LayerKey,
+    history: usize,
+    layers: usize,
 }
 
 impl SceneViewModel {
@@ -32,6 +47,7 @@ impl SceneViewModel {
             refusal: Observable::new(None),
             created: 0,
             unbanked: crate::Unbanked::default(),
+            plan: None,
         }
     }
 
@@ -268,6 +284,37 @@ impl SceneViewModel {
     /// microseconds. `None` where the active layer is not a hierarchy.
     pub fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
         self.model.subdivision_cost()
+    }
+
+    /// What Create Multires would cost on the active layer, or why it cannot
+    /// be made, where the active layer is a mesh. `None` on anything else.
+    ///
+    /// Kept between frames, unlike [`SceneViewModel::subdivision_cost`]: the
+    /// plan walks the document's ledger and weighs the cage by building it,
+    /// which is too much for every frame the inspector is open. It is asked
+    /// again when the active layer, the history depth or the layer count
+    /// moves — anything that changes what the document holds does one of the
+    /// three — and the build prices every level again anyway, so a plan a
+    /// frame stale cannot admit what does not fit.
+    pub fn hierarchy_plan(&mut self) -> Option<Result<HierarchyPlan, String>> {
+        let scene = self.scene.get();
+        let active = scene.active_layer()?;
+        if active.representation != Representation::Mesh {
+            return None;
+        }
+        let asked = PlanAsked {
+            layer: active.key,
+            history: self.model.history_depth(),
+            layers: scene.layers.len(),
+        };
+        match &self.plan {
+            Some((kept, plan)) if *kept == asked => Some(plan.clone()),
+            _ => {
+                let plan = self.model.hierarchy_plan().map_err(|e| e.to_string());
+                self.plan = Some((asked, plan.clone()));
+                Some(plan)
+            }
+        }
     }
 
     /// Re-reads the scene from the model.
