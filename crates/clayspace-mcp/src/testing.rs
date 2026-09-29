@@ -149,7 +149,9 @@ impl Session for FakeSession {
             Command::BeginStroke { .. } | Command::ContinueStroke { .. } | Command::CancelStroke
         );
         let no_effect = self.no_effects.contains(command.label());
-        if touched && !mid_gesture && !no_effect {
+        if matches!(command, Command::Undo) && self.history_depth > 0 {
+            self.history_depth -= 1;
+        } else if touched && !mid_gesture && !no_effect && !matches!(command, Command::Redo) {
             self.history_depth += 1;
             self.modified = true;
         }
@@ -249,6 +251,7 @@ impl Session for FakeSession {
                 undoes: (self.history_depth > 0).then(|| "argila".to_string()),
                 redoes: None,
                 from_agent: self.applied.len(),
+                last_entry_by: None,
             });
         }
         if query.mask {

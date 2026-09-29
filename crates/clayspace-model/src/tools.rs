@@ -743,7 +743,28 @@ pub enum LayerOperation {
     },
 }
 
+/// The condition for offering a layer operation that can replace surface data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationHistory {
+    Undoable,
+    ConsentRequired,
+}
+
 impl LayerOperation {
+    /// Exhaustive by design: a new operation must declare how lost work is
+    /// recovered before it can be routed to the interface or the agent door.
+    pub fn history_policy(self) -> OperationHistory {
+        match self {
+            Self::Taper { .. }
+            | Self::Twist { .. }
+            | Self::LatticeDrag { .. }
+            | Self::CloseHoles { .. }
+            | Self::FillVoids => OperationHistory::Undoable,
+            // There is no history record for a regional level yet. It has no
+            // UI or MCP route, and would need consent if one is added.
+            Self::RefineRegion { .. } => OperationHistory::ConsentRequired,
+        }
+    }
     /// One of each, with the arguments the application itself would send.
     ///
     /// For anything that has to exercise all of them — the performance gate
@@ -2912,6 +2933,26 @@ mod tests {
             all.len(),
             "two entries in LayerOperation::all are the same operation"
         );
+    }
+
+    #[test]
+    fn every_layer_operation_has_a_history_policy() {
+        for operation in LayerOperation::all() {
+            let expected = match operation {
+                LayerOperation::Taper { .. }
+                | LayerOperation::Twist { .. }
+                | LayerOperation::LatticeDrag { .. }
+                | LayerOperation::CloseHoles { .. }
+                | LayerOperation::FillVoids => OperationHistory::Undoable,
+                LayerOperation::RefineRegion { .. } => OperationHistory::ConsentRequired,
+            };
+            assert_eq!(
+                operation.history_policy(),
+                expected,
+                "{}",
+                operation.label()
+            );
+        }
     }
 
     #[test]

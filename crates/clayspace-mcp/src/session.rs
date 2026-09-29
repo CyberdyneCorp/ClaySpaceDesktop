@@ -984,6 +984,10 @@ pub struct HistoryState {
     pub redoes: Option<String>,
     /// How many of this session's entries arrived from an agent.
     pub from_agent: usize,
+    /// The client that made the next undoable entry, or `window` for work
+    /// made outside an MCP session. Absent when there is nothing to undo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_entry_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1345,6 +1349,7 @@ mod tests {
                 undoes: None,
                 redoes: None,
                 from_agent: 0,
+                last_entry_by: None,
             }),
             mask: Some(MaskState {
                 present: false,
