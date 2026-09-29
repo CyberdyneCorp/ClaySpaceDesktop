@@ -81,7 +81,10 @@ pub use windows::{
     attribution_window, convert_window, deform_window, diagnostics_window, export_window,
     import_window, reference_slider_name, reference_window, repair_window, ReferenceSlot,
 };
-pub use workspace::{convert_to_id, representation_bar, representation_card_id};
+pub use workspace::{
+    convert_folded_id, convert_to_id, representation_bar, representation_bar_id,
+    representation_card_id,
+};
 
 /// Everything a frame of interface needs to read.
 ///

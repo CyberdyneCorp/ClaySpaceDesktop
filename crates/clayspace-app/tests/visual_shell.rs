@@ -544,11 +544,22 @@ fn run_shell_frame(
     queue: &mut CommandQueue,
     events: Vec<egui::Event>,
 ) {
+    run_shell_frame_at(ctx, state, queue, events, SHELL_WIDTH as f32);
+}
+
+/// The same, in a window `width` wide.
+fn run_shell_frame_at(
+    ctx: &egui::Context,
+    state: &ShellState<'_>,
+    queue: &mut CommandQueue,
+    events: Vec<egui::Event>,
+    width: f32,
+) {
     let _ = ctx.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+                egui::vec2(width, SHELL_HEIGHT as f32),
             )),
             events,
             ..Default::default()
@@ -4198,26 +4209,23 @@ fn a_crossing_aims_the_panel_rather_than_converting() {
     let report = diagnostics();
     let set = state(strings, &scene, &materials, &report);
 
+    // Wide enough for the row: narrower, the crossings fold into one button,
+    // which `a_folded_bar_still_reaches_the_panel` covers.
+    let width = 1920.0;
     let target = clayspace_model::Representation::Voxel;
-    let at = probe_shell(&set)
-        .memory(|memory| {
-            memory
-                .data
-                .get_temp::<egui::Rect>(shell::convert_to_id(target))
-        })
-        .expect("the bar offered no crossing into voxels")
-        .center();
-
     let ctx = egui::Context::default();
     shell::apply_theme(&ctx);
     let mut queue = CommandQueue::new();
     for _ in 0..2 {
-        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+        run_shell_frame_at(&ctx, &set, &mut queue, Vec::new(), width);
     }
+    let at = shell_rect(&ctx, shell::convert_to_id(target))
+        .expect("the bar offered no crossing into voxels")
+        .center();
     queue.drain();
     for frame in drag(at, at) {
-        run_shell_frame(&ctx, &set, &mut queue, frame);
-        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+        run_shell_frame_at(&ctx, &set, &mut queue, frame, width);
+        run_shell_frame_at(&ctx, &set, &mut queue, Vec::new(), width);
     }
 
     let commands = queue.commands();
@@ -4291,15 +4299,18 @@ fn a_narrow_bar_gives_up_its_phrases_first() {
                     .get_temp::<egui::Rect>(shell::representation_card_id(set.representation))
             })
             .expect("the bar drew no card for the active representation");
-        // And the crossings are still drawn at either width, whether or not
-        // the row has to scroll to reach them.
+        // And the crossings are still reachable at either width: as a row, or
+        // folded into the one button that opens the panel offering them.
+        let folded = shell_rect(&ctx, shell::convert_folded_id()).is_some();
         for direction in clayspace_model::Direction::from_representation(set.representation) {
             assert!(
-                ctx.memory(|memory| memory
-                    .data
-                    .get_temp::<egui::Rect>(shell::convert_to_id(direction.to())))
-                    .is_some(),
-                "at {width} wide the crossing into {:?} was not drawn at all",
+                folded
+                    || ctx
+                        .memory(|memory| memory
+                            .data
+                            .get_temp::<egui::Rect>(shell::convert_to_id(direction.to())))
+                        .is_some(),
+                "at {width} wide the crossing into {:?} was not reachable at all",
                 direction.to()
             );
         }
@@ -4311,6 +4322,119 @@ fn a_narrow_bar_gives_up_its_phrases_first() {
     assert!(
         cramped < roomy,
         "the card is {cramped} wide at 1024 and {roomy} at 1920, so the bar          kept its phrases while the crossings ran off the end"
+    );
+}
+
+/// Every crossing is reachable inside the bar at 1280 wide, in every language
+/// and from every representation, without scrolling.
+///
+/// The regression (#196, V7): at 1280 the crossings ran past the end of the
+/// visible strip — by up to 470 pixels from a mesh layer, which has four — so
+/// the Convert row read as clipped until the sculptor found the bar scrolled.
+/// Two causes: the row does not fit beside five cards at that width in any
+/// language, so it now folds into one button first; and on a mesh layer the
+/// bake section put two sliders on one row, which overran the left panel and
+/// took about 170 pixels from the whole central region. So the strip is also
+/// asserted to start in the same place whatever the active layer is.
+#[test]
+fn every_crossing_is_reachable_inside_the_bar_at_1280() {
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut overruns = Vec::new();
+    for locale in [Locale::EnUs, Locale::PtBr, Locale::Es419] {
+        let strings = Strings::for_locale(locale);
+        let mut starts = Vec::new();
+        for representation in clayspace_model::Representation::ALL {
+            let mut set = state(strings, &scene, &materials, &report);
+            set.representation = representation;
+            let ctx = probe_shell(&set);
+            let bar = shell_rect(&ctx, shell::representation_bar_id())
+                .expect("the shell drew no representation bar");
+            starts.push((representation, bar.left()));
+            let crossings = clayspace_model::Direction::from_representation(representation)
+                .into_iter()
+                .map(|direction| shell::convert_to_id(direction.to()));
+            let cards = clayspace_model::Representation::ALL
+                .into_iter()
+                .map(shell::representation_card_id);
+            let drawn: Vec<egui::Rect> = crossings
+                .chain(cards)
+                .chain([shell::convert_folded_id()])
+                .filter_map(|id| shell_rect(&ctx, id))
+                .collect();
+            assert!(
+                shell_rect(&ctx, shell::convert_folded_id()).is_some()
+                    || clayspace_model::Direction::from_representation(representation)
+                        .iter()
+                        .all(
+                            |direction| shell_rect(&ctx, shell::convert_to_id(direction.to()))
+                                .is_some()
+                        ),
+                "{} {representation:?}: the crossings were neither drawn nor folded",
+                locale.label()
+            );
+            let right = drawn.iter().map(|rect| rect.right()).fold(0.0, f32::max);
+            if right > bar.right() {
+                overruns.push(format!(
+                    "{} {representation:?}: the bar's content ends at {right:.0}, its \
+                     strip at {:.0}",
+                    locale.label(),
+                    bar.right()
+                ));
+            }
+        }
+        let first = starts[0].1;
+        for (representation, start) in starts {
+            if start != first {
+                overruns.push(format!(
+                    "{} {representation:?}: the strip starts at {start:.0} rather than \
+                     {first:.0}, so something in the left panel ran past its edge",
+                    locale.label()
+                ));
+            }
+        }
+    }
+    assert!(
+        overruns.is_empty(),
+        "the representation bar runs past its strip at {SHELL_WIDTH} wide:\n{}",
+        overruns.join("\n")
+    );
+}
+
+/// Folded, the crossings still open the panel that offers them.
+#[test]
+fn a_folded_bar_still_reaches_the_panel() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    // A mesh has the most crossings, so it folds at this width.
+    set.representation = clayspace_model::Representation::Mesh;
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    let at = shell_rect(&ctx, shell::convert_folded_id())
+        .expect("a mesh layer at 1280 did not fold its crossings")
+        .center();
+    queue.drain();
+    for frame in drag(at, at) {
+        run_shell_frame(&ctx, &set, &mut queue, frame);
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    let commands = queue.commands();
+    assert!(
+        commands.iter().any(|c| matches!(c, Command::ToggleConvert)),
+        "the folded crossings did not open the conversion panel: {commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|c| matches!(c, Command::RunConversion)),
+        "the folded button ran a conversion itself: {commands:?}"
     );
 }
 

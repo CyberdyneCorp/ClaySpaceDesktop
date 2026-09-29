@@ -27,4 +27,4 @@
 ## 4. Say it
 
 - [x] 4.1 `docs/features.md`: the reach table, the correction, the size ceiling
-- [ ] 4.2 Re-record the benchmark baseline on a quiet machine
+- [x] 4.2 Re-record the benchmark baseline on a quiet machine (runner-recorded `r3` baselines, #288)

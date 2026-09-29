@@ -309,3 +309,145 @@ fn the_per_key_split_draws_what_the_engine_meshed() {
         share * 100.0
     );
 }
+
+/// How far an undone frame may stray from the frame before the edit.
+struct Allowance {
+    /// Pixels that may differ at all.
+    pixels: usize,
+    /// The widest gap any of them may have.
+    levels: u8,
+}
+
+/// An undo that put the surface back exactly.
+///
+/// The same mesh drawn twice is the same frame to the last level, so a surface
+/// the undo really restored draws nothing different at all. The allowance is
+/// the silhouette speckle a tile-based GPU can leave on an unchanged surface, a
+/// handful of pixels and none of them past `RENDER_NOISE`. The audit's figure
+/// (issue #196, I16) was 1,996 pixels at up to 19 levels, which this fails on
+/// the count alone.
+const EXACT: Allowance = Allowance {
+    pixels: 16,
+    levels: support::RENDER_NOISE,
+};
+
+/// An undo across a smooth seam, which is not yet exact on every machine.
+///
+/// Measured on the `macos-14` runners, in the Metal and the CPU-only jobs
+/// alike: 334 pixels at up to 16 levels, a thin ring on the sibling's
+/// silhouette, the shape of the audit's figure. On a workstation the whole
+/// case differs by 2 pixels. It is the frame *before* the edit that is off:
+/// the undone frame matches the workstation's, and so did the first frame of
+/// a second test building the same scene in the same run. So the brick build
+/// that followed the placement disagrees, inside the blend band, with a later
+/// refill of the same field — the class ClayCore #649 leaves open at v0.120.1,
+/// and not something this side pads its bounds for. Bounded rather than
+/// excused: a stale brick from the edit is a patch dozens of levels deep, and
+/// this still fails on it.
+const SMOOTH_SEAM: Allowance = Allowance {
+    pixels: 1_000,
+    levels: support::RENDER_NOISE,
+};
+
+/// Pixels that differ at all, and the widest gap among them.
+fn exact_difference(a: &Image, b: &Image) -> (usize, u8) {
+    let mut differing = 0usize;
+    let mut worst = 0u8;
+    for y in 0..a.height.min(b.height) {
+        for x in 0..a.width.min(b.width) {
+            let (pa, pb) = (a.pixel(x, y), b.pixel(x, y));
+            let gap = (0..3).map(|c| pa[c].abs_diff(pb[c])).max().unwrap_or(0);
+            if gap > 0 {
+                differing += 1;
+                worst = worst.max(gap);
+            }
+        }
+    }
+    (differing, worst)
+}
+
+/// Strokes, undoes every stroke, and holds the frame to the one before them.
+///
+/// The picture goes through the path the application runs: an incremental
+/// sync while the pointer is down, a settle when it comes up, and the same
+/// again after the undo. A stale brick anywhere between the edit's bound and
+/// the undo's shows up as pixels rather than as a count.
+fn assert_undo_restores_the_frame(
+    harness: &Harness,
+    mut document: ClayDocument,
+    name: &str,
+    allowed: Allowance,
+) {
+    use clayspace_model::SculptModel;
+    let camera = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .settle(&harness.gpu, &mut document)
+        .expect("the first mesh");
+    let before = harness.capture(geometry.mesh(), &camera, false, &format!("{name}-before"));
+    let depth = document.history().depth;
+
+    drag(&mut document);
+    geometry.sync(&harness.gpu, &mut document).expect("sync");
+    geometry
+        .settle(&harness.gpu, &mut document)
+        .expect("settle");
+    // Back to the depth before the drag, however many entries it banked.
+    let banked = document.history().depth - depth;
+    assert!(banked > 0, "the drag banked nothing to undo");
+    for _ in 0..banked {
+        assert!(document.undo().expect("undo"), "nothing was left to undo");
+    }
+    geometry.sync(&harness.gpu, &mut document).expect("sync");
+    geometry
+        .settle(&harness.gpu, &mut document)
+        .expect("settle");
+    let undone = harness.capture(geometry.mesh(), &camera, false, &format!("{name}-undone"));
+    save_difference(&before, &undone, &format!("{name}-difference"));
+
+    let (differing, worst) = exact_difference(&before, &undone);
+    println!("{name}: {differing} px differ after the undo, worst {worst}");
+    assert!(
+        differing <= allowed.pixels && worst <= allowed.levels,
+        "the undone frame differs from the one before the edit in {differing} \
+         pixels, the worst by {worst} levels — see target/visual/{name}-difference.png"
+    );
+}
+
+/// Issue #196 (I16): an undo draws the frame it took back.
+#[test]
+fn an_undo_draws_the_frame_it_took_back() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(document) = document() else {
+        return;
+    };
+    assert_undo_restores_the_frame(&harness, document, "20-undo", EXACT);
+}
+
+/// The same across a smooth seam with a sibling placed after the form.
+///
+/// The case ClayCore v0.120.1 fixed (ClayCore #650): an edit's bound left out
+/// a later smooth sibling's blend support, so the bricks along the seam kept
+/// what the edit had drawn there after the edit was undone. What is left is
+/// [`SMOOTH_SEAM`].
+#[test]
+fn an_undo_across_a_smooth_seam_draws_the_frame_it_took_back() {
+    use clayspace_model::{Combine, CombineSettings, ObjectModel, Shape};
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = document() else {
+        return;
+    };
+    let smooth = CombineSettings {
+        op: Combine::Add,
+        radius: 0.25,
+        ..CombineSettings::default()
+    };
+    document
+        .place_object(Shape::Sphere, &[0.45], [0.2, 0.15, 0.85], smooth)
+        .expect("the sibling");
+    assert_undo_restores_the_frame(&harness, document, "21-undo-seam", SMOOTH_SEAM);
+}

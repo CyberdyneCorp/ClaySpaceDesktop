@@ -328,8 +328,20 @@ impl SculptViewModel {
     }
 
     /// Clears the pending re-mesh count once the viewport has caught up.
+    ///
+    /// And re-reads the counts, because catching up is what changed them: the
+    /// model reports what the viewport last built, and the edit that asked for
+    /// the re-mesh read them before it happened. Without this the geometry
+    /// panel showed the previous re-mesh's counts until the next edit.
     pub fn acknowledge_remesh(&mut self) {
         self.pending_remesh.set_if_changed(0);
+        self.refresh_stats();
+    }
+
+    /// Re-reads the counts after the viewport rebuilt something outside a
+    /// re-mesh — a carried layer's buffer after a remesh or a display change.
+    pub fn refresh_stats(&mut self) {
+        self.stats.set_if_changed(self.model.stats());
     }
 
     // -- the one path that changes anything ------------------------------
