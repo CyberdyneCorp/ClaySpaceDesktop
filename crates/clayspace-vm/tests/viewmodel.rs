@@ -1661,6 +1661,35 @@ mod following_the_active_layer {
         }
     }
 
+    /// No tool selection converts a layer (#208): every tool, chosen and
+    /// stroked on every representation, reaches the document only as a tool
+    /// that representation carries. A tool with no binding there is swapped
+    /// for a stand-in or refused; nothing asks for a different representation
+    /// to make the chosen brush work, and the layer stays what it was.
+    #[test]
+    fn no_tool_selection_converts_a_layer() {
+        for representation in Representation::ALL {
+            for tool in ToolKind::ALL {
+                let (mut vm, layer, _, recorded) = fixture_with_a_moving_layer();
+                layer.set(representation);
+                vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                    .expect("select");
+                let _ = vm.dispatch(Command::SelectTool(tool));
+                let _ = draw(&mut vm, &[[0.0, 0.0, 1.0], [0.1, 0.0, 1.0]]);
+
+                assert_eq!(layer.get(), representation);
+                for (stroked, ..) in &recorded.borrow().strokes {
+                    assert!(
+                        stroked.exists_on(representation),
+                        "{} reached a {} layer, which has no binding for it",
+                        stroked.label(),
+                        representation.label()
+                    );
+                }
+            }
+        }
+    }
+
     /// Switching away and back returns the tool that was chosen, not the one
     /// the switch away handed over.
     #[test]

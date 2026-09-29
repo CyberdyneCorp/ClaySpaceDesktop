@@ -26,6 +26,31 @@ history entry, updates the layer identity and selection coherently, and does
 not silently run to satisfy a brush request. A refused preflight changes
 nothing.
 
+### Pricing and identity (#208)
+
+Both directions are priced by the engine before anything is built:
+`clay_mesh_preflight_to_dynamic` over the active mesh layer going in (bound
+as `Document::preflight_mesh_layer_to_dynamic`, which borrows the layer's
+mesh and builds nothing) and `clay_dynamic_surface_preflight_to_mesh` coming
+out. The engine is asked with no budget and answers with figures; the verdict
+is the document's, peak on top of what the document already holds against a
+surface budget that defaults to the hierarchy's 2 GB and that a host can
+lower. A refusal names the direction, the peak, the held figure and the
+limit, and runs before the undo group opens, so it changes nothing. The panel
+reads the same preflight each frame (about a microsecond) and shows the peak
+beside the budget; the held figure is read only when the crossing runs,
+because the ledger walks every layer.
+
+The crossings are exact, so the result carries the source's transform and
+visibility inside the crossing's undo group. A freeze back to a mesh strips
+the suffix the crossing in added, so an in-place round trip gives the name
+back; a crossing that adds a layer keeps a unique derived name. The default
+stays *add a layer*, keeping the original; measured on a 180,000-triangle
+sheet in release, in place costs the same as beside (about 170 ms in and
+85 ms out either way), so the audit's in-place premium belongs to the field
+crossings and does not decide this default. Colour and UVs cross as corner
+attributes; quads do not survive, and the panel says so before the crossing.
+
 ## History
 
 Dynamic edits that change topology store the engine's reversible state, or a

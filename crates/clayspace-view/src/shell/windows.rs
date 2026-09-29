@@ -978,7 +978,28 @@ pub(super) fn crossing_cost_lines(
     // sculpts, and it sculpts by moving the vertices it was given — there is
     // no retopology in it to spend, and nothing here adds one.
     if cost.fixed_topology {
-        lines.push(format!("· {}", s.convert_fixed_topology));
+        // An exact crossing freezes the source's own topology; only a
+        // sampled one hands over a lattice's.
+        let topology = if direction.is_exact() {
+            s.convert_topology_frozen
+        } else {
+            s.convert_fixed_topology
+        };
+        lines.push(format!("· {topology}"));
+    }
+    if cost.loses_quads {
+        lines.push(format!("· {}", s.convert_quads_lost));
+    }
+    // The engine's own figure, beside the limit a refusal would name, so a
+    // crossing that will be refused says so before the button is pressed.
+    if let Some(price) = cost.surface {
+        lines.push(format!(
+            "· {} {} · {} {}",
+            s.convert_memory_peak,
+            price.peak_label(),
+            s.convert_memory_budget,
+            price.budget_label()
+        ));
     }
     lines
 }

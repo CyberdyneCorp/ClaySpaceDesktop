@@ -917,6 +917,64 @@ fn preflight_to_mesh_answers_before_a_conversion_is_attempted() {
     );
 }
 
+/// UVs cross into an adaptive surface and back as corner attributes: the
+/// application's attribute policy for the explicit crossing rests on it.
+#[test]
+fn uvs_survive_the_round_trip_through_an_adaptive_surface() {
+    let flat = sheet(4, 2.0);
+    let uvs: Vec<[f32; 2]> = flat
+        .positions()
+        .iter()
+        .map(|p| [(p[0] + 2.0) / 4.0, (p[2] + 2.0) / 4.0])
+        .collect();
+    let normals = vec![[0.0, 1.0, 0.0]; uvs.len()];
+    let mapped =
+        claycore::Mesh::from_triangles_with_uvs(flat.positions(), &normals, &uvs, flat.indices())
+            .expect("a mapped sheet");
+    let back = DynamicSurface::from_mesh(&mapped, DynamicDesc::default())
+        .expect("a mapped sheet is an adaptive surface")
+        .to_mesh()
+        .expect("and back");
+    let returned = back.uvs().expect("the layout came back");
+    for (position, uv) in back.positions().iter().zip(returned) {
+        let expected = [(position[0] + 2.0) / 4.0, (position[2] + 2.0) / 4.0];
+        assert!(
+            (uv[0] - expected[0]).abs() < 1e-5 && (uv[1] - expected[1]).abs() < 1e-5,
+            "{position:?} came back mapped to {uv:?}, not {expected:?}"
+        );
+    }
+}
+
+/// A document's mesh layer is priced as the mesh it lends, without building
+/// anything, and a layer with no mesh is refused rather than priced at zero.
+#[test]
+fn a_mesh_layer_is_priced_as_the_mesh_it_lends() {
+    let mesh = sheet(8, 2.0);
+    let mut document = claycore::Document::new().expect("document");
+    let layer = document
+        .attach_mesh_layer(&mesh, &claycore::MeshLayerDesc::named("sheet"))
+        .expect("the sheet is a mesh layer");
+
+    let through_the_layer = document
+        .preflight_mesh_layer_to_dynamic(layer, 0)
+        .expect("no budget");
+    let direct = mesh.preflight_to_dynamic(0).expect("no budget");
+    assert!(through_the_layer.allowed);
+    assert_eq!(
+        through_the_layer.peak_bytes, direct.peak_bytes,
+        "the layer lends the mesh it holds, so the price is that mesh's"
+    );
+    assert!(through_the_layer.peak_bytes > 0);
+
+    let refused = document
+        .preflight_mesh_layer_to_dynamic(layer, 1)
+        .expect("a budget question is answered, not refused");
+    assert!(!refused.allowed, "one byte holds no adaptive surface");
+
+    let field = document.add_sdf_layer("campo").expect("an SDF layer");
+    assert!(document.preflight_mesh_layer_to_dynamic(field, 0).is_err());
+}
+
 #[test]
 fn preflight_encode_prices_the_blob_that_lives_beside_the_surface() {
     let surface = adaptive(8);
