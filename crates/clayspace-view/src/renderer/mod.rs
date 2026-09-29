@@ -2036,6 +2036,10 @@ impl Renderer {
             })
             .collect();
         self.upload_edges(gpu, indices);
+        // A whole mesh of staging, handed over now rather than whenever the
+        // next frame submits: a cage drag writes one of these on every pointer
+        // move, and a frame that never followed kept every copy (#176).
+        gpu.flush_writes();
     }
 
     /// Writes runs into the carried buffer [`set_mesh_layers`] uploaded last,

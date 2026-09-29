@@ -2308,10 +2308,20 @@ The benchmark's `cage` group measures the same drag on every run, one corner
 dragged on the 296k-triangle mesh reference and timed to the surface arriving:
 **45.9 ms** at 3³, **85.7 ms** at 8³ and **3.9 s** at 32³ on an M3 Pro, each
 against the 16 ms budget, with `cage.scaling` (32³ over 3³, **85.6×** against
-a budget of 3×) stating whether the cost follows the points in hand. A drag
-leaves no memory behind: `cage.memory`, device memory after a 100-frame drag
-over before it, is **1.00×**, because each frame writes into the buffers the
-surface already holds.
+a budget of 3×) stating whether the cost follows the points in hand.
+
+**A drag leaves no memory behind.** Each frame writes into the buffers the
+surface already holds (#166), and each frame's upload now hands its writes to
+the device straight away. Before, the staging copy of every upload waited for
+the next frame to submit, and a frame that never submitted kept it: one
+carried-mesh copy (about 9.5 MB on the reference) per drag frame, still held
+after the cage came down. A frame whose window image cannot be acquired now
+releases its uploads too. The benchmark reports it twice: `cage.memory`, device
+memory after a 100-frame drag over before it, is **1.00×** (5.66× without the
+fix), and `cage.footprint`, the process footprint over the same drag, is
+**1.03×** (2.63× without it). The device figure used to call staging released
+after any wait, submitted or not, which is why it read 1.00× while the process
+grew; it now counts staging no submission has carried as held.
 
 A cage is sized from the layer's bounds as they are when it goes up, **mirrored
 copies included**. A new subtool is mirrored on X, so a form moved off the axis

@@ -49,8 +49,16 @@ impl DeviceMemory {
 pub(crate) struct DeviceLedger {
     buffers: AtomicU64,
     targets: AtomicU64,
-    /// Written since the last frame's poll, and so certainly still held.
+    /// Written and not yet handed to the device in any submission.
+    ///
+    /// A wait on the device does not release these: wgpu keeps the staging of
+    /// a `write_buffer` in its pending writes until the next submission
+    /// carries it, however long that takes. Uploads made on a frame that then
+    /// never submits — a headless caller, a skipped frame — sat here and grew
+    /// the process by a whole mesh a drag frame (#176).
     staging_open: AtomicU64,
+    /// Handed to the device by a flush since the last frame's poll.
+    staging_flushed: AtomicU64,
     /// Written in the frame the last poll followed.
     ///
     /// Still counted after that poll, because a poll collects what has
@@ -66,6 +74,7 @@ impl DeviceLedger {
             staging: self
                 .staging_open
                 .load(Ordering::Relaxed)
+                .saturating_add(self.staging_flushed.load(Ordering::Relaxed))
                 .saturating_add(self.staging_submitted.load(Ordering::Relaxed)),
             targets: self.targets.load(Ordering::Relaxed),
         }
@@ -75,15 +84,25 @@ impl DeviceLedger {
         self.staging_open.fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// Everything written so far went out in a submission — a flush, or a
+    /// command buffer the caller submitted outside a frame.
+    pub(crate) fn submitted(&self) {
+        let open = self.staging_open.swap(0, Ordering::Relaxed);
+        self.staging_flushed.fetch_add(open, Ordering::Relaxed);
+    }
+
     /// A frame was submitted and the device polled without waiting.
     pub(crate) fn frame_polled(&self) {
         let open = self.staging_open.swap(0, Ordering::Relaxed);
-        self.staging_submitted.store(open, Ordering::Relaxed);
+        let flushed = self.staging_flushed.swap(0, Ordering::Relaxed);
+        self.staging_submitted
+            .store(open.saturating_add(flushed), Ordering::Relaxed);
     }
 
-    /// The device was waited on until idle, so nothing it was given is held.
+    /// The device was waited on until idle, so nothing it was *given* is
+    /// held. What was written and never submitted still is.
     pub(crate) fn device_idle(&self) {
-        self.staging_open.store(0, Ordering::Relaxed);
+        self.staging_flushed.store(0, Ordering::Relaxed);
         self.staging_submitted.store(0, Ordering::Relaxed);
     }
 
@@ -191,6 +210,40 @@ mod tests {
             "the older frame has been collected"
         );
         ledger.device_idle();
+        assert_eq!(ledger.read().staging, 0);
+    }
+
+    /// A wait on the device releases only what a submission carried to it.
+    /// Writes no submission has taken are still wgpu's pending writes, and
+    /// the ledger used to call them released — which is how a headless cage
+    /// drag grew the process by a gigabyte while `cage.memory` read 1.00×.
+    #[test]
+    fn a_wait_does_not_release_writes_no_submission_carried() {
+        let ledger = DeviceLedger::default();
+        ledger.note_staging(64);
+        ledger.device_idle();
+        assert_eq!(ledger.read().staging, 64, "never submitted, still held");
+        ledger.submitted();
+        assert_eq!(
+            ledger.read().staging,
+            64,
+            "in flight until the device is done"
+        );
+        ledger.device_idle();
+        assert_eq!(ledger.read().staging, 0);
+    }
+
+    /// A flush between two frames is carried into the next frame's poll
+    /// rather than forgotten by it.
+    #[test]
+    fn a_flush_before_a_frame_is_counted_until_the_poll_after_next() {
+        let ledger = DeviceLedger::default();
+        ledger.note_staging(64);
+        ledger.submitted();
+        ledger.note_staging(8);
+        ledger.frame_polled();
+        assert_eq!(ledger.read().staging, 72);
+        ledger.frame_polled();
         assert_eq!(ledger.read().staging, 0);
     }
 

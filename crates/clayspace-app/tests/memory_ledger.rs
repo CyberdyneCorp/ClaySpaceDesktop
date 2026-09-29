@@ -154,7 +154,7 @@ fn the_ledger_counts_staging_until_the_device_is_done_with_it() {
         return;
     };
     let gpu = &harness.gpu;
-    gpu.note_device_idle();
+    settle(gpu);
     let vertex = Vertex {
         position: [0.0; 3],
         normal: [0.0, 0.0, 1.0],
@@ -174,6 +174,76 @@ fn the_ledger_counts_staging_until_the_device_is_done_with_it() {
         0,
         "a capture waits on the device, which releases every write before it"
     );
+}
+
+/// Everything written so far handed to the device and the device waited on,
+/// so the ledger starts from nothing held.
+fn settle(gpu: &clayspace_view::Gpu) {
+    gpu.flush_writes();
+    gpu.device.poll(wgpu::Maintain::Wait);
+    gpu.note_device_idle();
+}
+
+/// A wait on the device gives back only what a submission carried to it.
+///
+/// wgpu holds a `write_buffer`'s staging until a submission takes it, so a
+/// write followed by a wait and no submission is still held — and the ledger
+/// used to report it released.
+#[test]
+fn a_write_no_submission_carried_is_still_held_after_a_wait() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let gpu = &harness.gpu;
+    settle(gpu);
+    let mut mesh = GpuMesh::new(gpu);
+    mesh.upload(gpu, &[quad_vertex(); 300], &(0..300).collect::<Vec<u32>>());
+    gpu.device.poll(wgpu::Maintain::Wait);
+    gpu.note_device_idle();
+    let written = (300 * Vertex::STRIDE + 300 * 4) as u64;
+    assert_eq!(gpu.memory().staging, written, "never submitted, still held");
+
+    settle(gpu);
+    assert_eq!(gpu.memory().staging, 0);
+}
+
+/// A cage drag uploads the whole carried mesh on every pointer move, and a
+/// frame is not guaranteed to follow each one — a headless caller never draws
+/// and a window whose image cannot be acquired skips the frame. Each of those
+/// uploads kept a mesh of staging for as long as no submission came, which on
+/// the 296k-triangle reference grew the process from 133 MB to 1.15 GB over a
+/// 100-frame drag and kept it (#176). The carried upload now hands its writes
+/// over itself, so a hundred of them with no frame between leave nothing once
+/// the device is done.
+#[test]
+fn a_hundred_carried_uploads_with_no_frame_leave_no_staging_behind() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    settle(&harness.gpu);
+    let vertices = vec![quad_vertex(); 3000];
+    let indices: Vec<u32> = (0..3000).collect();
+    for _ in 0..100 {
+        harness
+            .renderer
+            .set_mesh_layers(&harness.gpu, &vertices, &indices, &[]);
+    }
+    harness.gpu.device.poll(wgpu::Maintain::Wait);
+    harness.gpu.note_device_idle();
+    assert_eq!(
+        harness.gpu.memory().staging,
+        0,
+        "a carried upload left its staging waiting for a frame"
+    );
+}
+
+fn quad_vertex() -> Vertex {
+    Vertex {
+        position: [0.0; 3],
+        normal: [0.0, 0.0, 1.0],
+        color: [1.0; 3],
+        mask: 0.0,
+    }
 }
 
 #[test]
