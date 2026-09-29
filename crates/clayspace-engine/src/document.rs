@@ -963,14 +963,33 @@ enum GestureRecord {
     /// take at level 4 over a 16×16 cage, and 8.15 ms to put back. The bytes
     /// are what [`crate::multires::HISTORY_BYTES`] bounds.
     Hierarchy(Vec<u8>),
-    /// An adaptive gesture, taken back by putting the surface's serialized
-    /// state back.
+    /// An adaptive gesture: the engine's reversible topology delta on a
+    /// closed surface, the surface's bytes on one with an open boundary. See
+    /// [`crate::adaptive`] for why the two.
     ///
-    /// A bounded snapshot rather than the engine's reversible topology delta,
-    /// which this application does not carry yet. Exact all the same — a
-    /// restore brings connectivity, positions and attributes back together —
-    /// and bounded by the same byte budget as a hierarchy's.
-    Adaptive(Vec<u8>),
+    /// The delta is *symmetric*, as `MeshDeltas` is: the same record reverts
+    /// and re-applies, so it travels between the stacks unchanged. A replay
+    /// is bit-exact over what `to_mesh` exports, so a redo lays down the same
+    /// connectivity rather than an equivalent one, and undo-redo cycles
+    /// converge. Replay is last in, first out, which the ordered stack
+    /// already is, and the engine refuses an out-of-order or foreign record
+    /// before writing anything. Either kind is weighed against the same
+    /// budget as a hierarchy's — see [`crate::adaptive::Record::weight`].
+    Adaptive(crate::adaptive::Record),
+}
+
+impl GestureRecord {
+    /// What the record holds against the history budget, in bytes.
+    ///
+    /// A mesh's is not counted: it is bounded by the vertices a gesture
+    /// reached and has never been what fills the budget.
+    fn weight(&self) -> usize {
+        match self {
+            Self::Hierarchy(bytes) => bytes.len(),
+            Self::Adaptive(record) => record.weight(),
+            Self::Deltas(_) => 0,
+        }
+    }
 }
 
 /// One crossing, and the layer whose presence in the scene follows it.
@@ -1670,6 +1689,9 @@ pub struct ClayDocument {
     /// What an adaptive crossing may peak at, on top of what the document
     /// already holds. See [`crate::adaptive::CROSSING_BUDGET`].
     surface_budget: u64,
+    /// What the document may hold with a hierarchy's new level, or a whole
+    /// new hierarchy, in it. See [`crate::multires::LEVEL_BUDGET`].
+    hierarchy_budget: u64,
     /// Layers an undone crossing has taken off the scene.
     ///
     /// Hidden rather than removed, and the difference is forced by the
@@ -1881,6 +1903,7 @@ impl ClayDocument {
             retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             surface_budget: crate::adaptive::CROSSING_BUDGET,
+            hierarchy_budget: crate::multires::LEVEL_BUDGET,
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),
@@ -2612,6 +2635,16 @@ impl ClayDocument {
     /// test pulls to reach the refusal without building a surface that large.
     pub fn set_surface_budget(&mut self, bytes: u64) {
         self.surface_budget = bytes;
+    }
+
+    /// What the document may hold with a new level or a new hierarchy in it.
+    pub fn hierarchy_budget(&self) -> u64 {
+        self.hierarchy_budget
+    }
+
+    /// Sets it, for the same two callers [`Self::set_surface_budget`] has.
+    pub fn set_hierarchy_budget(&mut self, bytes: u64) {
+        self.hierarchy_budget = bytes;
     }
 
     /// Runs a crossing of the active layer whose new layer `fill` makes.
@@ -3514,13 +3547,21 @@ impl ClayDocument {
     /// the file and the layer the sculpt is stored against would be two
     /// different meshes.
     fn mesh_to_multires(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let cage = crate::multires::Hierarchy::holding(self.cage_from_active()?);
+        self.attach_hierarchy(cage, name)
+    }
+
+    /// The active mesh layer as a hierarchy of one level, free-standing.
+    ///
+    /// Refuses rather than repairs, naming the fault, because a cage is the
+    /// thing whose topology is the work.
+    fn cage_from_active(&mut self) -> Result<claycore::Multires, ModelError> {
         let source = self.active_layer();
         if !source.carries_geometry {
             return Err(ModelError::Conversion(Refusal::SourceEmpty));
         }
         let id = source.id;
-        let mut hierarchy = self
-            .document
+        self.document
             .multires_from_mesh_layer(id, crate::multires::Hierarchy::desc())
             .map_err(
                 |refused| match crate::multires::cage_fault(refused.reason) {
@@ -3530,12 +3571,23 @@ impl ClayDocument {
                     }
                     None => ModelError::engine(refused.to_string()),
                 },
-            )?;
-        let cage = hierarchy.copy_level_mesh(0).map_err(ModelError::engine)?;
+            )
+    }
+
+    /// Makes the layer a free-standing hierarchy is held by, named `name`.
+    fn attach_hierarchy(
+        &mut self,
+        mut hierarchy: crate::multires::Hierarchy,
+        name: &str,
+    ) -> Result<LayerKey, ModelError> {
+        let cage = hierarchy
+            .surface_mut()
+            .copy_level_mesh(0)
+            .map_err(ModelError::engine)?;
         let key = self.attach_meshed_layer(cage, name)?;
         if let Ok(index) = self.index_of(key) {
             self.layers[index].representation = Representation::Multires;
-            self.layers[index].multires = Some(crate::multires::Hierarchy::holding(hierarchy));
+            self.layers[index].multires = Some(hierarchy);
         }
         // A hierarchy is drawn from its display level and never from the cage
         // its layer holds, so the box every manipulator sizes itself to comes
@@ -6918,10 +6970,14 @@ impl ClayDocument {
     /// gathers its region at the first stamp and *maintains* it across the
     /// remesh; a lone stamp would re-gather over triangles it just split.
     ///
-    /// **The record** is the surface's bytes before the gesture, taken once on
-    /// the first segment, for the hierarchy's reason: they are what a dragging
-    /// verb is laid down again from and what the gesture enters the undo
-    /// history as. See [`GestureRecord::Adaptive`].
+    /// **The record** is opened on the first segment and every segment and
+    /// every mirror lands in it, so the gesture is one undo step whatever it
+    /// did to the topology: on a closed surface the engine's reversible
+    /// topology delta, captured through
+    /// `clay_dynamic_sculptor_apply_stroke_recorded`; on an open one the
+    /// surface's bytes before the gesture. A dragging verb is taken back by it
+    /// before it is laid down again from its anchor. See
+    /// [`GestureRecord::Adaptive`].
     fn stroke_dynamic(
         &mut self,
         tool: ToolKind,
@@ -7005,7 +7061,6 @@ impl ClayDocument {
         if tool.is_path_driven() && adaptive.gesture_is_open() {
             adaptive.replay_from_the_anchor()?;
         }
-        adaptive.open_gesture()?;
         let CarriedStroke {
             preset,
             stamp,
@@ -7014,43 +7069,30 @@ impl ClayDocument {
         } = stroke;
         let mask = self.active_mask();
         let topology = crate::adaptive::Adaptive::topology();
-        // Through the sculptor the surface keeps for its whole life, so the
-        // index is not rebuilt per segment and the chunks this stroke dirties
-        // stay in the set the viewport drains.
-        let changed = adaptive.with_sculptor(|sculptor| {
-            let mut changed = false;
-            for mirror in mirrors(symmetry) {
-                let path: Vec<[f32; 5]> = points
+        let passes: Vec<crate::adaptive::Pass<'_>> = mirrors(symmetry)
+            .into_iter()
+            .map(|mirror| {
+                let path = points
                     .iter()
                     .map(|sample| {
                         let at = mirror.point([sample[0], sample[1], sample[2]]);
                         [at[0], at[1], at[2], sample[3], sample[4]]
                     })
                     .collect();
-                let (applied, _) = sculptor
-                    .apply_stroke(
-                        &path,
-                        &preset,
-                        claycore::MeshStamp {
-                            verb,
-                            direction: mirror.vector(stamp.direction),
-                            center: mirror.point(stamp.center),
-                            // A seed names a numbering the adaptive surface
-                            // does not share: its vertices are created and
-                            // retired by the remesh.
-                            seed: None,
-                            ..stamp
-                        },
-                        Some(&topology),
-                        mask.as_deref(),
-                    )
-                    .map_err(ModelError::engine)?;
-                changed |= applied > 0;
-            }
-            Ok::<bool, ModelError>(changed)
-        })?;
-        adaptive.note_gesture_changed(changed);
-        Ok(changed)
+                let stamp = claycore::MeshStamp {
+                    verb,
+                    direction: mirror.vector(stamp.direction),
+                    center: mirror.point(stamp.center),
+                    // A seed names a numbering the adaptive surface does not
+                    // share: its vertices are created and retired by the
+                    // remesh.
+                    seed: None,
+                    ..stamp
+                };
+                (path, stamp)
+            })
+            .collect();
+        adaptive.stroke(&passes, &preset, &topology, mask.as_deref())
     }
 
     /// The engine half of [`ClayDocument::stroke_multires`], with the
@@ -7484,7 +7526,7 @@ impl ClayDocument {
         let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
             return;
         };
-        let Some(bytes) = adaptive.close_gesture() else {
+        let Some(record) = adaptive.close_gesture() else {
             return;
         };
         // Between strokes is when the engine's opinion of its own index is
@@ -7496,7 +7538,7 @@ impl ClayDocument {
         let stamp = self.stamp_history();
         self.mesh_undo.push(MeshGesture {
             layer: key,
-            what: GestureRecord::Adaptive(bytes),
+            what: GestureRecord::Adaptive(record),
             stamp,
         });
         self.mesh_redo.clear();
@@ -8891,9 +8933,11 @@ impl ClayDocument {
                     .wrapping_add(adaptive.layout_revision())
             })
         });
-        // Adaptive records left out: banking one moves no triangle, and its
-        // undo puts back a new surface whose generation is counted above. Kept
-        // in, the end of every adaptive stroke would rebuild the whole buffer.
+        // Adaptive records left out: banking one moves no triangle. Its undo
+        // either replays a delta through the surface's sculptor, which the
+        // chunk revisions in `mesh_revision` follow and a patch carries, or
+        // puts back a new surface whose generation is counted above. Kept in,
+        // the end of every adaptive stroke would rebuild the whole buffer.
         let fixed = |records: &[MeshGesture]| {
             records
                 .iter()
@@ -9743,9 +9787,10 @@ impl ClayDocument {
     /// there is nothing to put back, and dropping the record is the whole of
     /// the answer.
     ///
-    /// The two representations differ in what "the other stack's record" is,
+    /// The representations differ in what "the other stack's record" is,
     /// and it is worth naming. A `MeshDeltas` is *symmetric* — the same record
-    /// reverts and re-applies — so it travels unchanged. A hierarchy's record
+    /// reverts and re-applies — so it travels unchanged, as an adaptive
+    /// surface's topology delta does. A hierarchy's record
     /// is one **state**, so the record that goes the other way has to be the
     /// state this step is leaving: it is taken here, on the way past, which is
     /// why one blob is held per step rather than a before and an after.
@@ -9788,16 +9833,17 @@ impl ClayDocument {
                 self.refresh_multires_bounds(layer);
                 GestureRecord::Hierarchy(leaving)
             }
-            // The same one-state record, for the same reason: what goes the
-            // other way is the surface this step leaves, connectivity and all.
-            GestureRecord::Adaptive(bytes) => {
+            GestureRecord::Adaptive(record) => {
                 let Some(adaptive) = self.layers[index].dynamic.as_mut() else {
                     return Ok(None);
                 };
-                let leaving = adaptive.bytes(0)?;
-                adaptive.restore(&bytes)?;
+                let way = match step {
+                    Step::Back => crate::adaptive::Replay::Revert,
+                    Step::Forward => crate::adaptive::Replay::Apply,
+                };
+                let record = adaptive.step(record, way)?;
                 self.refresh_dynamic_bounds(layer);
-                GestureRecord::Adaptive(leaving)
+                GestureRecord::Adaptive(record)
             }
         };
         Ok(Some(MeshGesture { layer, what, stamp }))
@@ -9812,13 +9858,7 @@ impl ClayDocument {
     /// what it just did.
     fn trim_gesture_history(&mut self) {
         let weigh = |stack: &[MeshGesture]| -> usize {
-            stack
-                .iter()
-                .map(|gesture| match &gesture.what {
-                    GestureRecord::Hierarchy(bytes) | GestureRecord::Adaptive(bytes) => bytes.len(),
-                    GestureRecord::Deltas(_) => 0,
-                })
-                .sum()
+            stack.iter().map(|gesture| gesture.what.weight()).sum()
         };
         while weigh(&self.mesh_undo) + weigh(&self.mesh_redo) > crate::multires::HISTORY_BYTES {
             if self.mesh_undo.is_empty() {
@@ -12174,6 +12214,7 @@ impl SceneModel for ClayDocument {
             Op::AddLevel => self.memory().map_or(0, |report| report.total),
             _ => 0,
         };
+        let budget = self.hierarchy_budget;
         let hierarchy = self.layers[index]
             .multires
             .as_mut()
@@ -12182,7 +12223,7 @@ impl SceneModel for ClayDocument {
             Op::SetSculptLevel(level) => hierarchy.set_sculpt_level(level)?,
             Op::SetDisplayLevel(level) => hierarchy.set_display_level(level)?,
             Op::AddLevel => {
-                let level = hierarchy.add_level(held, crate::multires::LEVEL_BUDGET)?;
+                let level = hierarchy.add_level(held, budget)?;
                 // What an artist means by subdividing is to work finer, so
                 // both numbers move to the level that arrived — which is also
                 // what the engine does, so a host that left the display where
@@ -12284,6 +12325,76 @@ impl SceneModel for ClayDocument {
         }
         self.refresh_stats();
         Ok(())
+    }
+
+    /// What Create Multires would cost on the active mesh layer, before
+    /// anything is built. See [`SceneModel::hierarchy_plan`].
+    ///
+    /// Two figures are measured here rather than estimated: the document's
+    /// ledger, and the cage — built as a hierarchy of one level, weighed and
+    /// dropped. Building it is cheap beside any level over it, and it is also
+    /// the one way to learn that the mesh is not a cage before the sculptor
+    /// presses anything: the refusal comes back from here, naming the fault.
+    ///
+    /// **Not for every frame**: the ledger walks every layer and the cage is a
+    /// copy of the mesh. The scene ViewModel asks once per change to the
+    /// document and keeps the answer.
+    fn hierarchy_plan(&mut self) -> Result<clayspace_model::HierarchyPlan, ModelError> {
+        let source = self.active_layer();
+        if source.representation != Representation::Mesh {
+            return Err(ModelError::Conversion(Refusal::WrongSource {
+                needs: Representation::Mesh,
+                active: source.representation,
+            }));
+        }
+        let cage = crate::multires::Hierarchy::holding(self.cage_from_active()?);
+        let first = cage.subdivision_cost().ok_or_else(|| {
+            ModelError::engine("the engine would not price a level over this cage")
+        })?;
+        let held = self.memory().map_or(0, |report| report.total);
+        let cage_faces = cage
+            .state()
+            .level_sizes
+            .first()
+            .map_or(0, |size| size.faces);
+        Ok(clayspace_model::HierarchyPlan::new(
+            held,
+            self.hierarchy_budget,
+            (cage.held_bytes()?, cage_faces),
+            first,
+        ))
+    }
+
+    /// Create Multires: the active mesh layer as a hierarchy `levels` deep,
+    /// priced as a whole before anything is built, and one undo step.
+    ///
+    /// Refused from the plan when the document and the hierarchy together
+    /// pass the budget, naming all three figures. Each level is then priced
+    /// again by the engine as it is built, on top of the ledger and what the
+    /// hierarchy already holds, because every level but the first was
+    /// projected; a level refused there leaves nothing behind, since the
+    /// hierarchy is built free-standing and the layer is made only once all
+    /// of it stands.
+    ///
+    /// Both numbers end on the top level, as a Subdivide click leaves them.
+    fn create_hierarchy(
+        &mut self,
+        settings: clayspace_model::HierarchySettings,
+    ) -> Result<LayerKey, ModelError> {
+        let settings = settings.sanitized();
+        let plan = self.hierarchy_plan()?;
+        plan.within(settings.levels)
+            .map_err(ModelError::Conversion)?;
+        let mut hierarchy = crate::multires::Hierarchy::holding(self.cage_from_active()?);
+        for _ in 0..settings.levels {
+            let held = plan.held_bytes.saturating_add(hierarchy.held_bytes()?);
+            hierarchy.add_level(held, self.hierarchy_budget)?;
+        }
+        self.cross_with(
+            Direction::MeshToMultires,
+            settings.in_place,
+            |document, name| document.attach_hierarchy(hierarchy, name),
+        )
     }
 
     fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
@@ -12998,6 +13109,8 @@ impl ClayDocument {
 
     /// What the hierarchies cost this session, and which of them were lost.
     pub fn multires_diagnostics(&self) -> clayspace_model::MultiresDiagnostics {
+        let (history_steps, history_bytes) =
+            self.gesture_history(|what| matches!(what, GestureRecord::Hierarchy(_)));
         clayspace_model::MultiresDiagnostics {
             held: self
                 .layers
@@ -13005,7 +13118,21 @@ impl ClayDocument {
                 .filter(|layer| layer.multires.is_some())
                 .count(),
             lost: self.hierarchies_lost.clone(),
+            history_steps,
+            history_bytes,
         }
+    }
+
+    /// How many carried history records of one kind both stacks hold, and
+    /// what they weigh against [`crate::multires::HISTORY_BYTES`].
+    fn gesture_history(&self, kind: impl Fn(&GestureRecord) -> bool) -> (usize, u64) {
+        self.mesh_undo
+            .iter()
+            .chain(&self.mesh_redo)
+            .filter(|gesture| kind(&gesture.what))
+            .fold((0, 0), |(steps, bytes), gesture| {
+                (steps + 1, bytes + gesture.what.weight() as u64)
+            })
     }
 
     /// Writes every adaptive surface this document holds, beside it.
@@ -13087,7 +13214,13 @@ impl ClayDocument {
     }
 
     /// What the adaptive surfaces hold this session, and which were lost.
+    ///
+    /// With the undo history the surfaces' gestures hold: the engine's memory
+    /// ledger does not count topology records, so this is the only place the
+    /// figure is reported.
     pub fn dynamic_diagnostics(&self) -> clayspace_model::MultiresDiagnostics {
+        let (history_steps, history_bytes) =
+            self.gesture_history(|what| matches!(what, GestureRecord::Adaptive(_)));
         clayspace_model::MultiresDiagnostics {
             held: self
                 .layers
@@ -13095,6 +13228,8 @@ impl ClayDocument {
                 .filter(|layer| layer.dynamic.is_some())
                 .count(),
             lost: self.surfaces_lost.clone(),
+            history_steps,
+            history_bytes,
         }
     }
 
@@ -13370,6 +13505,7 @@ impl DocumentModel for ClayDocument {
         opened.remember_objects_after();
         // A host setting rather than part of the file, like the policy.
         opened.surface_budget = self.surface_budget;
+        opened.hierarchy_budget = self.hierarchy_budget;
         *self = opened;
         Ok(())
     }
@@ -13377,6 +13513,7 @@ impl DocumentModel for ClayDocument {
     fn reset(&mut self) -> Result<(), ModelError> {
         let mut fresh = Self::new(self.policy.clone()).and_then(Self::with_starting_form)?;
         fresh.surface_budget = self.surface_budget;
+        fresh.hierarchy_budget = self.hierarchy_budget;
         *self = fresh;
         Ok(())
     }
@@ -13536,6 +13673,7 @@ impl ClayDocument {
             retopo_guidance: clayspace_model::RetopoGuidance::default(),
             crossing_redo: Vec::new(),
             surface_budget: crate::adaptive::CROSSING_BUDGET,
+            hierarchy_budget: crate::multires::LEVEL_BUDGET,
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
             hierarchies_lost: Vec::new(),
@@ -14064,6 +14202,66 @@ impl ClayDocument {
         let key = self.adopt_engine_layer(id, &name, Representation::Sdf)?;
         self.after_conversion(key)?;
         self.stay_on_the_masked_subtool(index)
+    }
+
+    /// The region an extrusion of `layer` may fill: the active mask swept
+    /// along the layer's surface normal across the band the side fills.
+    ///
+    /// Each cell of the search box takes the painted mask's value at its foot
+    /// on the layer's own surface — the layer's, not the document's, because
+    /// the engine extrudes from the layer's field and another subtool nearby
+    /// (an earlier extrusion, say) would bend the normals. Only cells whose
+    /// distance lies in the band are asked for a normal or a foot, which is
+    /// most of the cost saved: the box is mostly empty space and material.
+    fn extrusion_region(
+        &self,
+        layer: claycore::LayerId,
+        settings: ExtrudeSettings,
+    ) -> Result<claycore::Mask, ModelError> {
+        use crate::extrude_region::{candidates, centre, distance_band, fill_box, foot, in_band};
+
+        let painted = self
+            .active_mask()
+            .ok_or_else(|| ModelError::engine("não há máscara para extrudar"))?;
+        let size = painted.cell_size().map_err(ModelError::engine)?;
+        let bounds = painted
+            .bounds()
+            .map_err(ModelError::engine)?
+            .ok_or_else(|| ModelError::engine("a máscara está vazia"))?;
+        let band = distance_band(settings.side, settings.thickness, size);
+        let cells = candidates(bounds, size, band.0.abs().max(band.1)).ok_or_else(|| {
+            ModelError::engine(
+                "a espessura é grande demais para esta máscara; \
+                 extrude uma parede mais fina",
+            )
+        })?;
+
+        let points: Vec<[f32; 3]> = cells.iter().map(|&c| centre(c, size)).collect();
+        let distances = self
+            .document
+            .layer_eval_points(layer, None, &points)
+            .map_err(ModelError::engine)?;
+        let kept = in_band(&distances, band);
+        let near: Vec<[f32; 3]> = kept.iter().map(|&i| points[i]).collect();
+        let normals = self
+            .document
+            .layer_eval_gradients(layer, None, &near)
+            .map_err(ModelError::engine)?;
+        let feet: Vec<[f32; 3]> = kept
+            .iter()
+            .zip(&normals)
+            .map(|(&i, &normal)| foot(points[i], distances[i], normal))
+            .collect();
+        let values = painted.sample_many(&feet).map_err(ModelError::engine)?;
+
+        let mut region = claycore::Mask::new(size).map_err(ModelError::engine)?;
+        for (&i, value) in kept.iter().zip(values) {
+            if value > 0.0 {
+                let (lo, hi) = fill_box(cells[i], size);
+                region.fill(lo, hi, value).map_err(ModelError::engine)?;
+            }
+        }
+        Ok(region)
     }
 
     /// Puts the sculptor back on the subtool they were masking.
@@ -15279,14 +15477,18 @@ impl MaskModel for ClayDocument {
         }
 
         let layer = self.layers[index].id;
-        // Named rather than handed over: the extrusion holds the document
-        // mutably, and the mask is one of that document's own. See
-        // `claycore::MaskSource`.
+        // Not the painted mask itself: the engine keeps only the part of the
+        // wall inside the mask's own volume, which caps the wall at how far
+        // the paint reaches off the surface (ClayCore #660). The region below
+        // is the painted patch swept along the surface normal as far as the
+        // wall is asked to go, so the thickness is honoured and the top is
+        // even. See `extrude_region`.
+        let region = self.extrusion_region(layer, settings)?;
         let item = self
             .document
             .mask_extrude(
                 layer,
-                claycore::MaskSource::Layer(layer),
+                claycore::MaskSource::Field(&region),
                 extrude_params(settings),
             )
             .map_err(ModelError::engine)?;

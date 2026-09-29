@@ -1259,6 +1259,16 @@ pub const TABLE: &[ActionSpec] = &[
     },
     ActionSpec {
         group: "hierarchy",
+        name: "create",
+        summary: "Create Multires: the active mesh layer as a hierarchy this many levels deep, one undo step. Priced before anything is built; state.hierarchy_plan says what it would add, and over budget it is refused naming what the document holds, what the hierarchy adds and the limit.",
+        arguments: &[
+            o("levels", Kind::Integer, "levels above the cage, 0 to 4"),
+            o("in_place", Kind::Boolean, "replace the mesh rather than keep it beside"),
+        ],
+        example: r#"{"levels":2}"#,
+    },
+    ActionSpec {
+        group: "hierarchy",
         name: "pass",
         summary: "The pass stack on a subdivision hierarchy.",
         arguments: &[

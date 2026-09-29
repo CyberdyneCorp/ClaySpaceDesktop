@@ -175,6 +175,8 @@ fn diagnostics() -> clayspace_model::Diagnostics {
         hierarchies: Some(clayspace_model::MultiresDiagnostics {
             held: 2,
             lost: vec!["Cabeça · hierarquia".into()],
+            history_steps: 3,
+            history_bytes: 2 * 1024 * 1024,
         }),
         adaptive: None,
         adaptive_uploads: None,
@@ -336,6 +338,7 @@ fn state<'a>(
         // The default capture holds no hierarchy, so there is nothing to
         // price and no stack to cost. The hierarchy captures below set both.
         subdivision_cost: None,
+        hierarchy_plan: None,
         multires_cost: None,
         // A rig, mid-edit, so the capture shows the armature section and the
         // menu entries that depend on it rather than a row of grey.
@@ -4494,6 +4497,7 @@ fn the_hierarchy_section_draws_both_levels_and_prices_the_next_one() {
         faces: 393_216,
         persistent_bytes: 12 * 1024 * 1024,
         peak_bytes: 37 * 1024 * 1024,
+        resident_bytes: 0,
     });
     let ctx = probe_shell(&set);
 
@@ -4514,6 +4518,57 @@ fn the_hierarchy_section_draws_both_levels_and_prices_the_next_one() {
     assert!(
         shell_rect(&ctx, shell::subdivide_button_id()).is_some(),
         "and no offer of one more"
+    );
+}
+
+/// A mesh layer offers Create Multires with its price beside it, and the
+/// button asks for a hierarchy as deep as the slider says rather than making
+/// one: the model is what refuses over budget.
+#[test]
+fn a_mesh_layer_offers_create_multires_with_its_price() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Mesh;
+    set.hierarchy_plan = Some(Ok(clayspace_model::HierarchyPlan::new(
+        500 * 1024 * 1024,
+        512 * 1024 * 1024,
+        (21_424, 512),
+        clayspace_model::SubdivisionCost {
+            level: 1,
+            vertices: 1_601,
+            faces: 1_536,
+            persistent_bytes: 30_720,
+            peak_bytes: 62_232,
+            resident_bytes: 648_302,
+        },
+    )));
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    assert!(
+        shell_rect(&ctx, shell::slider_id(strings.label_create_multires_levels)).is_some(),
+        "no depth to choose"
+    );
+    let button =
+        shell_rect(&ctx, shell::create_multires_button_id()).expect("no Create Multires button");
+    queue.drain();
+    run_shell_frame(&ctx, &set, &mut queue, left_click(button.center()));
+    assert!(
+        queue.commands().iter().any(|command| matches!(
+            command,
+            Command::CreateHierarchy(settings)
+                if *settings == clayspace_model::HierarchySettings::default()
+        )),
+        "Create Multires asked for nothing: {:?}",
+        queue.commands()
     );
 }
 
@@ -4964,6 +5019,7 @@ fn the_hierarchys_stack_is_drawn() {
         faces: 393_216,
         persistent_bytes: 12 * 1024 * 1024,
         peak_bytes: 37 * 1024 * 1024,
+        resident_bytes: 0,
     });
     set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
         layers: 3,
@@ -5096,6 +5152,7 @@ fn the_two_levels_are_drawn_apart_and_the_gap_is_named() {
         faces: 1_572_864,
         persistent_bytes: 48 * 1024 * 1024,
         peak_bytes: 149 * 1024 * 1024,
+        resident_bytes: 0,
     });
     set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
         layers: 2,
@@ -5134,7 +5191,7 @@ fn a_level_the_budget_refuses_says_so_beside_the_viewport() {
     let report = diagnostics();
     let refusal = clayspace_model::Refusal::LevelOverBudget {
         held_bytes: 96 * 1024 * 1024,
-        peak_bytes: 2_384 * 1024 * 1024,
+        level_bytes: 2_384 * 1024 * 1024,
         budget_bytes: 1_024 * 1024 * 1024,
     }
     .to_string();
@@ -5146,6 +5203,7 @@ fn a_level_the_budget_refuses_says_so_beside_the_viewport() {
         faces: 6_291_456,
         persistent_bytes: 780 * 1024 * 1024,
         peak_bytes: 2_384 * 1024 * 1024,
+        resident_bytes: 0,
     });
     set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
         layers: 1,

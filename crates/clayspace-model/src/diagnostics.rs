@@ -470,6 +470,14 @@ pub struct MultiresDiagnostics {
     /// why the side-car is load-bearing rather than decorative. A side-car
     /// that is *present and damaged* is a different fact and is named.
     pub lost: Vec<String>,
+    /// Undo and redo steps these surfaces' gestures hold.
+    pub history_steps: usize,
+    /// What those steps weigh against the carried history's budget, in bytes.
+    ///
+    /// For a hierarchy, its serialized state per step; for an adaptive surface,
+    /// the resident size of each gesture's topology delta. Neither is counted
+    /// by the engine's memory ledger, so this is where it is reported.
+    pub history_bytes: u64,
 }
 
 /// What one upload of the carried buffer sent for the adaptive surfaces.
@@ -699,14 +707,16 @@ impl Diagnostics {
                 line(
                     name,
                     &format!(
-                        "{} held, {} lost{}",
+                        "{} held, {} lost{}, {} undo steps in {}",
                         held.held,
                         held.lost.len(),
                         if held.lost.is_empty() {
                             String::new()
                         } else {
                             format!(" ({})", held.lost.join(", "))
-                        }
+                        },
+                        held.history_steps,
+                        megabytes(held.history_bytes)
                     ),
                 );
             }
@@ -1060,6 +1070,24 @@ mod tests {
         });
         let text = diagnostics.to_report();
         assert!(text.contains("2 held, 0 stale seeds rejected"), "{text}");
+    }
+
+    /// What an adaptive surface's undo history holds is reported beside the
+    /// surfaces, because the engine's memory ledger does not count it.
+    #[test]
+    fn the_adaptive_undo_history_is_reported_in_steps_and_bytes() {
+        let mut diagnostics = sample();
+        diagnostics.adaptive = Some(MultiresDiagnostics {
+            held: 1,
+            lost: Vec::new(),
+            history_steps: 4,
+            history_bytes: 3 * 1024 * 1024,
+        });
+        let text = diagnostics.to_report();
+        assert!(
+            text.contains("1 held, 0 lost, 4 undo steps in 3.0 MB"),
+            "{text}"
+        );
     }
 
     #[test]

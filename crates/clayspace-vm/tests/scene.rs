@@ -29,6 +29,8 @@ struct Calls {
     /// What the document's history holds, as the engine's does: one entry per
     /// operation that changed the stack, and none for a way of looking at it.
     entries: usize,
+    /// How many times Create Multires was priced.
+    plans: usize,
 }
 
 struct FakeScene {
@@ -88,6 +90,24 @@ impl FakeScene {
 impl SceneModel for FakeScene {
     fn history_depth(&self) -> usize {
         self.calls.borrow().entries
+    }
+
+    fn hierarchy_plan(&mut self) -> Result<clayspace_model::HierarchyPlan, ModelError> {
+        self.guard()?;
+        self.calls.borrow_mut().plans += 1;
+        Ok(clayspace_model::HierarchyPlan::new(
+            1_000,
+            1_000_000,
+            (100, 64),
+            clayspace_model::SubdivisionCost {
+                level: 1,
+                vertices: 289,
+                faces: 256,
+                persistent_bytes: 500,
+                peak_bytes: 900,
+                resident_bytes: 4_000,
+            },
+        ))
     }
 
     fn apply_multires_sculpt_layer_op(
@@ -970,4 +990,41 @@ fn what_an_operation_cost_is_handed_over_once() {
         .expect("a rebuild");
     assert_eq!(vm.take_unbanked_actions(), vec![1]);
     assert!(vm.take_unbanked_actions().is_empty());
+}
+
+/// Create Multires is priced for a mesh layer only, and the price is kept
+/// until something that changes what the document holds moves: asking every
+/// frame would walk the ledger and build the cage every frame.
+#[test]
+fn the_create_multires_price_is_kept_until_the_document_moves() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut fake = FakeScene::new(calls.clone());
+    fake.layers[1].representation = Representation::Mesh;
+    let mut vm = SceneViewModel::new(Box::new(fake));
+
+    assert!(vm.hierarchy_plan().is_none(), "a field layer has no plan");
+    assert_eq!(calls.borrow().plans, 0);
+
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect("select the mesh");
+    vm.refresh();
+    let plan = vm
+        .hierarchy_plan()
+        .expect("a mesh has one")
+        .expect("priced");
+    assert_eq!(plan.held_bytes, 1_000);
+    assert!(vm.hierarchy_plan().is_some());
+    assert_eq!(
+        calls.borrow().plans,
+        1,
+        "asked once, kept for the next frame"
+    );
+
+    calls.borrow_mut().entries += 1;
+    assert!(vm.hierarchy_plan().is_some());
+    assert_eq!(
+        calls.borrow().plans,
+        2,
+        "the history moved, so it is asked again"
+    );
 }

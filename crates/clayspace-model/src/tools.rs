@@ -521,7 +521,9 @@ pub(crate) const fn multires_verb(
 /// point — `clay_dynamic_sculptor_apply_stroke` takes the same
 /// `clay_mesh_brush_desc` — so the intent is the mesh row's and the fidelity
 /// is the mesh row's too: the engine calls the shared kernels rather than a
-/// copy of them.
+/// copy of them. Its `_recorded` twin is the same stroke captured into an
+/// undo record, and the row names both because a closed surface strokes
+/// through the one and a surface with an open boundary through the other.
 pub(crate) const fn dynamic_verb(
     entry_point: &'static str,
     intent: SemanticIntent,
@@ -1593,7 +1595,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (DRAW)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (DRAW)",
                     SemanticIntent::SurfaceDisplace,
                     Fidelity::Native,
                 ),
@@ -1637,7 +1639,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (INFLATE)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (INFLATE)",
                     SemanticIntent::VolumeInflate,
                     Fidelity::Native,
                 ),
@@ -1690,7 +1692,7 @@ impl ToolKind {
                     Fidelity::Specialized,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (SMOOTH)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (SMOOTH)",
                     SemanticIntent::SurfaceSmooth,
                     Fidelity::Native,
                 ),
@@ -1786,7 +1788,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (GRAB)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (GRAB)",
                     SemanticIntent::SurfaceMove,
                     Fidelity::Native,
                 ),
@@ -1841,7 +1843,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (SNAKEHOOK)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (SNAKEHOOK)",
                     SemanticIntent::SurfaceMove,
                     Fidelity::Native,
                 ),
@@ -1874,7 +1876,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (FLATTEN)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (FLATTEN)",
                     SemanticIntent::SurfaceFlatten,
                     Fidelity::Native,
                 ),
@@ -1901,7 +1903,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (POLISH)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (POLISH)",
                     SemanticIntent::SurfaceFlatten,
                     Fidelity::Native,
                 ),
@@ -1925,7 +1927,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (RELAX)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (RELAX)",
                     SemanticIntent::SurfaceSmooth,
                     Fidelity::Native,
                 ),
@@ -1959,7 +1961,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (SCRAPE)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (SCRAPE)",
                     SemanticIntent::SurfaceFlatten,
                     Fidelity::Native,
                 ),
@@ -2012,7 +2014,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (PINCH)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (PINCH)",
                     SemanticIntent::SurfacePinch,
                     Fidelity::Native,
                 ),
@@ -2039,7 +2041,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (CLAY)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (CLAY)",
                     SemanticIntent::SurfaceDisplace,
                     Fidelity::Native,
                 ),
@@ -2070,7 +2072,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (CREASE)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (CREASE)",
                     SemanticIntent::SurfaceCrease,
                     Fidelity::Native,
                 ),
@@ -2107,7 +2109,7 @@ impl ToolKind {
                 ),
                 multires: None,
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (PAINT)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (PAINT)",
                     SemanticIntent::Paint,
                     Fidelity::Native,
                 ),
@@ -2157,7 +2159,7 @@ impl ToolKind {
                 ),
                 multires: None,
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (SMEAR)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (SMEAR)",
                     SemanticIntent::Paint,
                     Fidelity::Native,
                 ),
@@ -2180,7 +2182,7 @@ impl ToolKind {
                     Fidelity::Native,
                 ),
                 dynamic: dynamic_verb(
-                    "clay_dynamic_sculptor_apply_stroke (NUDGE)",
+                    "clay_dynamic_sculptor_apply_stroke_recorded / clay_dynamic_sculptor_apply_stroke (NUDGE)",
                     SemanticIntent::SurfaceMove,
                     Fidelity::Native,
                 ),
@@ -3071,8 +3073,9 @@ mod tests {
         let padrao = ToolKind::Padrao.engine_verbs();
         assert_eq!(
             padrao.matches("clay_").count(),
-            5,
-            "Padrão reaches five representations by five different calls: {padrao}"
+            6,
+            "Padrão reaches five representations by six different calls — the \
+             adaptive column names the recorded stroke and the plain one: {padrao}"
         );
     }
 

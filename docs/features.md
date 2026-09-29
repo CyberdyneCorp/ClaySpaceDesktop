@@ -1249,19 +1249,40 @@ means.
 not like can be thrown away without painting the mask again, and the patch
 arrives as its own layer rather than as an edit to the one it came from.
 Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
-1.16, **Para dentro** leaves the outside at 1.000 and builds inward, and
-**Centrado** reaches 1.1015 — half the thickness above the surface, which is
+1.20, **Para dentro** leaves the outside at 1.000 and builds inward, and
+**Centrado** reaches 1.1003 — half the thickness above the surface, which is
 what half each way means.
 
-**A wall is no taller than the mask reaches off the surface.** The engine keeps
-the part of the shell that lies *inside the mask's own volume*, and a mask
-painted on a surface is a thin volume around it — a dab's ball, or an outline's
-prism swept to just past the form. Past that the thickness is not honoured:
-measured on the unit sphere with an outline mask, 0.05 gives a 0.05 wall and 0.1
-a 0.1 wall, but 0.3 and 0.6 both stop at about 0.11, with a top that follows the
-dabs the outline was painted with. That is the engine's to fix — the region has
-to be read where a point projects onto the surface rather than where it is —
-and is filed as CyberdyneCorp/ClayCore#660.
+**A wall is as tall as the thickness asks, and even.** The engine keeps the part
+of the wall's shell that lies inside the mask's own volume, read at the point
+itself, and a mask painted on a surface is only a thin volume around it — a
+dab's ball, or an outline swept to just past the form. Handed the painted mask,
+every wall stopped where the paint did: on the unit sphere with an outline mask,
+0.3 and 0.6 both stopped at about 0.11, with a top that followed the dabs
+(CyberdyneCorp/ClayCore#660). On a field layer the application now hands the
+engine the painted patch *swept along the surface normal*: every cell whose
+distance from the layer's own surface lies in the band the side fills takes the
+painted mask's value at its foot on the surface. The engine's intersection then
+keeps the whole shell, and the wall's top is the shell's offset surface.
+Measured on the unit sphere, Para fora, at five spots in the patch
+(`mask_extrude_thickness.rs`):
+
+| Mask | Thickness | Before | Now |
+|---|---|---|---|
+| Outline, 0.5 square | 0.05 | 0.050 | 0.050 |
+| Outline, 0.5 square | 0.1 | 0.080 – 0.100 | 0.100 |
+| Outline, 0.5 square | 0.6 | 0.080 – 0.103 | 0.600 |
+| One Máscara dab, size 0.3 | 0.6 | 0.134 – 0.160 | 0.600 |
+
+Across the outline's patch, out to 0.02 inside its edge, the old 0.6 wall ran
+from 0.08 to 0.13; the new one stays within 0.0001 of 0.600. Centrado at 0.6
+puts 0.300 above the surface. The region is searched in the mask's bounds grown
+by the thickness, and the engine's own measurement of the mask covers the same
+box, so a wall far thicker than the patch — 100 units — is refused with a
+reason instead of costing gigabytes. A **voxel layer is still capped**: the
+engine grows a grid's wall cell by cell through masked cells only, and the
+layer's field that gives a normal is empty for a grid, so that path waits on
+ClayCore#660.
 
 **Extrudar needs something to sample.** `clay_document_mask_extrude` samples a
 *layer's field*, and a grid has a verb of its own that works from its cells
@@ -1758,6 +1779,35 @@ it is not among the representations a new layer can be; it arrives through
 `mesh → multires`, which refuses rather than repairs. See
 [Crossing between representations](#crossing-between-representations).
 
+**Create Multires, from a fixed mesh, priced before it is built.** Every mesh
+layer's inspector section — a retopology result included — offers **Criar
+Multires**: how many levels to build over the cage (0 to 4, two by default),
+whether the hierarchy replaces the mesh, and the price beside the button before
+anything is allocated: the faces at the top level, **what the document holds,
+what the hierarchy would add and the limit**. Over the limit the same line turns
+to the accent colour with the refusal, and pressing the button is refused in
+those words with nothing built. The document's ledger and the cage are measured
+(the cage is built as a hierarchy of one level, weighed and dropped, which is
+also how a mesh that is not a cage says so before anything is pressed); level
+1 is the engine's quote, and deeper levels are marked *projected* — four times
+the level below, which across levels 1–4 on 8², 16² and 32² cages was never
+under the engine's own later quote and at most 7.7% over it. Each level is
+priced again by the engine while the hierarchy is built free-standing, and the
+layer is made only once all of it stands, so a success is one crossing and
+**one undo** and a refusal leaves nothing behind. The plan charges every level
+as it is held once drawn, which errs high: at four levels over a 16×16 cage it
+quoted 55,127,094 bytes and the drawn hierarchy grew the document by
+27,879,079. An agent reads the same price in `state.scene.hierarchy_plan`
+(`hierarchy_plan_refused` where the mesh is not a cage) and creates with
+`hierarchy create {"levels":2}`.
+
+The benchmark's `multires` group times both halves at three cage sizes, 8, 16
+and 32 quads a side: pricing Create Multires (`multires.preflight_*`) took
+**0.04, 0.18 and 0.84 ms**, and creating two levels (`multires.create_*`)
+**0.50, 2.18 and 9.63 ms** on an M3 Pro under a load of 1.13 per core. The
+price is asked again only when the active layer, the history depth or the
+layer count moves.
+
 **Two levels, not one.** Where the brush writes and what the viewport draws are
 independent numbers, and that is the workflow rather than an implementation
 detail: dropping to the cage to move a jaw while still watching the pores is
@@ -1769,15 +1819,20 @@ working.
 
 **Adding a level is priced, and refused rather than attempted.** A level
 multiplies faces by four, so a 20k-quad cage is 5.1M faces at level 4 and 20.5M
-at level 5. The face count and the **peak** during the build stand beside the
-Subdividir button — the peak rather than what remains after it, because on a
-constrained machine it is the high-water mark that ends the session. A refused
+at level 5. The face count and what the level is **charged** stand beside the
+Subdividir button: the higher of the build's peak and what the level holds once
+drawn, rather than what remains after the build. The engine's peak prices the
+build alone, and a level is drawn the moment it arrives — measured at level 4
+over a 16×16 cage, the peak read 3,741,720 bytes and adding and drawing the
+level grew the document by 20,886,292. The engine's own evaluated and runtime
+figures for a resident level (40,623,342 bytes there) are the upper bound it is
+charged at now. A refused
 level leaves the hierarchy exactly as deep as it was — the engine builds and
 then publishes, so there is nothing half-built to clear up — and the reason
 arrives beside the viewport, on the same line that says why a tool cannot be
 used.
 
-The peak is priced **on top of what the document already holds** — every
+The charge is priced **on top of what the document already holds** — every
 layer, every surface beside it and the levels the hierarchy already has — and
 the refusal names all three figures: what is held, what the level adds and the
 budget. The engine's preflight prices the new level alone, and priced alone a
@@ -1980,7 +2035,7 @@ it needs. It is the contract while a form is still being found.
 | quads | preserved | no — the surface is triangles |
 | large Move | stretches existing triangles | creates the triangles it needs |
 | best use | a settled, retopologized asset | free-form construction |
-| undo | vertex deltas | the surface as it stood, connectivity and all |
+| undo | vertex deltas | the gesture's topology delta, connectivity and all |
 
 **It comes from a mesh.** There is no call that makes an empty one, so it is
 not among the representations a new layer can be; it arrives through
@@ -2039,12 +2094,41 @@ A Mesh → Dynamic → Mesh round trip with no stroke between gives back the sam
 vertices within 1e-5 and the same triangle count
 (`mesh_to_dynamic_and_back_preserves_the_form`).
 
-**One gesture is one undo, and it restores connectivity.** The record is the
-surface's own bytes before the gesture — a bounded snapshot, exact, in the one
-ordered history every other edit is in. **The surface is saved beside the
-document** in a `.dynamic` file, as a hierarchy's is; a document opened without
-it comes back as the mesh the surface was read from, and a record that could not
-be honoured is named in the diagnostics report.
+**One gesture is one undo, and it restores connectivity.** However many
+segments and mirrors draw a gesture, it lands in one record in the one ordered
+history every other edit is in:
+
+- **On a closed surface the record is the engine's topology delta**
+  (`clay_dynamic_sculptor_apply_stroke_recorded`): every vertex, half-edge,
+  edge and face the stroke created, deleted or rewrote, with both ends. Undo
+  reverts it and redo re-applies the same record, and both are bit-exact over
+  the exported triangles — the same indices and the same position bits — so
+  undo-redo cycles converge and a redo lays down the same connectivity, not an
+  equivalent one. A dragging brush is laid down again from its anchor by
+  reverting the segment before, and a cancelled stroke is banked and reverted,
+  so it leaves no partial topology and takes back nothing committed before it.
+- **On a surface with an open boundary** — an imported sheet, say — the record
+  is still the surface's bytes before the gesture. On the pinned engine
+  (ClayCore v0.120.1) reverting a delta whose stroke reached the boundary gives
+  back the right triangles and a half-edge structure that fails validation
+  ("half-edge N has a dead next"), so the delta waits for the engine;
+  `a_revert_at_an_open_boundary_leaves_a_dead_next` fails the day it is fixed.
+
+**What a record costs is reported and bounded.** The diagnostics report's
+`adaptive surfaces` line gives the undo steps the surfaces hold and what they
+weigh — a delta by its resident size, a snapshot by its bytes; the engine's
+memory ledger counts neither. Both come out of the same 256 MB carried-history
+budget a hierarchy's snapshots do, dropped from the oldest end. A delta costs
+what the stroke reached, a snapshot what the surface holds. Measured for one
+Draw stroke on a closed ball: at 6,016 faces, 1.9 MB resident for the delta
+against a 1.6 MB snapshot; at 97,792 faces, 3.1 MB against 25.4 MB
+(`price_a_gesture_at_two_model_sizes`).
+
+**The surface is saved beside the document** in a `.dynamic` file, as a
+hierarchy's is; a document opened without it comes back as the mesh the
+surface was read from, and a record that could not be honoured is named in the
+diagnostics report. A reopened surface starts with an empty history: an engine
+record never outlives the surface handle it was taken on.
 
 **A stroke draws the chunks it touched, not the model.** The engine partitions
 the surface into chunks and marks the ones a stamp reached; the viewport keeps a
@@ -2054,8 +2138,8 @@ its vertices and no indices; one the remesh re-cut sends both. Each chunk sits
 in a slot with room to grow, so a chunk that gains a few triangles is rewritten
 where it is; one that outgrows its slot moves to the spare room at the end of
 the surface's region, and one that outgrows the spare room — or anything a
-patch cannot follow: a layer shown, hidden or moved, the mask, an undo, a
-rebuilt index — builds the buffer again, as every change did before. The chunk
+patch cannot follow: a layer shown, hidden or moved, the mask, an undo that
+puts a snapshot back, a rebuilt index — builds the buffer again, as every change did before. The chunk
 buffers are kept and reused, so a stroke that does not grow the surface
 allocates nothing on this side.
 
@@ -2085,12 +2169,16 @@ colour surface would lose its paint. That is the remaining engine gap (a
 per-chunk colour copy in `clay_dynamic_surface_copy_chunk` or
 `clay_surface_view_copy_chunk`).
 
-Not yet: the history holds a snapshot rather than the engine's topology delta —
-the first segment of every gesture serializes the whole surface, 66 ms at
-100k triangles and 661 ms at 1M — and export, like a hierarchy's, writes the
-mesh the row was read from — `dynamic → mesh` first exports what the brush has
-made. The polyframe derives its lines from the whole index list, so while it is
-on an adaptive stroke builds the buffer whole.
+An undo or redo on a closed surface replays the gesture's topology delta
+through the same sculptor, so it marks the chunks it touched and is patched in
+place like a stroke (`a_delta_undo_and_redo_patch_the_drawn_region_in_place`);
+a replay that leaves the region more than half holes lays it out again.
+
+Not yet: an open surface's history is a snapshot until the engine reverts
+boundary strokes soundly, and its undo lays the buffer out again; export, like
+a hierarchy's, writes the mesh the row was read from — `dynamic → mesh` first
+exports what the brush has made. The polyframe derives its lines from the whole
+index list, so while it is on an adaptive stroke builds the buffer whole.
 
 ## Voxel layers
 

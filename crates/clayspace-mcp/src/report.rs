@@ -24,10 +24,11 @@ use crate::session::{
     BackendState, BrushState, CacheReleaseState, CageState, CameraState, CombineSetting,
     CombineState, CrossingOutcomeState, DeformState, DocumentState, DragState, DynamicsState,
     ExchangeState, ExportState, FallbackState, GateKind, GridState, HierarchyBakeState,
-    HierarchyPassState, HierarchyState, HistoryState, ImportState, LayerState, LevelSizeState,
-    MaskState, MemoryPart, MemoryState, ObjectState, OutcomeState, PassState, PhaseCostState,
-    PresentationState, ReferenceState, RemeshOutcomeState, RetopoOutcomeState, RetopoUvState,
-    SceneState, StallState, StrokeCostState, TimingState, ToolState, UvReportState,
+    HierarchyPassState, HierarchyPlanState, HierarchyState, HistoryState, ImportState, LayerState,
+    LevelSizeState, MaskState, MemoryPart, MemoryState, ObjectState, OutcomeState, PassState,
+    PhaseCostState, PlannedDepthState, PresentationState, ReferenceState, RemeshOutcomeState,
+    RetopoOutcomeState, RetopoUvState, SceneState, StallState, StrokeCostState, TimingState,
+    ToolState, UvReportState,
 };
 
 /// How many agent jobs the interface thread does between two frames.
@@ -103,6 +104,27 @@ pub fn scene_state(
         active_layer: scene.active.map(|key| key.0),
         selected_object: selected.map(object_id),
         soloed: scene.soloed.map(|key| key.0),
+        hierarchy_plan: None,
+        hierarchy_plan_refused: None,
+    }
+}
+
+/// What Create Multires would add, at every depth it offers.
+pub fn hierarchy_plan_state(plan: &clayspace_model::HierarchyPlan) -> HierarchyPlanState {
+    let depths = clayspace_model::HierarchySettings::LEVELS
+        .map(|levels| PlannedDepthState {
+            levels,
+            faces: plan.faces(levels),
+            hierarchy_bytes: plan.hierarchy_bytes(levels),
+            fits: plan.within(levels).is_ok(),
+            quoted: clayspace_model::HierarchyPlan::is_quoted(levels),
+        })
+        .collect();
+    HierarchyPlanState {
+        held_bytes: plan.held_bytes,
+        budget_bytes: plan.budget_bytes,
+        cage_bytes: plan.cage_bytes,
+        depths,
     }
 }
 

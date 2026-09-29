@@ -59,6 +59,63 @@ document sequence orders them with all other commands. Undo and redo restore
 connectivity, geometry and attributes and invalidate affected viewport
 chunks. This does not create a second history stack or compare undo depths.
 
+### The topology delta (#210)
+
+`claycore` binds the engine's record (`clay_dynamic_delta_*`, ABI 0.118.0)
+and the recorded stroke (`clay_dynamic_sculptor_apply_stroke_recorded`, ABI
+0.120.0) as `DynamicDelta` and `DynamicSculptor::apply_stroke_recorded`. The
+recorded call rather than a host loop of recorded stamps, because the loop is
+a different stroke for Grab and Snakehook.
+
+A gesture opens one record on its first segment. Every segment and every
+mirror is captured into it — a record whose end is the current surface is
+continued — so one gesture is one `GestureRecord::Adaptive` in the carried
+stack, stamped by the same monotonic sequence as every other entry (#151).
+The record is symmetric, as `MeshDeltas` is: undo reverts it, redo applies it,
+and the same record travels between the stacks. Replay goes through a fresh
+sculptor, whose index follows the replay; no index rebuild is called. A
+dragging verb reverts and clears the record before laying the gesture down
+again from its anchor. Cancel is the ViewModel's floor rule: the gesture is
+banked and the one entry above the floor is reverted.
+
+The engine's limits and how the history holds to them:
+
+- **Last in, first out.** The ordered stack is already LIFO; an out-of-order
+  or foreign record is refused by the engine before it writes anything.
+- **A record never outlives its surface handle.** Nothing replaces an adaptive
+  surface underneath a layer that holds delta records. An undone crossing
+  keeps its `Adaptive` in the retired set, so its redo brings back the same
+  handle and the stroke records above it still replay. An open document starts
+  with an empty history.
+- **Verified by digest, not bytes.** Tests compare a digest over the exported
+  triangle indices and position bits and check `clay_dynamic_surface_validate`;
+  the serialized surface is not byte-identical after an undo.
+
+**Open boundaries keep the snapshot.** Measured on the pinned engine (ClayCore
+v0.120.1): reverting a record whose stroke reached an open boundary restores
+the exported triangles exactly but leaves a live boundary half-edge whose
+`next` is a dead slot, and `clay_dynamic_surface_validate` fails. So the kind
+of record is decided when a gesture opens: a closed surface
+(`boundary_edges == 0`) records the delta, an open one the surface's bytes, as
+before. A snapshot restore is a new surface identity, so the two kinds are
+not meant to share a layer: a boundary is not expected to appear or vanish
+under the brush, and if one did, the engine refuses the stranded delta with
+`CLAY_ERROR_SNAPSHOT_MISMATCH` before writing anything, so that undo step is
+lost rather than the surface corrupted.
+`claycore`'s `a_revert_at_an_open_boundary_leaves_a_dead_next` pins the
+defect and fails when the engine fixes it, which is the signal to drop the
+fallback.
+
+**Memory.** A delta weighs its `resident_bytes` and a snapshot its length;
+both are spent against the carried history's 256 MB budget
+(`multires::HISTORY_BYTES`), dropped from the oldest end, and both are
+reported in the diagnostics `adaptive surfaces` line as undo steps and bytes,
+since `clay_dynamic_sculptor_memory_ledger` counts no record. Measured for one
+Draw stroke on a closed ball in a release build: 1,917,296 bytes resident for the delta against
+a 1,564,320-byte snapshot at 6,016 faces, and 3,143,008 against 25,426,080 at
+97,792 faces. The delta follows what the stroke reached; the snapshot follows
+the surface.
+
 ## Drawing
 
 Keep a stable GPU allocation per chunk where possible. Track separate
@@ -79,8 +136,11 @@ index build every segment (measured 117 ms at 100,352 triangles, 1.50 s at
 1,002,528) and starting each with an empty dirty set. `claycore` gains
 `DynamicSession`, which owns the boxed surface and its one sculptor, drops them
 in that order, and lends the sculptor only through a closure whose lifetime the
-caller cannot name, so two sessions cannot exchange sculptors. Restoring bytes
-(undo, redo, a dragging verb's replay) makes a new session.
+caller cannot name, so two sessions cannot exchange sculptors. A topology
+delta (#210) is captured and replayed through that same sculptor, so an undo,
+a redo or a dragging verb's replay on a closed surface marks the chunks it
+touched and is patched like a stroke; restoring bytes (the snapshot record an
+open surface keeps) makes a new session and lays the region out again.
 
 **A mirror of the chunks, drained from the dirty set** (`chunked::ChunkMirror`).
 The first drawing, and any new chunk table, copies every chunk; afterwards
@@ -133,6 +193,7 @@ moves: neither `clay_dynamic_surface_copy_chunk` nor
 `clay_surface_view_copy_chunk` copies an attribute, so a chunked colour surface
 would lose its paint — an engine gap. A full rebuild of a Dynamic region costs
 more than the old whole copy (headroom and seam duplicates: 7.9 MB against
-about 3.3 MB at 100k), paid on layout changes rather than per dab. The first
-segment of a gesture serializes the whole surface as its undo record (66 ms at
-100k, 661 ms at 1M), which #210 replaces with the engine's reversible delta.
+about 3.3 MB at 100k), paid on layout changes rather than per dab. On a surface with an open
+boundary the first segment of a gesture still serializes the whole surface as
+its undo record (66 ms at 100k, 661 ms at 1M); a closed surface records the
+engine's reversible delta instead (#210).

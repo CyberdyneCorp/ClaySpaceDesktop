@@ -88,12 +88,12 @@ fn cage_obj(path: &std::path::Path, divisions: usize, half: f32) {
     std::fs::write(path, text).expect("write the cage");
 }
 
-/// A document whose only layer is a hierarchy, `levels` deep over a flat cage.
-fn with_a_hierarchy(who: &str, levels: u32) -> (ClayDocument, LayerKey) {
+/// A document whose active layer is a flat quad cage, as a mesh layer.
+fn with_a_cage(who: &str, divisions: usize) -> (ClayDocument, LayerKey) {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy).expect("a document");
     let path = scratch(who, "obj");
-    cage_obj(&path, 4, 2.0);
+    cage_obj(&path, divisions, 2.0);
     document
         .import_mesh(&path, ImportSettings::default())
         .expect("import the cage");
@@ -107,7 +107,12 @@ fn with_a_hierarchy(who: &str, levels: u32) -> (ClayDocument, LayerKey) {
         .map(|layer| layer.key)
         .expect("the cage is a mesh layer");
     document.set_active_layer(mesh).expect("activate the cage");
+    (document, mesh)
+}
 
+/// A document whose only layer is a hierarchy, `levels` deep over a flat cage.
+fn with_a_hierarchy(who: &str, levels: u32) -> (ClayDocument, LayerKey) {
+    let (mut document, _) = with_a_cage(who, 4);
     let settings = ConversionSettings::default();
     let key = document
         .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
@@ -787,12 +792,12 @@ fn a_level_that_does_not_fit_is_refused_and_costs_nothing() {
     let ModelError::Conversion(refusal) = refusal else {
         panic!("a refusal a sculptor can act on, not an engine result code: {refusal}");
     };
-    let (held_bytes, peak_bytes, budget_bytes) = match refusal {
+    let (held_bytes, level_bytes, budget_bytes) = match refusal {
         Refusal::LevelOverBudget {
             held_bytes,
-            peak_bytes,
+            level_bytes,
             budget_bytes,
-        } => (held_bytes, peak_bytes, budget_bytes),
+        } => (held_bytes, level_bytes, budget_bytes),
         other => panic!("the budget is what refused, and it says so: {other}"),
     };
     assert!(
@@ -801,11 +806,10 @@ fn a_level_that_does_not_fit_is_refused_and_costs_nothing() {
          several levels deep is not nothing"
     );
     assert!(
-        held_bytes + peak_bytes > budget_bytes,
-        "and it is the *peak* during the build that is stated rather than what \
-         would remain after it, because on a constrained machine the \
-         high-water mark is what ends the session: {peak_bytes} against \
-         {budget_bytes}"
+        held_bytes + level_bytes > budget_bytes,
+        "and it is what the level holds at its worst — the build peak or the \
+         level drawn, whichever is more — that is stated rather than what \
+         would remain after it: {level_bytes} against {budget_bytes}"
     );
 
     let held = levels(&document, key);
@@ -1939,5 +1943,255 @@ fn baking_reports_what_it_drops() {
     assert!(
         document.hierarchy_checksum(baked).is_none(),
         "and it is a mesh now: nothing under it to checksum"
+    );
+}
+
+// -- Create Multires, priced before it is built (#214) ----------------------
+//
+// A hierarchy made in one go from a fixed mesh: the plan states what the
+// document holds, what the hierarchy would add and the limit before anything
+// is allocated, and the build is held to it.
+
+use clayspace_model::{HierarchyPlan, HierarchySettings};
+
+/// The cage sizes the flow is measured at: small, the benchmark's own, and a
+/// retopology-sized one.
+const CAGES: [usize; 3] = [8, 16, 32];
+
+fn plan(document: &mut ClayDocument) -> HierarchyPlan {
+    document.hierarchy_plan().expect("a quad cage has a plan")
+}
+
+fn create(
+    document: &mut ClayDocument,
+    levels: u32,
+    in_place: bool,
+) -> Result<LayerKey, ModelError> {
+    document.create_hierarchy(HierarchySettings { levels, in_place })
+}
+
+/// Asking what Create Multires would cost builds nothing the sculptor can
+/// see: no layer, no history entry, and the document's ledger where it was.
+/// The first level is the engine's own quote of the cage.
+#[test]
+fn create_multires_states_its_price_before_anything_is_built() {
+    let (mut document, _) = with_a_cage("plan", 16);
+    let layers = document.scene().layers.len();
+    let depth = document.history().depth;
+    let held = document.memory().expect("a ledger").total;
+
+    let priced = plan(&mut document);
+    assert_eq!(priced.held_bytes, held, "what the document holds now");
+    assert!(priced.cage_bytes > 0, "the cage is weighed, not assumed");
+    assert_eq!(priced.budget_bytes, document.hierarchy_budget());
+    assert_eq!(document.scene().layers.len(), layers);
+    assert_eq!(document.history().depth, depth);
+    assert_eq!(document.memory().expect("a ledger").total, held);
+
+    // The quote for level 1 is what the engine says once the cage exists.
+    let settings = ConversionSettings::default();
+    document
+        .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
+        .expect("a quad grid is a cage");
+    assert_eq!(
+        Some(priced.levels[0]),
+        document.subdivision_cost(),
+        "level 1 is quoted, not projected"
+    );
+}
+
+/// Over budget, Create Multires is refused before anything is built, and the
+/// sentence names what the document holds, what the hierarchy adds and the
+/// limit. One level less fits and is built.
+#[test]
+fn a_hierarchy_over_budget_is_refused_naming_usage_cost_and_limit() {
+    let (mut document, _) = with_a_cage("over-budget-create", 16);
+    let priced = plan(&mut document);
+    let budget = priced.held_bytes + priced.hierarchy_bytes(3) - 1;
+    document.set_hierarchy_budget(budget);
+    let layers = document.scene().layers.len();
+    let depth = document.history().depth;
+
+    let refused = create(&mut document, 3, false).expect_err("one byte over");
+    let ModelError::Conversion(refusal) = refused else {
+        panic!("a refusal a sculptor can act on: {refused}");
+    };
+    assert_eq!(
+        refusal,
+        Refusal::HierarchyOverBudget {
+            levels: 3,
+            held_bytes: priced.held_bytes,
+            hierarchy_bytes: priced.hierarchy_bytes(3),
+            budget_bytes: budget,
+        }
+    );
+    assert!(refusal.to_string().contains("MB"), "{refusal}");
+    assert_eq!(document.scene().layers.len(), layers, "nothing was built");
+    assert_eq!(document.history().depth, depth, "and nothing was recorded");
+
+    let made = create(&mut document, 2, false).expect("two levels fit");
+    assert_eq!(levels(&document, made).count, 3);
+}
+
+/// Create Multires makes a hierarchy as deep as asked beside the mesh it
+/// read, lands both numbers on the top level, and is one undo step.
+#[test]
+fn create_multires_is_one_undo_and_lands_on_the_top_level() {
+    let (mut document, mesh) = with_a_cage("create-undo", 8);
+    let layers = document.scene().layers.len();
+    let depth = document.history().depth;
+
+    let made = create(&mut document, 2, false).expect("a hierarchy");
+    let layer = document.scene().layer(made).cloned().expect("the new row");
+    assert_eq!(layer.representation, Representation::Multires);
+    let held = levels(&document, made);
+    assert_eq!((held.count, held.sculpt, held.display), (3, 2, 2));
+    assert!(
+        document.scene().layer(mesh).is_some(),
+        "the mesh stays: it is the way back"
+    );
+    assert_eq!(document.scene().layers.len(), layers + 1);
+    assert_eq!(document.history().depth, depth + 1, "one entry, not three");
+
+    assert!(SculptModel::undo(&mut document).expect("undo"));
+    assert_eq!(document.scene().layers.len(), layers);
+    assert_eq!(document.history().depth, depth);
+}
+
+/// In place, the hierarchy takes the mesh's row and one undo brings the mesh
+/// back.
+#[test]
+fn create_multires_in_place_replaces_the_mesh_and_undoes_to_it() {
+    let (mut document, mesh) = with_a_cage("create-in-place", 8);
+    let layers = document.scene().layers.len();
+
+    let made = create(&mut document, 1, true).expect("a hierarchy");
+    assert_eq!(document.scene().layers.len(), layers);
+    assert!(document.scene().layer(mesh).is_none(), "the mesh left");
+    assert_eq!(levels(&document, made).count, 2);
+
+    assert!(SculptModel::undo(&mut document).expect("undo"));
+    assert!(document.scene().layer(mesh).is_some(), "and came back");
+    assert_eq!(document.scene().layers.len(), layers);
+}
+
+/// Only a mesh becomes a hierarchy, and the refusal says what it starts from.
+#[test]
+fn create_multires_starts_from_a_mesh() {
+    let (mut document, _) = with_a_hierarchy("create-from-hierarchy", 1);
+    assert!(matches!(
+        document.hierarchy_plan(),
+        Err(ModelError::Conversion(Refusal::WrongSource {
+            needs: Representation::Mesh,
+            active: Representation::Multires,
+        }))
+    ));
+    assert!(create(&mut document, 1, false).is_err());
+}
+
+/// The projection never undercuts the engine: at three cage sizes, every
+/// level the plan projected is at least what the engine quotes once the
+/// level below it exists, and within 10% of it.
+#[test]
+fn the_projection_never_undercuts_the_engine() {
+    let mut widest = 1.0f64;
+    for divisions in CAGES {
+        let (mut document, _) = with_a_cage(&format!("projection-{divisions}"), divisions);
+        let priced = plan(&mut document);
+        let settings = ConversionSettings::default();
+        document
+            .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
+            .expect("a quad grid is a cage");
+        for projected in &priced.levels {
+            let quoted = document.subdivision_cost().expect("the engine prices it");
+            assert_eq!(quoted.level, projected.level);
+            assert_eq!(quoted.faces, projected.faces, "four quads of one");
+            let level = quoted.level;
+            for (name, ours, theirs) in [
+                (
+                    "persistent",
+                    projected.persistent_bytes,
+                    quoted.persistent_bytes,
+                ),
+                ("peak", projected.peak_bytes, quoted.peak_bytes),
+                ("resident", projected.resident_bytes, quoted.resident_bytes),
+                ("vertices", projected.vertices, quoted.vertices),
+            ] {
+                widest = widest.max(ours as f64 / theirs as f64);
+                assert!(
+                    ours >= theirs && ours as f64 <= theirs as f64 * 1.10,
+                    "{divisions}² cage, level {level}, {name}: projected {ours} \
+                     against the engine's {theirs}"
+                );
+            }
+            document
+                .apply_multires_level_op(MultiresLevelOp::AddLevel)
+                .expect("subdivide");
+        }
+    }
+    println!("the projection is at most {widest:.4} times the engine's quote");
+}
+
+/// A plan that fits is built without being refused half way up — a budget of
+/// exactly what it quoted is enough — and the drawn hierarchy holds no more
+/// than it quoted, at three cage sizes.
+#[test]
+fn a_plan_that_fits_is_built_and_holds_no_more_than_it_quoted() {
+    for divisions in CAGES {
+        let (mut document, _) = with_a_cage(&format!("fits-{divisions}"), divisions);
+        let priced = plan(&mut document);
+        let quoted = priced.hierarchy_bytes(4);
+        document.set_hierarchy_budget(priced.held_bytes + quoted);
+
+        let made = create(&mut document, 4, false).expect("the plan fits, so the build does");
+        assert_eq!(levels(&document, made).display, 4);
+        assert!(!drawn(&mut document).is_empty(), "the top level is drawn");
+        let added = document.memory().expect("a ledger").total - priced.held_bytes;
+        println!("{divisions}² cage, four levels: quoted {quoted}, held once drawn {added}");
+        assert!(
+            added <= quoted,
+            "{divisions}² cage: the hierarchy holds {added} once drawn, past the \
+             {quoted} it was quoted at"
+        );
+    }
+}
+
+/// The price of a level is what it holds once drawn, not its build peak
+/// alone: measured, a level's first draw grows the document by more than the
+/// peak the level used to be priced at, and by no more than it is charged now.
+#[test]
+fn a_level_is_charged_at_what_it_holds_once_drawn() {
+    let (mut document, _) = with_a_cage("charged", 16);
+    let settings = ConversionSettings::default();
+    document
+        .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
+        .expect("a quad grid is a cage");
+    for _ in 0..3 {
+        document
+            .apply_multires_level_op(MultiresLevelOp::AddLevel)
+            .expect("subdivide");
+    }
+    let _ = drawn(&mut document);
+    let cost = document.subdivision_cost().expect("the engine prices it");
+    let before = document.memory().expect("a ledger").total;
+    document
+        .apply_multires_level_op(MultiresLevelOp::AddLevel)
+        .expect("level 4");
+    let _ = drawn(&mut document);
+    let grew = document.memory().expect("a ledger").total - before;
+    println!(
+        "level 4: peak {}, charged {}, the document grew by {grew}",
+        cost.peak_bytes,
+        cost.charged_bytes()
+    );
+    assert!(
+        grew > cost.peak_bytes,
+        "the build peak alone understated the level: {grew} against {}",
+        cost.peak_bytes
+    );
+    assert!(
+        grew <= cost.charged_bytes(),
+        "and what it is charged now does not: {grew} against {}",
+        cost.charged_bytes()
     );
 }

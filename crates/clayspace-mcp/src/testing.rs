@@ -220,6 +220,8 @@ impl Session for FakeSession {
                 active_layer: Some(1),
                 selected_object: None,
                 soloed: None,
+                hierarchy_plan: None,
+                hierarchy_plan_refused: None,
             });
         }
         if query.tool {
