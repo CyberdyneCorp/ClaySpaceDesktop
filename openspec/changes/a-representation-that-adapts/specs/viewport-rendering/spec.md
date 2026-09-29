@@ -28,6 +28,22 @@ not upload surface data.
 - **WHEN** a Dynamic stroke moves chunks without growing them
 - **THEN** no chunk buffer is reallocated
 
+### Requirement: The polyframe follows Dynamic chunk patches
+While the polyframe is on, a Dynamic stroke that the carried buffer can take as
+a chunk patch SHALL be drawn by that patch rather than a rebuild. The
+polyframe's lines for a chunked Dynamic region SHALL be laid out in the same
+chunk slots as its triangles and rewritten with them, and the patched lines
+SHALL draw exactly the edges a fresh derivation over a rebuild draws. A patch
+whose lines cannot follow SHALL still be declined, writing nothing.
+
+#### Scenario: A stroke under the polyframe is patched
+- **WHEN** a Dynamic stroke is drawn with the polyframe on
+- **THEN** the renderer takes the chunk patch and uploads the patched triangles and their slots' lines, a fraction of a rebuild
+
+#### Scenario: The patched polyframe matches a rebuild
+- **WHEN** the polyframe lines of a patched Dynamic region are compared with those of a fresh build of the same surface
+- **THEN** they draw the same edges, and the rendered frames do not differ
+
 ### Requirement: A Dynamic surface keeps one sculptor for its life
 A Dynamic layer SHALL hold its surface together with one sculptor for as long
 as the surface lives, so the spatial index is not rebuilt per stroke segment
