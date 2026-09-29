@@ -8,12 +8,21 @@ every undo after it slower (61 ms to 3.6 s at the cache's spacing, 61 ms to
 760 ms at the spacing the bake now uses). See design.md, *Measured after
 implementation*. `ClayDocument::set_compaction_floor(CHAIN_FLOOR)` turns it on;
 nothing in the application calls it, and the tripwire
-`a_baked_patch_still_refills_dearer_than_its_chain` fails the day it should.
+`a_baked_patch_has_no_decisive_undo_win` fails the day it should.
 
 What would let this change close is upstream, and is either half of a product:
 a baked volume that refills near the chain's per-brick price, or an undo whose
 reach for a grab is the grab's support rather than its node's whole bound. The
 unchecked tasks below are the ones that only make sense once one of those holds.
+
+**The second half landed in ClayCore v0.120.1, and it did not reopen this.**
+The undo of a grab now refills the head links' balls, not the node's bound.
+`measure-the-undo-series-by-factor` re-ran the twenty-edit series
+(`tests/undo_series.rs`): 126 to 144 bricks per undo, flat, and 2.0–2.3x from
+the first undo to the twentieth, all of it the price of one brick over a longer
+chain. The collapse would have to lower that price, and an undo over a baked
+patch still measures 4.4x one over the chain on this pin. The floor stays at
+zero.
 
 ## 1. Calibrate the floor, before anything is wired
 

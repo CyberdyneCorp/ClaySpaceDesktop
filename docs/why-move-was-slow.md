@@ -156,13 +156,26 @@ per brick is the whole story: an undo at gesture 11 went from 61 ms to
 **3.6 s** baked at the cache's spacing, and to 760 ms at twice it. The chain
 stays bounded; the cost it stood for does not, over any session measured. So
 the mechanism ships with its floor at zero, and
-`a_baked_patch_still_refills_dearer_than_its_chain` fails the day that stops
-being true (`crates/clayspace-engine/src/compaction.rs` has the series).
+`a_baked_patch_has_no_decisive_undo_win` fails the day that stops being true
+(`crates/clayspace-engine/src/compaction.rs` has the series).
 
 What would actually bound undo is upstream and is either half of that product:
 a sampled volume that refills near an analytic item's price, or an undo bound
 for a deformer append that is the deformer's support rather than its node's —
 and the second would help the uncollapsed chain just as much.
+
+**The second half landed in ClayCore v0.120.1.** The undo of a grab now refills
+the head links' balls instead of the node's whole bound, and the app picked it
+up with no code change. `crates/clayspace-engine/tests/undo_series.rs` re-runs
+the audit's twenty-edit series and keeps the two factors apart. On the starting
+sphere, mirrored Move at size 0.12, Mac release, an undo re-meshed 126 bricks
+at the first gesture and 144 at the twentieth. Its time went from 0.30 ms to
+0.81–0.94 ms, 2.0–2.3x over the last three against the first three. All of that
+growth is the price of one brick over a longer chain (2.4 µs to about 6 µs),
+which is the only part a collapse could claim. A baked patch still undoes at
+4.4x the chain, so it cannot claim it either. A 60-sample Snake Hook pull, timed
+the same way, measured 0.42 ms a segment early and about 1.0 ms late: 2.3–2.5x,
+where the audit saw 3x at 24–72 ms on a larger layer.
 
 ### And one hardcoded literal was making it worse
 

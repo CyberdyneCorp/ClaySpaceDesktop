@@ -82,3 +82,17 @@ Everything the design needed from the engine held, and the decision it rested on
 A baked patch is a sampled volume, and a refill over one costs about sixty times what it costs over the analytic chain. An undo refills what the engine reports it reached, which for a grab hung off the starting form is the form's whole bound — thousands of bricks with or without the collapse — so the per-brick price is the whole of the difference, and the collapse raises it. At the cache's own spacing the baked band also equals the cache's band exactly, and a collapsed sphere tripled its surface bricks; baking at twice the spacing fixes that and costs a tenth as much afterwards, and it is still a loss against the chain over any session length measured. The sixty is a debug-host figure: Linux CI in a release build measured the same undo at 1.9x the chain, so the tripwire asserts the direction (above 1.25x) rather than the debug magnitude.
 
 **So the mechanism ships with its floor at zero**, the Optimize refusal stays, and a tripwire test fails when an undo over a baked patch comes within 2x of one over the chain. The two things that would change the verdict are both upstream: a sampled volume that refills near an analytic item's per-brick cost, or an undo bound for a deformer append that is the deformer's support rather than its node's whole bound. The second would help the uncollapsed chain as much as the collapsed one, and is the more direct cure for the undo cost the audit measured.
+
+## Re-measured on v0.120.1
+
+The engine delivered the second of the two conditions above. `clay_document_undo_bound` now reports a Move grab as the head links' balls, clamped into the node bound, instead of the whole node dilated by every earlier pull. `ClayDocument::undo` already refilled from that bound, so the application picked it up with no code change.
+
+The twenty-edit series is now a regression test (`crates/clayspace-engine/tests/undo_series.rs`, change `measure-the-undo-series-by-factor`), and it records the two factors apart. Starting sphere, one patch, mirrored Move at brush size 0.12, Mac release, four runs:
+
+| | gesture 1 | gesture 20 | last three against first three |
+|---|---:|---:|---:|
+| undo | 0.30–0.32 ms | 0.81–0.94 ms | 2.00–2.31x |
+| bricks re-meshed | 126 | 144 | 1.04x |
+| price of a brick | 2.4–2.5 µs | 5.6–6.5 µs | 1.93–2.24x |
+
+The region no longer grows. What is left is the price of one brick over a longer chain, and a collapse could be credited only with that part. It cannot claim it on this pin: `a_baked_patch_has_no_decisive_undo_win` measures an undo over a baked patch at 4.4x one over the chain. So the floor stays at zero. The first condition, a sampled volume that refills near an analytic item's price, is still the one that would change the verdict.
