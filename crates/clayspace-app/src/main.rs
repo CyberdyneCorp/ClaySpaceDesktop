@@ -494,8 +494,12 @@ struct App {
     /// keeps "not at all" the usual answer.
     mesh_revision: Option<u64>,
     /// What the viewport's UV preview was last built for: the mesh revision,
-    /// the active layer when it is visible, and the display asked for.
-    uv_preview_key: Option<(u64, Option<LayerKey>, clayspace_model::UvDisplay)>,
+    /// the active layer when it is visible, the display asked for, and the
+    /// held retopology preview's revision.
+    uv_preview_key: Option<(u64, Option<LayerKey>, clayspace_model::UvDisplay, u64)>,
+    /// The layout the UV square draws, when one is shown: the active layer's
+    /// or the held retopology preview's, while a UV display is chosen.
+    uv_layout: Option<clayspace_model::UvLayout>,
     /// What the adaptive surfaces have sent to the viewport this session,
     /// per upload of the carried buffer, for the diagnostics report.
     adaptive_uploads: clayspace_model::AdaptiveUploads,
@@ -923,6 +927,7 @@ impl App {
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
             uv_preview_key: None,
+            uv_layout: None,
             adaptive_uploads: clayspace_model::AdaptiveUploads::default(),
             carried_build: None,
             cage_revision: None,
@@ -2140,6 +2145,9 @@ impl App {
         // layer key could name a row of the new one, so the result is dropped
         // with the runner rather than checked when it lands.
         self.grid_to_field = JobRunner::new();
+        // A held retopology preview belongs to the document that went, and
+        // was never part of it: dropped, with nothing to warn about.
+        self.retopo.forget_document();
         self.scene.refresh();
         self.mask.refresh();
         self.armature.refresh();
@@ -2697,13 +2705,14 @@ impl App {
         graphics.renderer.set_active_subtool(cued);
     }
 
-    /// Shows the active layer's UV layout on it, as the UV display asks.
+    /// Shows the active layer's UV layout on it, as the UV display asks — or,
+    /// while a retopology is held, the held result in place of its source.
     ///
     /// Its own pass for the reason the subtool cue has one: choosing a display
     /// or a layer changes no triangle. Rebuilt only when the mesh revision,
-    /// the active layer or the display moves — the preview re-reads the
-    /// layer's triangles and UVs and finds its islands, which is a whole-mesh
-    /// walk that a resting frame must not pay for.
+    /// the active layer, the display or the held preview moves — the preview
+    /// re-reads the layer's triangles and UVs and finds its islands, which is
+    /// a whole-mesh walk that a resting frame must not pay for.
     fn sync_uv_preview(&mut self) {
         let active = self
             .scene
@@ -2713,23 +2722,40 @@ impl App {
             .filter(|layer| layer.visible)
             .map(|layer| layer.key);
         let revision = self.document.with(|document| document.mesh_revision());
-        let key = (revision, active, *self.uv.display().get());
+        let held_revision = self.retopo.preview().revision();
+        let key = (revision, active, *self.uv.display().get(), held_revision);
         if self.uv_preview_key == Some(key) {
             return;
         }
         self.uv_preview_key = Some(key);
-        // Whether the active layer carries a layout moves with the same
-        // things — a retopology landing is a revision, not a command.
-        self.uv.refresh();
+        let held = self.retopo.preview().get().clone();
+        // Whether there is a layout to show moves with the same things — a
+        // retopology landing is a revision, not a command — and a held preview
+        // decides it while one is held.
+        self.uv
+            .hold_preview(held.as_ref().map(|result| !result.uvs.is_empty()));
         let display = self.uv.shown_display();
-        let preview = self.uv_preview_of(active.filter(|_| display.is_on()));
+        let (layer, held) = match held {
+            Some(result) => (None, self.held_preview_of(&result).map(|p| (p, result))),
+            None => (self.uv_preview_of(active.filter(|_| display.is_on())), None),
+        };
+        self.uv_layout = layer
+            .as_ref()
+            .or(held.as_ref().map(|(preview, _)| preview))
+            .filter(|preview| display.is_on() && !preview.uvs.is_empty())
+            .map(clayspace_model::UvLayout::of);
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         let gpu = graphics.gpu.clone();
         graphics
             .renderer
-            .set_uv_preview(&gpu, preview.as_ref().map(|preview| (preview, display)));
+            .set_uv_preview(&gpu, layer.as_ref().map(|preview| (preview, display)));
+        graphics.renderer.set_retopo_preview(
+            &gpu,
+            held.as_ref()
+                .map(|(preview, result)| (preview, result.edges.as_slice(), display)),
+        );
     }
 
     /// One layer's UVs as the preview draws them; `None` for no layer, a layer
@@ -2738,6 +2764,24 @@ impl App {
         let layer = layer?;
         match self.document.with(|document| document.uv_preview(layer)) {
             Ok(preview) => preview,
+            Err(e) => {
+                eprintln!("{}: {e}", self.strings.log_uv_preview);
+                None
+            }
+        }
+    }
+
+    /// A held retopology as the viewport draws it, standing where accepting
+    /// it would; `None` when its source cannot be found.
+    fn held_preview_of(
+        &self,
+        result: &clayspace_model::RetopoResult,
+    ) -> Option<clayspace_model::UvPreview> {
+        match self
+            .document
+            .with(|document| document.retopo_preview(result))
+        {
+            Ok(preview) => Some(preview),
             Err(e) => {
                 eprintln!("{}: {e}", self.strings.log_uv_preview);
                 None
@@ -5506,7 +5550,16 @@ impl App {
             | Command::SetRetopoTool(_)
             | Command::EditRetopo(_)
             | Command::RunRetopology
-            | Command::CancelRetopology => self.retopo.dispatch(command),
+            | Command::CancelRetopology
+            | Command::DiscardRetopology => self.retopo.dispatch(command),
+            // Placing the held result is what a landed job used to do, and it
+            // is banked the same way and under the same name, so the history
+            // cannot tell an accepted preview from the publish it replaces.
+            Command::AcceptRetopology => {
+                let before = self.engine_undo_depth();
+                self.retopo.dispatch(command);
+                self.after_background_publish(Command::RunRetopology.label(), before);
+            }
             Command::SetUvSettings(_)
             | Command::RunUvAtlas
             | Command::CancelUvAtlas
@@ -5878,6 +5931,7 @@ impl App {
             retopo_guidance: self.retopo.guidance().get(),
             retopo_draft: self.retopo.guide_draft().get(),
             retopo_outcome: self.retopo.last().get().clone(),
+            retopo_pending: self.retopo.is_holding(),
             retopo_unavailable: localized_vm_text(
                 self.strings,
                 self.retopo.unavailable().get().as_deref(),
@@ -5957,6 +6011,7 @@ impl App {
             voxel_blur: self.document.with(|d| d.voxel_blur()),
             uv_display: *self.uv.display().get(),
             carries_uvs: *self.uv.carries_uvs().get(),
+            uv_layout: self.uv_layout.as_ref(),
             curve: self.curve.state().get().clone(),
             curve_radius: *self.curve.radius().get(),
             lattice: self.lattice.state().get().clone(),
@@ -7437,11 +7492,14 @@ impl App {
             state.deform = Some(report::deform_state(&self.deform));
         }
         if query.outcomes {
-            state.outcomes = Some(report::outcome_state(
-                self.remesh_outcome.as_ref(),
-                self.retopo.last().get().as_ref(),
-                self.crossing_outcome,
-            ));
+            state.outcomes = Some(
+                report::outcome_state(
+                    self.remesh_outcome.as_ref(),
+                    self.retopo.last().get().as_ref(),
+                    self.crossing_outcome,
+                )
+                .with_retopology_pending(self.retopo.is_holding()),
+            );
         }
         if query.presentation {
             state.presentation = Some(
@@ -7454,7 +7512,8 @@ impl App {
                     self.rigging,
                     self.skin_preview,
                 )
-                .with_uv_display(self.uv.shown_display()),
+                .with_uv_display(self.uv.shown_display())
+                .with_uv_layout(self.uv_layout.as_ref()),
             );
         }
         if query.references {

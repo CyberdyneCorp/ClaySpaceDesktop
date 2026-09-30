@@ -516,6 +516,8 @@ impl SculptViewModel {
             | Command::EditRetopo(_)
             | Command::RunRetopology
             | Command::CancelRetopology
+            | Command::AcceptRetopology
+            | Command::DiscardRetopology
             | Command::SetUvSettings(_)
             | Command::RunUvAtlas
             | Command::CancelUvAtlas

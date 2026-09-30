@@ -114,6 +114,11 @@ pub(super) fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
         uv_control(ui, state, queue);
         conform_control(ui, state, queue);
         bake_control(ui, state, queue);
+    } else if state.retopo_pending {
+        // A held preview is answered wherever the sculptor is: an agent can
+        // retopologise a field or a grid, and the sculptor can choose another
+        // layer while the preview waits, and neither may leave it unanswerable.
+        retopo_preview(ui, state, queue);
     }
     // And the hierarchy's: a new pass, what the stack costs, and why the
     // composition controls are refusing while the pointer is down. Under the
@@ -1912,6 +1917,58 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
     if let Some(outcome) = &state.retopo_outcome {
         retopo_uv_outcome(ui, s, &outcome.uv);
     }
+    if state.retopo_pending {
+        retopo_preview(ui, state, queue);
+    }
+}
+
+/// Where the retopology preview's Accept button was drawn, for a test to
+/// press it.
+pub fn retopo_accept_button_id() -> egui::Id {
+    egui::Id::new("retopo-accept")
+}
+
+/// Where its Discard button was drawn.
+pub fn retopo_discard_button_id() -> egui::Id {
+    egui::Id::new("retopo-discard")
+}
+
+/// A finished retopology held for a decision: what it is, the two answers,
+/// and its layout where it carries one.
+///
+/// The report above is the preview's; this says that it is not in the
+/// document yet, and is the only place the decision can be made from.
+fn retopo_preview(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(s.retopo_preview_heading).size(type_scale::LABEL));
+    ui.label(
+        egui::RichText::new(s.retopo_preview_hint)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal(|ui| {
+        for (label, id, command) in [
+            (
+                s.retopo_accept,
+                retopo_accept_button_id(),
+                Command::AcceptRetopology,
+            ),
+            (
+                s.retopo_discard,
+                retopo_discard_button_id(),
+                Command::DiscardRetopology,
+            ),
+        ] {
+            let button = ui.button(label);
+            ui.ctx()
+                .memory_mut(|memory| memory.data.insert_temp(id, button.rect));
+            if button.clicked() {
+                queue.push(command);
+            }
+        }
+    });
+    super::uv_layout::uv_display_controls(ui, state, queue);
 }
 
 fn retopo_guidance_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {

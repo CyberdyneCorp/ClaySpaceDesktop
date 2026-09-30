@@ -27,6 +27,8 @@ struct Subtool {
     placed: Vec<RetopoResult>,
     in_place: Vec<bool>,
     guidance: RetopoGuidance,
+    /// How many times a recorded source was forgotten unplaced.
+    discarded: u32,
 }
 
 struct Doubles {
@@ -82,6 +84,10 @@ impl RetopoModel for Doubles {
         subtool.placed.push(result.clone());
         subtool.in_place.push(settings.in_place);
         Ok(())
+    }
+
+    fn discard_retopology(&mut self) {
+        self.subtool.lock().expect("not poisoned").discarded += 1;
     }
 }
 
@@ -202,6 +208,13 @@ fn settle(vm: &mut RetopoViewModel) {
     panic!("the retopology never finished");
 }
 
+/// Waits for the job to land and accepts the preview it leaves.
+fn settle_and_accept(vm: &mut RetopoViewModel) {
+    settle(vm);
+    assert!(vm.is_holding(), "the landed run left no preview to accept");
+    vm.dispatch(&Command::AcceptRetopology);
+}
+
 #[test]
 fn the_source_is_read_here_and_the_result_is_placed_here() {
     let (mut vm, subtool) = fixture(Double {
@@ -216,7 +229,7 @@ fn the_source_is_read_here_and_the_result_is_placed_here() {
         ..RetopoSettings::default()
     }));
     vm.dispatch(&Command::RunRetopology);
-    settle(&mut vm);
+    settle_and_accept(&mut vm);
 
     let subtool = subtool.lock().expect("not poisoned");
     assert_eq!(
@@ -369,7 +382,9 @@ fn a_retopo_run_is_a_job() {
         vm.jobs().progress().get().is_none(),
         "progress outlived the job"
     );
-    assert_eq!(subtool.lock().expect("not poisoned").placed.len(), 1);
+    // Landed, and held rather than placed.
+    assert!(vm.is_holding());
+    assert!(subtool.lock().expect("not poisoned").placed.is_empty());
 }
 
 /// A source that moved while the job ran gets nothing.
@@ -419,7 +434,7 @@ fn a_run_lands_where_it_was_asked_to() {
         ..RetopoSettings::default()
     }));
     release.send(()).expect("the worker is waiting");
-    settle(&mut vm);
+    settle_and_accept(&mut vm);
 
     assert_eq!(
         subtool.lock().expect("not poisoned").in_place,
@@ -443,7 +458,7 @@ fn uv_generation_is_optional() {
     // Off unless asked for: the default run neither asks for nor places UVs.
     let (mut vm, subtool) = fixture(plain(None));
     vm.dispatch(&Command::RunRetopology);
-    settle(&mut vm);
+    settle_and_accept(&mut vm);
     {
         let subtool = subtool.lock().expect("not poisoned");
         assert!(subtool.placed[0].uvs.is_empty(), "UVs nobody asked for");
@@ -460,7 +475,7 @@ fn uv_generation_is_optional() {
         ..RetopoSettings::default()
     }));
     vm.dispatch(&Command::RunRetopology);
-    settle(&mut vm);
+    settle_and_accept(&mut vm);
     let subtool = subtool.lock().expect("not poisoned");
     assert_eq!(subtool.placed.len(), 2);
     assert_eq!(
@@ -480,6 +495,10 @@ fn a_failed_uv_run_leaves_the_mesh() {
     }));
     vm.dispatch(&Command::RunRetopology);
     settle(&mut vm);
+    // The reason is said while the preview is held, before anything is placed.
+    let held = vm.notice().get().clone().expect("the failure is reported");
+    assert!(held.contains("o atlas recusou a malha"), "{held}");
+    vm.dispatch(&Command::AcceptRetopology);
 
     // The quads are still placed, without UVs.
     let subtool = subtool.lock().expect("not poisoned");
@@ -492,11 +511,6 @@ fn a_failed_uv_run_leaves_the_mesh() {
     // And the reason is stated, never a UV-carrying success.
     let outcome = vm.last().get().clone().expect("an outcome");
     assert!(!outcome.uv.carries_uvs());
-    let notice = vm.notice().get().clone().expect("the failure is reported");
-    assert!(
-        notice.contains("o atlas recusou a malha"),
-        "the notice does not say why: {notice}"
-    );
 }
 
 #[test]
@@ -526,4 +540,194 @@ fn guidance_edits_stay_out_of_sculpt_geometry_and_are_undoable() {
     vm.dispatch(&Command::EditRetopo(RetopoEdit::Redo));
     assert_eq!(vm.guidance().get().guides.len(), 1);
     assert_eq!(subtool.lock().unwrap().revision, before_revision);
+}
+
+// -- the held preview ---------------------------------------------------------
+
+/// A landed run is held, not placed, and accepting it places exactly the
+/// result the job returned — the same call, with the same settings, that
+/// placing it on landing made.
+#[test]
+fn a_landed_run_is_held_until_it_is_accepted() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::SetRetopoSettings(RetopoSettings {
+        target_quads: 640,
+        uv: Some(UvSettings::default()),
+        ..RetopoSettings::default()
+    }));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+
+    let held = vm.preview().get().clone().expect("the result is held");
+    assert!(
+        subtool.lock().unwrap().placed.is_empty(),
+        "placed on landing"
+    );
+    assert!(
+        held.uvs.len() == held.positions.len(),
+        "the layout is held too"
+    );
+    assert!(
+        vm.last().get().is_some(),
+        "the report waits with the preview"
+    );
+
+    vm.dispatch(&Command::AcceptRetopology);
+    let subtool = subtool.lock().unwrap();
+    assert_eq!(subtool.placed, vec![(*held).clone()]);
+    assert_eq!(subtool.in_place, vec![false]);
+    assert_eq!(subtool.discarded, 0);
+    assert!(vm.preview().get().is_none() && !vm.is_holding());
+    assert_eq!(*vm.notice().get(), None);
+    assert_eq!(
+        vm.last().get().as_ref(),
+        Some(&held.outcome),
+        "the accepted result's report went with the preview"
+    );
+}
+
+/// Discarding places nothing and forgets the source the document recorded,
+/// so the result cannot be placed afterwards.
+#[test]
+fn a_discarded_preview_places_nothing() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    let revision = vm.preview().revision();
+
+    vm.dispatch(&Command::DiscardRetopology);
+    assert!(vm.preview().get().is_none() && !vm.is_holding());
+    assert!(
+        vm.preview().revision() > revision,
+        "the viewport was not told"
+    );
+    assert_eq!(*vm.notice().get(), None);
+    // Nor is it reported: left behind, the held report would read as a
+    // placed result.
+    assert!(
+        vm.last().get().is_none(),
+        "the discarded result is still reported"
+    );
+
+    // And accepting afterwards finds nothing to place.
+    vm.dispatch(&Command::AcceptRetopology);
+    let subtool = subtool.lock().unwrap();
+    assert!(subtool.placed.is_empty());
+    assert_eq!(subtool.discarded, 1);
+    assert!(vm.notice().get().is_some(), "an empty accept said nothing");
+}
+
+/// Accept and discard with nothing held are refused aloud, so an agent does
+/// not read an answer as an action taken.
+#[test]
+fn accept_or_discard_with_nothing_held_is_refused() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::AcceptRetopology);
+    assert!(vm
+        .notice()
+        .get()
+        .as_deref()
+        .is_some_and(|n| n.contains("aceite")));
+    vm.dispatch(&Command::DiscardRetopology);
+    assert!(vm
+        .notice()
+        .get()
+        .as_deref()
+        .is_some_and(|n| n.contains("descartada")));
+    let subtool = subtool.lock().unwrap();
+    assert!(subtool.placed.is_empty());
+    assert_eq!(subtool.discarded, 0);
+}
+
+/// A stroke, an undo or a redo that moves the source drops the preview on the
+/// next frame, with a notice, and there is nothing left to accept.
+#[test]
+fn a_preview_whose_source_moves_is_dropped() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    assert!(vm.is_holding());
+
+    subtool.lock().unwrap().revision += 1;
+    vm.poll();
+    assert!(!vm.is_holding() && vm.preview().get().is_none());
+    assert!(
+        vm.last().get().is_none(),
+        "the dropped result is still reported"
+    );
+    assert!(
+        vm.notice()
+            .get()
+            .as_deref()
+            .is_some_and(|n| n.contains("mudou")),
+        "the drop was not said: {:?}",
+        vm.notice().get()
+    );
+    vm.dispatch(&Command::AcceptRetopology);
+    let subtool = subtool.lock().unwrap();
+    assert!(subtool.placed.is_empty());
+    assert_eq!(subtool.discarded, 1);
+}
+
+/// Accepting in the same frame the source moved — before a poll has seen it —
+/// is refused by the same check, not placed against a sculpt that moved.
+#[test]
+fn a_stale_preview_is_not_accepted() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    subtool.lock().unwrap().revision += 1;
+    vm.dispatch(&Command::AcceptRetopology);
+    assert!(subtool.lock().unwrap().placed.is_empty());
+    assert!(vm
+        .notice()
+        .get()
+        .as_deref()
+        .is_some_and(|n| n.contains("mudou")));
+    assert!(!vm.is_holding());
+    assert!(
+        vm.last().get().is_none(),
+        "the refused result is still reported"
+    );
+}
+
+/// A new run drops the held preview before it reads its source, and the
+/// result it lands is the one held next.
+#[test]
+fn a_new_run_drops_the_held_preview() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    let first = vm.preview().get().clone().expect("held");
+
+    vm.dispatch(&Command::SetRetopoSettings(RetopoSettings {
+        target_quads: 900,
+        ..RetopoSettings::default()
+    }));
+    vm.dispatch(&Command::RunRetopology);
+    assert!(!vm.is_holding(), "the old preview outlived a new run");
+    assert!(
+        vm.last().get().is_none(),
+        "the old preview's report outlived it"
+    );
+    assert_eq!(subtool.lock().unwrap().discarded, 1);
+    settle(&mut vm);
+    let second = vm.preview().get().clone().expect("the new result is held");
+    assert_ne!(first.name, second.name);
+    assert!(second.name.ends_with("900"));
+    assert!(subtool.lock().unwrap().placed.is_empty());
+}
+
+/// A replaced document drops the preview without a word: it was never part
+/// of the document, so there is no work to warn about.
+#[test]
+fn a_replaced_document_drops_the_preview_silently() {
+    let (mut vm, subtool) = fixture(plain(None));
+    vm.dispatch(&Command::RunRetopology);
+    settle(&mut vm);
+    vm.forget_document();
+    assert!(!vm.is_holding() && vm.preview().get().is_none());
+    assert!(vm.last().get().is_none());
+    assert_eq!(*vm.notice().get(), None);
+    assert!(subtool.lock().unwrap().placed.is_empty());
 }

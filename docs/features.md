@@ -3165,8 +3165,8 @@ edge loops go a *result* rather than a consequence), **field-aligned**
 **integer** parametrisation. *Pure quads* subdivides and relaxes onto the
 surface until no triangles remain.
 
-**The result is a new fixed-mesh subtool**, named after its source with
-` · quads`, standing where the source stands, in one undo entry — and the
+**The accepted result is a new fixed-mesh subtool**, named after its source
+with ` · quads`, standing where the source stands, in one undo entry — and the
 sculpt it was made from is left exactly as it was. That is the production
 crossing's shape: SDF, voxel, multires, dynamic and fixed mesh surfaces are
 temporarily triangulated for the remesher. The source representation stays as
@@ -3198,10 +3198,36 @@ runs it is *outstanding*: the agent's `jobs` section lists it with its
 fraction, a capture names it, and `wait` does not report the session quiet
 until it has landed.
 
+**It lands as a preview.** A finished run is not placed: it is held, drawn
+where accepting it would put it, and waits for an answer — **Aceitar** or
+**Descartar** under the retopology controls (shown under any active layer while
+a preview waits), `retopo accept` or `retopo discard` for an agent, with
+`outcomes.retopology.pending` saying one is held. Nothing of it is in the
+document while it waits: no layer, no history, no modified mark, nothing a save
+writes. Accepting places exactly what the job used to place on landing — the
+same layer, UVs and single undo entry, beside the source or over it as the run
+was asked. Discarding leaves the document as it was, byte for byte, with the
+next undo still the action before the run. The preview is drawn in place of its
+source when the source is a mesh, voxel, multires or dynamic subtool — the
+source's triangles and polyframe lines step aside. For a field source the
+whole field surface steps aside while the preview is held: it cannot be cut to
+one layer, and drawn under the preview it hid it, since the quads lie just
+inside the isosurface. Accepted in place, the viewport then draws exactly what
+the preview drew; accepted beside, the source is drawn next to the new layer
+again. `outcomes.retopology` reports a held result with `pending: true`, a
+placed one with `pending: false`, and nothing once a result is discarded or
+dropped.
+Its quads show under the polyframe, and the UV display applies to it while it
+is held. Starting another run drops the preview; so does anything that moves its
+source — a stroke, an undo, a redo — with a notice saying so. A save keeps it
+held. A new or opened document drops it without asking, since it holds none of
+the document's work.
+
 **A stale result is not published.** Nothing stops a sculptor stroking the
 source while the job runs, so the source's revision is read with its geometry
 and checked again before the result lands. A source that has moved, or has
-gone, gets nothing, and the sculptor is told the result was discarded. In place,
+gone, gets nothing, and the sculptor is told the result was discarded. The
+same check runs again when a held preview is accepted. In place,
 `clay_document_replace_mesh_layer` also refuses on the same revision and leaves
 the layer byte-identical. A stroke landing mid-retopology therefore costs the
 retopology rather than the stroke.
@@ -3265,8 +3291,18 @@ on an accepted retopology they come to one island per chart and one seam per
 seam edge the report states. The display is presentation only: no history, no
 modified mark. It draws the active layer, and only while the surface is solid;
 a choice made on a layer without UVs is kept for the next one that has them,
-and `state.presentation.uv_display` reports what is actually shown. The 2D
-layout view is not drawn yet.
+and `state.presentation.uv_display` reports what is actually shown. While a
+retopology preview is held the display is about the preview instead.
+
+**The UV square.** With a display chosen, the panel also draws the layout laid
+flat in the unit square: every triangle at its UVs — each island in its island
+tint, or one neutral grey under the plain checker — and both sides of every
+seam in red, since in UV space the two sides of a cut are two different edges.
+It follows the same rules as the display: presentation only, shown for the
+active layer or the held preview carrying UVs, gone under *Material*. The agent
+reads it as `state.presentation.uv_layout` (islands, seams, triangles), absent
+while nothing is drawn. Distortion is read from the report and from the checker
+on the form; the square does not colour charts by distortion.
 
 **Cozer mapas** bakes normal, ambient occlusion, curvature and cavity **from the
 field**, with no high-poly mesh at all. This is the half of the pipeline nothing
@@ -4786,7 +4822,9 @@ suite — a row that stopped building the command it claims is a row the build
 fails on.
 
 The `cut`, `retopo`, `uv`, `conform` and `bake` groups expose their model
-commands through the same catalogue as the other tools. Baking can be
+commands through the same catalogue as the other tools. A retopology's
+`retopo run` lands as a held preview that `retopo accept` places and
+`retopo discard` drops, each refused when nothing is held. Baking can be
 configured or cancelled here; starting a bake still opens the application's
 file panel to choose a destination. The catalogue test checks that every
 dispatched action is offered and every offered action has a dispatch route.

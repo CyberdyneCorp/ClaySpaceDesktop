@@ -1481,7 +1481,9 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "retopo",
         name: "run",
-        summary: "Starts a retopology job; it is outstanding until it lands.",
+        summary: "Starts a retopology job; it is outstanding until it lands. The result is \
+                  held as a preview (outcomes.retopology.pending) until it is accepted or \
+                  discarded; starting another run discards a held one.",
         arguments: &[],
         example: "{}",
     },
@@ -1489,6 +1491,23 @@ pub const TABLE: &[ActionSpec] = &[
         group: "retopo",
         name: "cancel",
         summary: "Cancels the retopology job in progress.",
+        arguments: &[],
+        example: "{}",
+    },
+    ActionSpec {
+        group: "retopo",
+        name: "accept",
+        summary: "Places the held retopology preview as one undo step: a new mesh layer, or the \
+                  source rebuilt when in_place was set. Refused when nothing is held or the \
+                  source has moved since the run.",
+        arguments: &[],
+        example: "{}",
+    },
+    ActionSpec {
+        group: "retopo",
+        name: "discard",
+        summary: "Drops the held retopology preview; the document and its history are \
+                  untouched. Refused when nothing is held.",
         arguments: &[],
         example: "{}",
     },

@@ -28,7 +28,7 @@ use crate::session::{
     LevelSizeState, MaskState, MemoryPart, MemoryState, ObjectState, OutcomeState, PassState,
     PhaseCostState, PlannedDepthState, PresentationState, ReferenceState, RemeshOutcomeState,
     RetopoOutcomeState, RetopoUvState, SceneState, StallState, StrokeCostState, TimingState,
-    ToolState, UvReportState,
+    ToolState, UvLayoutState, UvReportState,
 };
 
 /// How many agent jobs the interface thread does between two frames.
@@ -516,11 +516,23 @@ pub fn outcome_state(
             faces: outcome.faces,
             quads: outcome.is_quads(),
             uv: retopo_uv_state(&outcome.uv),
+            pending: false,
         }),
         crossing: crossing.map(|(direction, layer)| CrossingOutcomeState {
             direction: tags::tag_of(tags::DIRECTIONS, direction).to_string(),
             layer: layer.0,
         }),
+    }
+}
+
+impl OutcomeState {
+    /// The same, saying whether the retopology it reports is held as a
+    /// preview rather than placed.
+    pub fn with_retopology_pending(mut self, pending: bool) -> Self {
+        if let Some(retopology) = self.retopology.as_mut() {
+            retopology.pending = pending;
+        }
+        self
     }
 }
 
@@ -577,6 +589,7 @@ pub fn presentation_state(
         rigging,
         skin_preview,
         uv_display: tags::tag_of(tags::UV_DISPLAYS, clayspace_model::UvDisplay::Off).to_string(),
+        uv_layout: None,
     }
 }
 
@@ -588,6 +601,16 @@ impl PresentationState {
     /// capture of it looks like.
     pub fn with_uv_display(mut self, display: clayspace_model::UvDisplay) -> Self {
         self.uv_display = tags::tag_of(tags::UV_DISPLAYS, display).to_string();
+        self
+    }
+
+    /// The same, saying what the UV square draws, where it draws anything.
+    pub fn with_uv_layout(mut self, layout: Option<&clayspace_model::UvLayout>) -> Self {
+        self.uv_layout = layout.map(|layout| UvLayoutState {
+            islands: layout.islands.count,
+            seams: layout.islands.seams.len(),
+            triangles: layout.triangles(),
+        });
         self
     }
 }
@@ -1750,6 +1773,29 @@ mod tests {
         );
     }
 
+    /// A held preview is reported as pending, so an agent can tell a result
+    /// waiting for its decision from one already in the document.
+    #[test]
+    fn a_held_retopology_is_reported_as_pending() {
+        let outcome = clayspace_model::RetopoOutcome {
+            triangles_before: 100,
+            faces: 40,
+            triangles: 80,
+            vertices: 42,
+            uv: clayspace_model::RetopoUv::NotRequested,
+            guidance_warnings: Vec::new(),
+        };
+        let placed = outcome_state(None, Some(&outcome), None);
+        assert!(!placed.retopology.as_ref().expect("a retopology").pending);
+        let held = placed.with_retopology_pending(true);
+        assert!(held.retopology.expect("a retopology").pending);
+        // Nothing to mark where nothing has run.
+        assert!(outcome_state(None, None, None)
+            .with_retopology_pending(true)
+            .retopology
+            .is_none());
+    }
+
     /// The chrome and the fade change what a capture looks like without
     /// touching the document, so an agent comparing two frames needs them
     /// before it reads a difference as a defect.
@@ -1771,6 +1817,29 @@ mod tests {
         assert_eq!(state.uv_display, "off");
         let state = state.with_uv_display(clayspace_model::UvDisplay::Islands);
         assert_eq!(state.uv_display, "islands");
+        assert!(state.uv_layout.is_none());
+
+        // Two quads split along their shared edge: two islands, one seam.
+        let preview = clayspace_model::UvPreview {
+            layer: LayerKey(1),
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ],
+            normals: vec![[0.0, 0.0, 1.0]; 8],
+            uvs: vec![[0.0; 2]; 8],
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+        };
+        let layout = clayspace_model::UvLayout::of(&preview);
+        let state = state.with_uv_layout(Some(&layout));
+        let drawn = state.uv_layout.expect("the square is reported");
+        assert_eq!((drawn.islands, drawn.seams, drawn.triangles), (2, 1, 4));
     }
 
     /// Every plane, including the ones carrying nothing: "there is no side

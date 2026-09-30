@@ -17308,6 +17308,57 @@ impl ClayDocument {
         }))
     }
 
+    /// A held retopology result, standing where accepting it would draw it.
+    ///
+    /// The preview a sculptor accepts or discards is drawn from this, so it
+    /// has to be the picture acceptance produces: the result's own triangles,
+    /// placed by the source's transform — which is the transform
+    /// [`Self::attach_quads_beside`] gives the new layer, and the one an
+    /// in-place rebuild keeps — through the same arithmetic
+    /// [`Self::uv_preview`] places an accepted layer with. The result's own
+    /// normals where it carries them (a layout split its vertices, and those
+    /// are the welded ones), area-weighted from its triangles where it does
+    /// not, which is what the viewport derives for a mesh handed none.
+    ///
+    /// `layer` is the **source**: the preview stands in for its span while it
+    /// is held. `uvs` is empty for a result carrying no layout.
+    pub fn retopo_preview(
+        &mut self,
+        result: &clayspace_model::RetopoResult,
+    ) -> Result<clayspace_model::UvPreview, ModelError> {
+        let Some((key, _)) = self.retopo_target else {
+            return Err(ModelError::engine(
+                "não há camada registada para esta pré-visualização",
+            ));
+        };
+        let mut positions = result.positions.clone();
+        let mut normals = if result.normals.len() == positions.len() {
+            result.normals.clone()
+        } else {
+            claycore::area_weighted_normals(&positions, &result.indices)
+        };
+        if let Some(transform) = self.carried_placement(key) {
+            for point in &mut positions {
+                *point = Self::into_world(&transform, *point);
+            }
+            for normal in &mut normals {
+                *normal = transform.normal_into_world(*normal);
+            }
+        }
+        Ok(clayspace_model::UvPreview {
+            layer: key,
+            positions,
+            normals,
+            uvs: result.uvs.clone(),
+            indices: result.indices.clone(),
+        })
+    }
+
+    /// Forgets the recorded retopology target without placing anything.
+    pub(crate) fn forget_retopo_target(&mut self) {
+        self.retopo_target = None;
+    }
+
     /// The revision the layer a running retopology was asked about stands at
     /// now. An error when it has gone, which makes any result for it stale.
     pub(crate) fn retopo_target_revision(&mut self) -> Result<u64, ModelError> {

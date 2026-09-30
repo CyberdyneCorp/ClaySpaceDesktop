@@ -22,6 +22,7 @@ mod ao;
 mod overlays;
 mod pipelines;
 pub mod polyframe;
+mod retopo_preview;
 mod shadow;
 mod textures;
 mod uv_preview;
@@ -31,6 +32,8 @@ pub use overlays::ScreenMetric;
 use overlays::*;
 pub use overlays::{frame_about, BRACKET_REACH, RING_REACH, SCALE_BOX_REACH, VIEW_RING_REACH};
 use pipelines::*;
+pub use retopo_preview::held_geometry;
+use retopo_preview::HeldPreviewMesh;
 pub use textures::Reference;
 use textures::*;
 use uv_preview::UvPreviewMesh;
@@ -904,6 +907,9 @@ pub struct Renderer {
     /// Where the chunked spans' lines sit in `wire_indices`, so a patch can
     /// rewrite them in place.
     wire_layout: polyframe::LineLayout,
+    /// Where each subtool's lines sit in `wire_indices`, so a held
+    /// retopology's source can be left out of the polyframe.
+    wire_spans: Vec<(LayerKey, std::ops::Range<u32>)>,
     /// Whether to draw them.
     polyframe: bool,
     /// A mesh layer's UV layout as a checker, drawn in place of its span.
@@ -912,6 +918,9 @@ pub struct Renderer {
     seam_pipeline: wgpu::RenderPipeline,
     /// The layout being previewed, when one is.
     uv_preview: Option<UvPreviewMesh>,
+    /// A finished retopology waiting to be accepted or discarded, drawn in
+    /// place of its source.
+    retopo_preview: Option<HeldPreviewMesh>,
     /// The triangles the edges were last built from, when they have not been
     /// built for the triangles currently uploaded.
     ///
@@ -1679,11 +1688,13 @@ impl Renderer {
             wire_index_count: 0,
             wire_capacity: 0,
             wire_layout: polyframe::LineLayout::default(),
+            wire_spans: Vec::new(),
             polyframe: false,
             pending_edges: None,
             uv_pipeline,
             seam_pipeline,
             uv_preview: None,
+            retopo_preview: None,
             membrane_pipeline,
             cursor_pipeline,
             reduce_pipeline,
@@ -2262,12 +2273,83 @@ impl Renderer {
         else {
             return;
         };
+        self.draw_layout(pass, preview);
+    }
+
+    /// One layout as a checker, and its seams over it.
+    fn draw_layout(&self, pass: &mut wgpu::RenderPass<'_>, preview: &UvPreviewMesh) {
         pass.set_pipeline(&self.uv_pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, preview.vertices.slice(..));
         pass.set_index_buffer(preview.indices.slice(..), wgpu::IndexFormat::Uint32);
         self.draw_indexed(pass, 0..preview.index_count, Primitive::Triangles);
         self.draw_mesh(pass, &preview.seams, &self.seam_pipeline, Primitive::Lines);
+    }
+
+    /// Shows a finished retopology that is waiting to be accepted or
+    /// discarded, or stops showing one.
+    ///
+    /// `preview` is the result's triangles standing where acceptance would
+    /// draw them, with `layer` naming the **source** it stands in for;
+    /// `edges` its authored face edges (empty to derive them). `display`
+    /// draws its layout, where it carries one, as an accepted layer's is
+    /// drawn. `None` puts the source back and frees the buffers.
+    pub fn set_retopo_preview(
+        &mut self,
+        gpu: &Gpu,
+        preview: Option<(&UvPreview, &[u32], UvDisplay)>,
+    ) {
+        self.retopo_preview = preview
+            .map(|(preview, edges, display)| HeldPreviewMesh::upload(gpu, preview, edges, display));
+    }
+
+    /// The subtool a held retopology preview stands in for, if one is held.
+    pub fn retopo_preview_source(&self) -> Option<LayerKey> {
+        self.retopo_preview.as_ref().map(|held| held.source)
+    }
+
+    /// Whether a held retopology preview stands in for a field layer rather
+    /// than a carried subtool: its source is not one of the carried spans,
+    /// and the field's one surface is left out of the draw in its place.
+    fn retopo_preview_over_field(&self) -> bool {
+        self.retopo_preview_source()
+            .is_some_and(|source| !self.mesh_spans.iter().any(|span| span.layer == source))
+    }
+
+    /// The surface's pipeline for the current shading, solid or drawn through.
+    fn surface_pipeline(&self, solid: bool) -> &wgpu::RenderPipeline {
+        match (self.shading, solid) {
+            (ShadingMode::MatCap, true) => &self.pipeline,
+            (ShadingMode::MatCap, false) => &self.ghost_pipeline,
+            (ShadingMode::Studio, true) => &self.studio_pipeline,
+            (ShadingMode::Studio, false) => &self.studio_ghost_pipeline,
+        }
+    }
+
+    /// Whether the held preview is drawn as its layout this frame — a display
+    /// is chosen, it carries one, and the surface is solid.
+    pub fn retopo_preview_shows_layout(&self) -> bool {
+        self.retopo_preview
+            .as_ref()
+            .is_some_and(|held| held.layout.is_some())
+            && self.drawn_opacity().is_solid()
+    }
+
+    /// Draws the held retopology, when there is one: as its layout where
+    /// [`Self::retopo_preview_shows_layout`], through the surface's own
+    /// pipeline otherwise, with its edges when the polyframe is on.
+    fn draw_retopo_preview(&self, pass: &mut wgpu::RenderPass<'_>, surface: &wgpu::RenderPipeline) {
+        let Some(held) = self.retopo_preview.as_ref() else {
+            return;
+        };
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        match held.layout.as_ref() {
+            Some(layout) if self.retopo_preview_shows_layout() => self.draw_layout(pass, layout),
+            _ => self.draw_mesh(pass, &held.surface, surface, Primitive::Triangles),
+        }
+        if self.polyframe {
+            self.draw_mesh(pass, &held.edges, &self.wire_pipeline, Primitive::Lines);
+        }
     }
 
     /// Whether the surface is drawn through.
@@ -2411,8 +2493,10 @@ impl Renderer {
         let polyframe::Lines {
             indices: edges,
             layout,
+            spans,
         } = polyframe::lines(indices, &self.mesh_spans);
         self.wire_layout = layout;
+        self.wire_spans = spans;
 
         self.wire_index_count = edges.len() as u32;
         if edges.is_empty() {
@@ -2452,9 +2536,11 @@ impl Renderer {
             return;
         }
         let previewed = self.uv_preview_layer();
+        let held = self.retopo_preview_source();
         for span in &self.mesh_spans {
-            // The previewed layer is drawn by `draw_uv_preview` instead.
-            if Some(span.layer) == previewed {
+            // The previewed layer is drawn by `draw_uv_preview` instead, and a
+            // held retopology's source by `draw_retopo_preview`.
+            if Some(span.layer) == previewed || Some(span.layer) == held {
                 continue;
             }
             // A span with no bounds is never culled: a caller that has not
@@ -2675,12 +2761,7 @@ impl Renderer {
             // surface back. One choice for both the surface and the mesh
             // layers: a document with one of each half solid and half ghosted
             // would read as two objects.
-            let surface = match (self.shading, self.drawn_opacity().is_solid()) {
-                (ShadingMode::MatCap, true) => &self.pipeline,
-                (ShadingMode::MatCap, false) => &self.ghost_pipeline,
-                (ShadingMode::Studio, true) => &self.studio_pipeline,
-                (ShadingMode::Studio, false) => &self.studio_ghost_pipeline,
-            };
+            let surface = self.surface_pipeline(self.drawn_opacity().is_solid());
             // The studio pipelines carry a second group. It is bound once for
             // the whole pass rather than per draw: every draw that uses those
             // pipelines samples the same map.
@@ -2689,7 +2770,14 @@ impl Renderer {
                 pass.set_bind_group(1, &map.sampled, &[]);
             }
 
-            self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
+            // Left out while a preview of a field source is held, as a carried
+            // source's span is. The field cannot be cut to one layer, and
+            // under it the preview cannot be seen at all: its quads chord the
+            // isosurface and lie just inside it, so the field wins the depth
+            // test over nearly every one of them.
+            if !self.retopo_preview_over_field() {
+                self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
+            }
             if let Some(preview) = &self.object_preview {
                 self.draw_mesh(&mut pass, preview, surface, Primitive::Triangles);
             }
@@ -2715,13 +2803,25 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.mesh_layers.vertices.slice(..));
 
                 // And its edges over it, when the polyframe is on. The same
-                // vertex buffer, read as a line list through its own indices.
+                // vertex buffer, read as a line list through its own indices —
+                // less a held retopology's source, whose triangles are not
+                // drawn either.
                 if self.polyframe && self.wire_index_count > 0 {
                     pass.set_pipeline(&self.wire_pipeline);
                     pass.set_index_buffer(self.wire_indices.slice(..), wgpu::IndexFormat::Uint32);
-                    self.draw_indexed(&mut pass, 0..self.wire_index_count, Primitive::Lines);
+                    let runs = polyframe::ranges_without(
+                        self.wire_index_count,
+                        &self.wire_spans,
+                        self.retopo_preview_source(),
+                    );
+                    for lines in runs.into_iter().filter(|run| !run.is_empty()) {
+                        self.draw_indexed(&mut pass, lines, Primitive::Lines);
+                    }
                 }
             }
+            // Outside the carried layers' block: a preview of a field source
+            // has to be drawn in a scene that carries no mesh layer at all.
+            self.draw_retopo_preview(&mut pass, surface);
 
             // The brush cursor, over the surface it will act on. Triangles
             // rather than lines: it is a ribbon a couple of pixels wide, so

@@ -1185,6 +1185,42 @@ fn a_retopology_is_a_job_with_a_new_layer_and_one_undo() {
         landed["structuredContent"]["quiet"], true,
         "the retopology never landed: {landed}"
     );
+    // Landed, and held: nothing is in the document until it is accepted.
+    assert_eq!(retopo_pending(&running, &session), Some(true));
+    assert_eq!(
+        layer_count(&running, &session),
+        layers,
+        "a held preview was placed before it was accepted"
+    );
+    assert_eq!(
+        history_depth(&running, &session),
+        depth,
+        "a held preview banked an undo step"
+    );
+
+    // Discarded: the document and its history as they were.
+    // No outcome is left behind either: `pending: false` means placed, and a
+    // discarded result was not.
+    call(&running, &session, "retopo", json!({ "action": "discard" }));
+    settle(&running, &session);
+    assert_eq!(retopo_pending(&running, &session), None);
+    assert_eq!(layer_count(&running, &session), layers);
+    assert_eq!(history_depth(&running, &session), depth);
+    let refused = refused(&running, &session, "retopo", json!({ "action": "accept" }));
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
+        "accepting a discarded preview was not refused aloud: {refused}"
+    );
+
+    // Run again and accept: exactly what publishing on landing used to do.
+    call(&running, &session, "retopo", json!({ "action": "run" }));
+    settle(&running, &session);
+    assert_eq!(retopo_pending(&running, &session), Some(true));
+    call(&running, &session, "retopo", json!({ "action": "accept" }));
+    settle(&running, &session);
+    assert_eq!(retopo_pending(&running, &session), Some(false));
     assert_eq!(
         layer_count(&running, &session),
         layers + 1,
@@ -1254,6 +1290,8 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
     call(&running, &session, "retopo", json!({ "action": "run" }));
     settle(&running, &session);
     assert_eq!(uv_of(&running)["status"], "not_requested");
+    call(&running, &session, "retopo", json!({ "action": "accept" }));
+    settle(&running, &session);
 
     // The checker asked for on a result with no layout draws nothing, and the
     // choice is kept for the next result that has one.
@@ -1290,20 +1328,85 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
     settle(&running, &session);
     let uv = uv_of(&running);
     assert_eq!(uv["status"], "laid", "the layout did not land: {uv}");
-    assert!(
-        uv["report"]["charts"].as_u64().unwrap_or(0) > 0,
-        "a laid layout with no charts: {uv}"
-    );
+    let charts = uv["report"]["charts"].as_u64().unwrap_or(0);
+    assert!(charts > 0, "a laid layout with no charts: {uv}");
+
+    // Held: the checker chosen earlier is drawn on the preview, and the UV
+    // square draws its layout — one island per chart — before anything is
+    // placed.
     assert_eq!(
         layer_count(&running, &session),
-        layers + 2,
-        "each retopology should arrive as a new layer"
+        layers + 1,
+        "the held preview was placed before it was accepted"
     );
     assert_eq!(
         uv_display(&running),
         "checker",
-        "the result carries a layout and the checker chosen earlier is not shown"
+        "the held preview carries a layout and the checker chosen earlier is not shown"
     );
+    let square = uv_layout(&running, &session);
+    println!("held preview: {charts} charts reported; the UV square draws {square}");
+    assert_eq!(
+        square["islands"].as_u64(),
+        Some(charts),
+        "the UV square does not draw the preview's charts: {square}"
+    );
+    assert_eq!(
+        square["seams"].as_u64(),
+        uv["report"]["seam_edges"].as_u64(),
+        "the UV square does not draw the preview's seams: {square}"
+    );
+
+    call(&running, &session, "retopo", json!({ "action": "accept" }));
+    settle(&running, &session);
+    assert_eq!(
+        layer_count(&running, &session),
+        layers + 2,
+        "each accepted retopology should arrive as a new layer"
+    );
+    assert_eq!(
+        uv_display(&running),
+        "checker",
+        "the accepted layer carries a layout and the checker chosen earlier is not shown"
+    );
+    assert_eq!(
+        uv_layout(&running, &session),
+        square,
+        "the accepted layer's layout is not the one the preview showed"
+    );
+
+    // The material chosen: the square is gone with the checker.
+    call(
+        &running,
+        &session,
+        "view",
+        json!({ "action": "set_uv_display", "display": "off" }),
+    );
+    settle(&running, &session);
+    assert!(uv_layout(&running, &session).is_null());
+}
+
+/// Whether the last retopology is held as a preview; `None` when none is
+/// reported — before one ran, or after one was discarded.
+fn retopo_pending(running: &Running, session: &str) -> Option<bool> {
+    let state = call(
+        running,
+        session,
+        "state",
+        json!({ "sections": ["outcomes"] }),
+    );
+    state["structuredContent"]["outcomes"]["retopology"]["pending"].as_bool()
+}
+
+/// What the UV square draws, or null when it draws nothing.
+fn uv_layout(running: &Running, session: &str) -> Value {
+    let state = call(
+        running,
+        session,
+        "state",
+        json!({ "sections": ["presentation"] }),
+    );
+    state["structuredContent"]["presentation"]["uv_layout"].clone()
 }
 
 /// What a document says about itself over the door, with the parts that

@@ -305,6 +305,7 @@ fn state<'a>(
         retopo_guidance: retopo_guidance(),
         retopo_draft: &[],
         retopo_outcome: None,
+        retopo_pending: false,
         retopo_unavailable: None,
         retopo_progress: None,
         uv: clayspace_model::UvSettings::default(),
@@ -334,6 +335,7 @@ fn state<'a>(
         voxel_display: clayspace_model::VoxelDisplay::default(),
         uv_display: clayspace_model::UvDisplay::default(),
         carries_uvs: false,
+        uv_layout: None,
         voxel_blur: clayspace_model::SmoothBlur::default(),
         lattice: clayspace_model::LatticeState::default(),
         lattice_divisions: [3; 3],
@@ -6568,4 +6570,233 @@ fn the_secret_is_not_on_screen_until_it_is_asked_for() {
          (difference {}, floor {floor})",
         open.mean_difference(&closed)
     );
+}
+
+/// Two quads split along their shared edge, laid out as two islands side by
+/// side in the UV square.
+fn split_layout() -> clayspace_model::UvLayout {
+    clayspace_model::UvLayout::of(&clayspace_model::UvPreview {
+        layer: LayerKey(1),
+        positions: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ],
+        normals: vec![[0.0, 0.0, 1.0]; 8],
+        uvs: vec![
+            [0.05, 0.05],
+            [0.45, 0.05],
+            [0.45, 0.95],
+            [0.05, 0.95],
+            [0.55, 0.05],
+            [0.95, 0.05],
+            [0.95, 0.95],
+            [0.55, 0.95],
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+    })
+}
+
+/// A held retopology is answered from the panel: Accept and Discard each ask
+/// for their command and nothing else, and its layout is drawn in the UV
+/// square — each island filled a colour of its own, both sides of the seam in
+/// red — only while a display is chosen.
+#[test]
+fn a_held_retopology_offers_accept_discard_and_its_uv_square() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let layout = split_layout();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    // A field layer active, as when an agent retopologised the starting form:
+    // the preview block stands on its own near the top of the panel, where a
+    // 800 px window shows it without scrolling. Under a mesh layer it sits
+    // below the retopology controls — checked for presence at the end.
+    set.representation = clayspace_model::Representation::Sdf;
+    set.retopo_outcome = Some(clayspace_model::RetopoOutcome {
+        triangles_before: 44_784,
+        faces: 518,
+        triangles: 1036,
+        vertices: 657,
+        uv: clayspace_model::RetopoUv::NotRequested,
+        guidance_warnings: Vec::new(),
+    });
+    set.retopo_pending = true;
+    set.carries_uvs = true;
+    set.uv_display = clayspace_model::UvDisplay::Islands;
+    set.uv_layout = Some(&layout);
+
+    let ctx = probe_shell(&set);
+    let accept = shell_rect(&ctx, shell::retopo_accept_button_id()).expect("no Accept button");
+    let discard = shell_rect(&ctx, shell::retopo_discard_button_id()).expect("no Discard button");
+    let square = shell_rect(&ctx, shell::uv_layout_square_id()).expect("no UV square");
+    for (button, command) in [
+        (accept, Command::AcceptRetopology),
+        (discard, Command::DiscardRetopology),
+    ] {
+        let ctx = egui::Context::default();
+        shell::apply_theme(&ctx);
+        let mut queue = CommandQueue::new();
+        for _ in 0..2 {
+            run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+        }
+        run_shell_frame(&ctx, &set, &mut queue, left_click(button.center()));
+        assert_eq!(
+            queue.commands(),
+            std::slice::from_ref(&command),
+            "{command:?}"
+        );
+    }
+
+    // The square sits below the window's fold, so the left panel is scrolled
+    // to it, and the square found again where the scroll left it.
+    let scroll = vec![
+        egui::Event::PointerMoved(square.center() - egui::vec2(0.0, 400.0)),
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: egui::Modifiers::default(),
+        },
+    ];
+    let square = settled_rect(&set, &scroll, shell::uv_layout_square_id()).expect("scrolled");
+    assert!(
+        square.max.y <= SHELL_HEIGHT as f32,
+        "the square is still below the fold at {square:?}"
+    );
+    let image = capture_shell_after(
+        &harness,
+        &set,
+        "76-retopo-preview-uv-square",
+        &[scroll],
+        |_| {},
+    );
+    let tints = [0, 1].map(|island| {
+        let [r, g, b] =
+            clayspace_view::renderer::island_tint(island).map(|c| (c * 255.0).round() as i32);
+        [r, g, b]
+    });
+    let seam = clayspace_view::renderer::SEAM_COLOR.map(|c| (c * 255.0).round() as i32);
+    let (mut filled, mut red) = ([0usize; 2], 0usize);
+    for y in square.min.y as u32..square.max.y as u32 {
+        for x in square.min.x as u32..square.max.x as u32 {
+            let p = image.pixel(x, y);
+            let [r, g, b] = [p[0] as i32, p[1] as i32, p[2] as i32];
+            for (count, tint) in filled.iter_mut().zip(&tints) {
+                if (r - tint[0]).abs() <= 3 && (g - tint[1]).abs() <= 3 && (b - tint[2]).abs() <= 3
+                {
+                    *count += 1;
+                }
+            }
+            if (r - seam[0]).abs() <= 40 && (g - seam[1]).abs() <= 40 && (b - seam[2]).abs() <= 40 {
+                red += 1;
+            }
+        }
+    }
+    println!(
+        "UV square {:.0}x{:.0} at ({:.0}, {:.0}): island fills {} and {} px, seam red {red} px",
+        square.width(),
+        square.height(),
+        square.min.x,
+        square.min.y,
+        filled[0],
+        filled[1]
+    );
+    let island_area = (0.4 * square.width() * 0.9 * square.height()) as usize;
+    for count in filled {
+        assert!(
+            count > island_area * 8 / 10,
+            "an island filled {count} of its ~{island_area} px — see \
+             target/visual/76-retopo-preview-uv-square.png"
+        );
+    }
+    // Both sides of the one seam: two edges 0.9 of the square tall, at
+    // least a pixel wide each wherever they are drawn.
+    assert!(
+        red as f32 > 2.0 * 0.8 * 0.9 * square.height(),
+        "the seam drew {red} red px — see target/visual/76-retopo-preview-uv-square.png"
+    );
+
+    // The material chosen: the chips stay, the square goes.
+    set.uv_display = clayspace_model::UvDisplay::Off;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::uv_layout_square_id()).is_none());
+    assert!(shell_rect(
+        &ctx,
+        shell::uv_display_chip_id(clayspace_model::UvDisplay::Checker)
+    )
+    .is_some());
+
+    // Under a mesh layer, below its retopology controls.
+    set.representation = clayspace_model::Representation::Mesh;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::retopo_accept_button_id()).is_some());
+
+    // Nothing held: no decision is offered.
+    set.retopo_pending = false;
+    set.carries_uvs = false;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::retopo_accept_button_id()).is_none());
+    assert!(shell_rect(&ctx, shell::retopo_discard_button_id()).is_none());
+}
+
+/// A held preview is answered wherever the sculptor is: with a field layer
+/// active — where the retopology controls are not drawn — the decision is
+/// still offered.
+#[test]
+fn a_held_retopology_is_answerable_from_a_field_layer() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Sdf;
+    set.retopo_pending = true;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::retopo_accept_button_id()).is_some());
+    assert!(shell_rect(&ctx, shell::retopo_discard_button_id()).is_some());
+}
+
+/// Where `id` was drawn once `events` have landed and every animation they
+/// started — a scroll eases in — has settled, as a capture settles it.
+fn settled_rect(
+    state: &ShellState<'_>,
+    events: &[egui::Event],
+    id: egui::Id,
+) -> Option<egui::Rect> {
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    let input = |events: Vec<egui::Event>, dt: f32| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+        )),
+        predicted_dt: dt,
+        events,
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        let _ = ctx.run(input(Vec::new(), 1.0 / 60.0), |ctx| {
+            build_shell(ctx, state, &mut queue)
+        });
+    }
+    let _ = ctx.run(input(events.to_vec(), 1.0 / 60.0), |ctx| {
+        build_shell(ctx, state, &mut queue)
+    });
+    for _ in 0..2 {
+        let _ = ctx.run(input(Vec::new(), SETTLED_DT), |ctx| {
+            build_shell(ctx, state, &mut queue)
+        });
+    }
+    shell_rect(&ctx, id)
 }

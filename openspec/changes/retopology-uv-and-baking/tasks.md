@@ -109,7 +109,20 @@
       *do not cut*; verify the two requests are distinguished
 - [ ] 6.3 The seam-path tool — waypoints, re-route on edit, commit into a seam
       set, the commit's edge list as the undo record
-- [ ] 6.4 The UV layout drawn, and its distortion readable
+- [x] 6.4 The UV layout drawn, and its distortion readable. (#213) The UV
+      square draws the active layer's or the held preview's layout while a UV
+      display is chosen — islands in the surface's island tints, or one neutral
+      fill under the checker, both sides of every seam in the seam colour —
+      and `state.presentation.uv_layout` reports its islands, seams and
+      triangles. Presentation only: no command, no history, no modified mark.
+      Distortion is read from the report's angle-distortion figures and from
+      the checker stretching on the form; a per-chart distortion heat map is
+      not drawn. Held by `a_held_retopology_offers_accept_discard_and_its_uv_square`
+      (visual: each island filled 16,490 of ~16,796 px, 776 seam px), the
+      square's unit tests, `UvLayout`'s and `seam_sides`' model tests, and the
+      agent end-to-end square checks — on the starting form the held preview's
+      square reports 6 islands, 133 seams and 1,052 triangles for the 6 charts
+      and 133 seam edges reported, and the accepted layer's the same.
 
 ## 7. Baking from the field
 
@@ -171,17 +184,43 @@ field evaluator with no field. We are the first of either.
 
 ## 11. Production retopology workflow (#211–#213)
 
-- [ ] 11.1 Route retopology as a named UI and agent action with preflight,
+- [x] 11.1 Route retopology as a named UI and agent action with preflight,
       cancellable job progress, result preview and explicit accept/discard.
       Acceptance creates a new mesh subtool and one history entry; discard
       creates neither. (#211)
-      **Done except the preview.** A run is a job with the engine's progress
-      forwarded to the interface and the agent, cancellable, and outstanding
-      to `jobs`, captures and `wait` until it lands; its result is a new mesh
-      subtool beside the intact source in one history entry, with
-      `in_place` as the opt-in to rebuild the source. What remains is holding
-      the finished result as a drawn preview with explicit accept/discard
-      instead of publishing it when the job lands
+      A run is a job with the engine's progress forwarded to the interface and
+      the agent, cancellable, and outstanding to `jobs`, captures and `wait`
+      until it lands. **It lands as a held preview** (#213): the panel's
+      Accept/Discard and the agent's `retopo accept`/`retopo discard`, with
+      `outcomes.retopology.pending`. Accept is the old publish — the same
+      `place_retopology` with the run's settings — so the result is a new mesh
+      subtool beside the intact source in one history entry, or the source
+      rebuilt with `in_place`. Discard forgets the recorded target and changes
+      nothing. A held preview is dropped by a new run, by its source moving
+      (stroke, undo, redo; with a notice) and by a replaced document (silently),
+      and survives a save that writes none of it. It is drawn in place of a
+      carried source (span and polyframe lines left out), in place of the
+      whole field surface for a field source (drawn under it, the field hid
+      it: 395 px of the preview and 545 px of its lines lost against 0 now),
+      with its quads under the polyframe and the UV display applying to it.
+      Measured on the starting form at 600 quads with UVs: the accepted layer
+      equals the one publishing placed bit for bit, and the preview drawn
+      before accepting equals the accepted layer as drawn (657 vertices, 1,036
+      triangles, 6 islands for 6 charts, 133 seams for 133 seam edges); a
+      discard leaves the 1,344,064-byte saved document byte-equal and
+      reports no outcome (a discarded or dropped result is no longer reported
+      as `pending: false`, which means placed). In the
+      viewport the preview replaced the sculpt's polyframe at 9,193 px, its
+      checker darkened 11,945 px with 193 (checker) and 293 (islands) seam px
+      against 0, a discard left 0 px behind (0 with the polyframe), and the
+      layer accepted in place differed from the held preview at 0 px (0 with
+      the polyframe; accepted beside, the source is drawn next to it again);
+      a field source's preview covered 24,962 px and, over the real field
+      surface, differed from itself alone at 0 px (0 with the polyframe). Held by `retopo_preview.rs` (engine, 5 tests), the held
+      preview tests in `clayspace-vm/tests/retopo.rs` (7 new) and
+      `uv_display.rs`, `visual_retopo_preview.rs`, the MCP contract test
+      `a_held_retopology_is_accepted_or_discarded_by_name`, and the agent
+      end-to-end retopology tests (discard, then accept).
 - [x] 11.2 Recheck the source layer revision before accepting a result and
       refuse a stale preview with a visible reason. (#211) Checked in the
       ViewModel before publishing and again in the document for both
@@ -235,10 +274,15 @@ field evaluator with no field. We are the first of either.
       `a_hidden_layer_shows_no_uv_preview` (visual),
       `a_chosen_display_is_shown_only_on_a_layer_carrying_uvs` (VM), the
       model's island/seam tests, and the agent end-to-end
-      `a_retopology_asked_for_uvs_reports_its_layout`. The 2D layout view
-      (6.4) is still not drawn.
-- [ ] 11.5 Pin the workflow with UI, VM and agent regression tests; update
+      `a_retopology_asked_for_uvs_reports_its_layout`. The layout is drawn on a
+      held preview as well (11.1), and in its UV square (6.4).
+- [x] 11.5 Pin the workflow with UI, VM and agent regression tests; update
       `docs/features.md` to describe the accepted-result lifecycle. (#211–#213)
+      The held-preview lifecycle is pinned at every layer — VM, engine,
+      renderer, shell, MCP contract and agent end-to-end (11.1) — and
+      `docs/features.md` describes it: held on landing, accepted or discarded,
+      and what a new run, a moving source, a save and a replaced document do
+      to it.
 
 ## 12. From fixed mesh to hierarchy and bake out (#214)
 

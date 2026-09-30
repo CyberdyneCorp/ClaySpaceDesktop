@@ -121,5 +121,5 @@ pub use tools::{
     SemanticIntent, Shaping, Substitution, ToolKind, ToolNote, Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
-pub use uv_preview::{uv_islands, UvDisplay, UvIslands, UvPreview};
+pub use uv_preview::{uv_islands, UvDisplay, UvIslands, UvLayout, UvPreview};
 pub use voxel_display::{SmoothBlur, VoxelDisplay};

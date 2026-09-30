@@ -369,12 +369,19 @@ pub enum Command {
     SetRetopoSettings(clayspace_model::RetopoSettings),
     SetRetopoTool(clayspace_model::RetopoToolState),
     EditRetopo(RetopoEdit),
-    /// Rebuilds the active mesh subtool's topology as quads, off the
-    /// interface thread, rebuilding the subtool in place.
+    /// Rebuilds the active subtool's topology as quads, off the interface
+    /// thread. The result is held as a preview until it is accepted or
+    /// discarded.
     RunRetopology,
     /// Asks a running retopology to stop between stages. It finishes as
     /// cancelled rather than being abandoned, so nothing is left half-placed.
     CancelRetopology,
+    /// Places the held retopology preview, in one undo entry — exactly what
+    /// the job would have placed when it landed.
+    AcceptRetopology,
+    /// Drops the held retopology preview. The document and its history are
+    /// untouched.
+    DiscardRetopology,
     /// What the UV panel is set to.
     SetUvSettings(clayspace_model::UvSettings),
     /// Lays out the active mesh subtool's UVs, off the interface thread.
@@ -651,6 +658,11 @@ impl Command {
                 | Self::EditRetopo(_)
                 | Self::RunRetopology
                 | Self::CancelRetopology
+                // Accepting places a layer, and its undo entry is made where
+                // the placement happens, as a landed job's was. Discarding
+                // changes nothing at all.
+                | Self::AcceptRetopology
+                | Self::DiscardRetopology
                 | Self::SetUvSettings(_)
                 | Self::RunUvAtlas
                 | Self::CancelUvAtlas
@@ -839,6 +851,8 @@ impl Command {
                     | Self::SculptLayer(_)
                     | Self::MultiresLevel(_)
                     | Self::MultiresSculptLayer(_)
+                    // Places the held retopology as a layer.
+                    | Self::AcceptRetopology
             )
     }
 
@@ -911,6 +925,8 @@ impl Command {
             Self::EditRetopo(_) => "editar orientação da retopologia",
             Self::RunRetopology => "remalhar para quads",
             Self::CancelRetopology => "cancelar retopologia",
+            Self::AcceptRetopology => "aceitar retopologia",
+            Self::DiscardRetopology => "descartar retopologia",
             Self::SetCutGesture(_) => "gesto de corte",
             Self::BeginCut(_) => "começar corte",
             Self::ExtendCut(_) => "arrastar corte",

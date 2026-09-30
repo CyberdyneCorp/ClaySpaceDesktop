@@ -30,6 +30,10 @@ pub struct Lines {
     /// Two vertex indices per line.
     pub indices: Vec<u32>,
     pub layout: LineLayout,
+    /// Where each subtool's lines sit in `indices`, so one subtool's can be
+    /// left out of a draw — the source of a held retopology preview, whose
+    /// triangles are not drawn either.
+    pub spans: Vec<(clayspace_model::LayerKey, Range<u32>)>,
 }
 
 /// Where the lines of each chunked span sit, so a patch to its triangles can
@@ -91,10 +95,13 @@ pub fn lines(indices: &[u32], spans: &[MeshSpan]) -> Lines {
         return Lines {
             indices: packed.lines,
             layout: LineLayout::default(),
+            spans: Vec::new(),
         };
     }
 
+    let mut placed = Vec::with_capacity(spans.len());
     for span in spans {
+        let start = packed.lines.len() as u32;
         let range = span.indices.start as usize..span.indices.end as usize;
         match (&span.edges, indices.get(range)) {
             (Some(authored), _) => {
@@ -112,10 +119,28 @@ pub fn lines(indices: &[u32], spans: &[MeshSpan]) -> Lines {
             (None, Some(triangles)) => packed.derive(triangles),
             (None, None) => {}
         }
+        placed.push((span.layer, start..packed.lines.len() as u32));
     }
     Lines {
         indices: packed.lines,
         layout: LineLayout { slotted },
+        spans: placed,
+    }
+}
+
+/// The two runs of a line list of `count` indices either side of
+/// `skipped`'s lines: the whole list and an empty run where it names no
+/// subtool with lines here, and what comes before and after them where it
+/// does. An empty run draws nothing.
+pub fn ranges_without(
+    count: u32,
+    spans: &[(clayspace_model::LayerKey, Range<u32>)],
+    skipped: Option<clayspace_model::LayerKey>,
+) -> [Range<u32>; 2] {
+    let hole = skipped.and_then(|key| spans.iter().find(|(layer, _)| *layer == key));
+    match hole {
+        Some((_, hole)) => [0..hole.start, hole.end..count],
+        None => [0..count, count..count],
     }
 }
 
@@ -246,5 +271,38 @@ mod tests {
             .patch(9, &[4, 5, 6, 4, 6, 7, 4, 4, 4, 4, 4, 4])
             .is_none());
         assert!(built.layout.patch(9, &indices[9..18]).is_some());
+    }
+
+    #[test]
+    fn a_subtool_s_lines_can_be_left_out_of_the_draw() {
+        let indices = slots();
+        let first = MeshSpan::new(LayerKey(1), 0..9);
+        let second = MeshSpan::new(LayerKey(2), 9..18);
+        let built = lines(&indices, &[first, second]);
+        let count = built.indices.len() as u32;
+        let (_, one) = built.spans[0].clone();
+        let (_, two) = built.spans[1].clone();
+        // Six lines a slot — the quad's five edges and its padding
+        // triangle's zero-length one — at two indices a line.
+        assert_eq!((one.start, one.end, two.start, two.end), (0, 12, 12, 24));
+        assert_eq!(count, 24);
+
+        assert_eq!(
+            ranges_without(count, &built.spans, None),
+            [0..count, count..count]
+        );
+        assert_eq!(
+            ranges_without(count, &built.spans, Some(LayerKey(1))),
+            [0..0, 12..24]
+        );
+        assert_eq!(
+            ranges_without(count, &built.spans, Some(LayerKey(2))),
+            [0..12, 24..24]
+        );
+        // A subtool with no lines here — an SDF source — leaves them all.
+        assert_eq!(
+            ranges_without(count, &built.spans, Some(LayerKey(9))),
+            [0..count, count..count]
+        );
     }
 }

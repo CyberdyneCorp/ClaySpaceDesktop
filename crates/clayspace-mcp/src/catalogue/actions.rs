@@ -231,12 +231,14 @@ pub fn home_of(command: &Command) -> Home {
         // Offered, unlike the file-panel commands: a retopology is a model
         // operation with a result an agent can read back — face and triangle
         // counts, and the quad share — rather than a dialog a person has to
-        // stand in front of. It runs off the interface thread and places its
-        // result when it returns, which an agent driving a session wants
-        // exactly as much as a sculptor does.
+        // stand in front of. It runs off the interface thread and holds its
+        // result as a preview when it returns; the agent accepts or discards
+        // it exactly as a sculptor does.
         SetRetopoSettings(_) => Home::In("retopo", "set"),
         RunRetopology => Home::In("retopo", "run"),
         CancelRetopology => Home::In("retopo", "cancel"),
+        AcceptRetopology => Home::In("retopo", "accept"),
+        DiscardRetopology => Home::In("retopo", "discard"),
 
         // -- uv -------------------------------------------------------------
         //
@@ -813,6 +815,8 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("bake", "cancel") => C::CancelBake,
         ("uv", "cancel") => C::CancelUvAtlas,
         ("retopo", "cancel") => C::CancelRetopology,
+        ("retopo", "accept") => C::AcceptRetopology,
+        ("retopo", "discard") => C::DiscardRetopology,
 
         // -- deform ---------------------------------------------------------
         ("deform", "toggle_panel") => C::ToggleDeform,

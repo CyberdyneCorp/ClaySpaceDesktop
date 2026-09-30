@@ -119,9 +119,64 @@ remesher's guided C ABI. Its warnings reach the job notice.
 
 The retopology interaction mode captures pointer gestures before the sculpt
 dispatcher. Guides and density have separate overlays and their edits remain
-visible before a run. The existing job publishes a result on completion; the
-separate explicit accept/discard preview from #211 remains a follow-up to that
-workflow.
+visible before a run.
+
+## Holding the result for a decision (#211 task 11.1, #213)
+
+**The job's result is held, not placed.** When a run lands, the ViewModel
+checks the source revision as it did before publishing, and keeps the
+`RetopoResult` with the settings it was asked with. Nothing reaches the
+document: no layer, no history entry, no modified mark. Accept calls the same
+`place_retopology` the job used to call on landing, with the same settings, so
+an accepted preview is the old publish bit for bit — held by
+`an_accepted_preview_is_what_publishing_placed`, which compares both paths'
+layers and the preview drawn before acceptance. Discard calls
+`discard_retopology`, which forgets the recorded target so the result cannot be
+placed afterwards, and changes nothing else — the saved document is byte-equal
+before and after.
+
+**Where a held preview goes.** It is not document data, so its life is the
+ViewModel's:
+
+- *A new run* drops it before reading its source: the document records one
+  retopology target at a time, and the new run is the sculptor's answer to the
+  preview in front of them.
+- *A source that moves* — a stroke, an undo, a redo, anything that moves the
+  revision the result was checked against — drops it on the next frame with a
+  notice, and an accept that races the frame is refused by the same check. The
+  rule is the one 11.2 applies to a result landing on a moved source.
+- *A save* leaves it held and writes none of it; the source revision does not
+  move, so it stays acceptable.
+- *A new, opened or reverted document* drops it silently: it was never part of
+  the document, so there is no work to warn about, and the unsaved-work guard
+  is not consulted for it.
+
+**It is drawn in place of its source.** The engine places the result's
+triangles by the source's transform through the arithmetic `uv_preview` uses
+for an accepted layer (`ClayDocument::retopo_preview`), with the result's own
+normals or area-weighted ones. The renderer draws it from buffers of its own
+through the surface pipeline, skips the source's span and its polyframe lines
+(`polyframe::Lines::spans`), and draws the result's authored edges when the
+polyframe is on, through `polyframe::lines` as an accepted layer's are. A
+field source is not a span of the carried buffer and cannot be cut out of the
+one field surface, so the field surface is left out while its preview is held:
+drawn over it, the preview lost the depth test almost everywhere, because its
+quads chord the isosurface and lie just inside it. That hides any other field
+layer for as long as the preview is held, which is the price of seeing the
+quads at all. The preview is the result drawn alone: an in-place accept leaves
+exactly that on screen, and a beside accept adds the source back next to it, as
+placing beside always has. While a
+preview is held, the UV display is about the preview: `UvViewModel::hold_preview`
+decides whether there is a layout to show from the held result rather than the
+active layer.
+
+**The UV square is a picture of the layout.** `UvLayout` carries the
+per-vertex UVs and triangles with the islands and seams `uv_islands` already
+finds, now with every side of each seam (`seam_sides`) since both sides are
+different edges in UV space. The panel draws it as one egui mesh — islands
+tinted as on the surface, or one neutral fill under the plain checker — with
+the seams in the seam colour. It is shown while a UV display is chosen and the
+active layer or held preview carries UVs, and pushes no command.
 
 ## From fixed mesh to hierarchy (#214)
 

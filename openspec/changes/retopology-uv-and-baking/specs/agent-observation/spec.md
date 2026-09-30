@@ -7,7 +7,9 @@ long it will wait.
 
 A job that runs off the interface thread — a retopology, a UV layout, a
 conform, a bake — SHALL count as running from the moment it starts until its
-result has been published or discarded. It SHALL be listed with its progress
+result has landed: published, discarded, or — for a retopology — held as a
+preview awaiting an explicit accept or discard, which is a decision rather than
+running work. It SHALL be listed with its progress
 fraction wherever outstanding work is reported, and waiting SHALL collect and
 publish its result rather than depend on the window drawing a frame.
 
@@ -26,5 +28,5 @@ than reporting only that time ran out.
 #### Scenario: A retopology is outstanding until it lands
 - **WHEN** an agent starts a retopology and waits
 - **THEN** the session is not reported quiet while the job runs, the job is
-  listed with its fraction, and the wait returns quiet once the result is
-  published or discarded
+  listed with its fraction, and the wait returns quiet once the result is held
+  as a preview, reported as `outcomes.retopology.pending`
