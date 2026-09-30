@@ -2237,14 +2237,32 @@ impl App {
         self.request_redraw();
     }
 
+    /// Keeps what is dragged in a field visible while its expensive move waits
+    /// for the release.
+    ///
+    /// A placed object is drawn as its own surface where the hand has taken
+    /// it; an object with no surface of its own to draw is still moved live.
+    fn preview_gizmo_geometry(&mut self) {
+        match *self.objects.target().get() {
+            Some(clayspace_model::GizmoTarget::Layer(target)) => self.preview_layer_drag(target),
+            Some(clayspace_model::GizmoTarget::Object(_)) => match self.objects.object_preview() {
+                Some(posed) => self.show_object_preview(Some(&posed)),
+                None => self.settle_geometry(),
+            },
+            _ => self.settle_geometry(),
+        }
+    }
+
+    fn show_object_preview(&mut self, posed: Option<&clayspace_model::PosedPreview>) {
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.renderer.set_object_preview(&graphics.gpu, posed);
+        }
+    }
+
     /// Keeps a whole SDF layer visible while its expensive field move waits.
     /// A combined surface cannot be transformed as one without also moving
     /// other layers, so its widget alone follows the hand until release.
-    fn preview_gizmo_geometry(&mut self) {
-        let Some(clayspace_model::GizmoTarget::Layer(target)) = *self.objects.target().get() else {
-            self.settle_geometry();
-            return;
-        };
+    fn preview_layer_drag(&mut self, target: clayspace_model::LayerKey) {
         let mut visible = self
             .scene
             .scene()
@@ -5556,6 +5574,7 @@ impl App {
         if matches!(command, Command::EndGizmoDrag) {
             if let Some(graphics) = self.graphics.as_mut() {
                 graphics.renderer.set_surface_preview(None);
+                graphics.renderer.set_object_preview(&graphics.gpu, None);
             }
         }
         match gizmo_geometry_update(

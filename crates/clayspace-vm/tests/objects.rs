@@ -64,6 +64,9 @@ struct FakeObjects {
     /// interface must not confuse with an item it cannot move.
     hit: Option<ItemKind>,
     curve_available: bool,
+    /// Whether an object offers a surface of its own to draw during a drag,
+    /// as a placed primitive does and a sampled mesh does not.
+    previews: bool,
 }
 
 impl FakeObjects {
@@ -78,6 +81,7 @@ impl FakeObjects {
             slow: false,
             hit: None,
             curve_available: true,
+            previews: false,
         }
     }
 
@@ -390,6 +394,17 @@ impl ObjectModel for FakeObjects {
             return None;
         }
         self.objects.first().map(|object| object.id)
+    }
+
+    fn object_preview(&mut self, id: ObjectId) -> Option<clayspace_model::ObjectPreview> {
+        self.objects.iter().find(|object| object.id == id)?;
+        self.previews.then(|| clayspace_model::ObjectPreview {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 3],
+            indices: vec![0, 1, 2],
+            layer: Transform::default(),
+            mirror: [false; 3],
+        })
     }
 
     fn begin_target_drag(&mut self, _target: GizmoTarget) {
@@ -1269,6 +1284,135 @@ fn a_refused_layer_release_clears_the_pending_preview() {
     assert!(!vm.settling());
     assert!(vm.preview_transform().is_none());
     assert!(calls.borrow().transforms.is_empty());
+}
+
+/// A viewmodel over one placed box that offers its own surface to a drag.
+fn previewing_viewmodel() -> (ObjectViewModel, Rc<RefCell<Calls>>, ObjectId) {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
+    let id = model.objects[0].id;
+    model.selected = Some(id);
+    model.previews = true;
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    send(&mut vm, Command::SelectObject(Some(id)));
+    (vm, calls, id)
+}
+
+/// The first frame of a placed object's drag in a field writes nothing to
+/// the document (#196, D14): the object is drawn as its own surface where the
+/// hand is, and the move is written once, on release, exactly as the hand
+/// left it.
+#[test]
+fn a_placed_object_drag_draws_its_own_surface_and_writes_once_on_release() {
+    let (mut vm, calls, _) = previewing_viewmodel();
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    let still = vm.object_preview().expect("the press meshes the object");
+    assert_eq!(still.positions[1], [1.0, 0.0, 0.0], "drawn where it stands");
+
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    assert!(
+        calls.borrow().transforms.is_empty(),
+        "the first drag frame evaluated the field"
+    );
+    assert!(vm.settling());
+    let posed = vm.object_preview().expect("the object follows the hand");
+    assert_eq!(posed.positions[0], [0.2, 0.0, 0.0]);
+    assert_eq!(posed.positions[1], [1.2, 0.0, 0.0]);
+    assert_eq!(vm.pivot(), Some([0.2, 0.0, 0.0]));
+
+    send(&mut vm, Command::DragGizmo([0.5, 0.0, 0.0], false));
+    send(&mut vm, Command::EndGizmoDrag);
+    assert!(
+        vm.object_preview().is_none(),
+        "the preview outlived the drag"
+    );
+    assert!(!vm.settling());
+    let transforms = calls.borrow().transforms.clone();
+    assert_eq!(transforms.len(), 1, "written once, on release");
+    assert_eq!(transforms[0].position, [0.5, 0.0, 0.0]);
+    assert_eq!(calls.borrow().entries, 1, "and one thing to take back");
+}
+
+/// Without a surface of its own — a mesh sampled into the field — the object
+/// is still moved live, and the first frame reaches the document as it did.
+#[test]
+fn an_object_with_no_surface_of_its_own_is_dragged_live() {
+    let (mut vm, calls) = viewmodel();
+    place(&mut vm);
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    assert!(vm.object_preview().is_none());
+    assert_eq!(calls.borrow().transforms.len(), 1);
+    send(&mut vm, Command::EndGizmoDrag);
+}
+
+/// Only a field defers: an object is only ever placed in one, and a drag
+/// dispatched as another representation keeps the live path.
+#[test]
+fn an_object_drag_outside_a_field_is_not_previewed() {
+    let (mut vm, calls, _) = previewing_viewmodel();
+    vm.dispatch(
+        &Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+        Representation::Mesh,
+    );
+    vm.dispatch(
+        &Command::DragGizmo([0.2, 0.0, 0.0], false),
+        Representation::Mesh,
+    );
+    assert!(vm.object_preview().is_none());
+    assert_eq!(calls.borrow().transforms.len(), 1);
+}
+
+/// A subtracting operand is shown by the cavity it carves, which its own
+/// shape is not a picture of: it keeps the live path, so the cavity follows
+/// the drag while the form can keep up.
+#[test]
+fn a_subtracting_operand_is_still_dragged_live() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    let mut cutter = an_object(1, Shape::Sphere, [0.0; 3]);
+    cutter.combine.op = Combine::Subtract;
+    let id = cutter.id;
+    model.objects.push(cutter);
+    model.selected = Some(id);
+    model.previews = true;
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    send(&mut vm, Command::SelectObject(Some(id)));
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.2, 0.0, 0.0], false));
+    assert!(vm.object_preview().is_none());
+    assert!(!vm.settling());
+    assert_eq!(
+        calls.borrow().transforms.len(),
+        1,
+        "the cavity follows live"
+    );
+}
+
+/// A selection change mid-drag finishes the move on the object that was
+/// being dragged and takes the preview down with it.
+#[test]
+fn an_interrupted_object_drag_lands_and_drops_its_preview() {
+    let (mut vm, calls, _) = previewing_viewmodel();
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    send(&mut vm, Command::DragGizmo([0.3, 0.0, 0.0], false));
+    send(&mut vm, Command::SetGizmoTarget(None));
+    assert!(vm.object_preview().is_none());
+    assert_eq!(calls.borrow().transforms.len(), 1);
+    assert_eq!(calls.borrow().transforms[0].position, [0.3, 0.0, 0.0]);
 }
 
 #[test]
