@@ -157,8 +157,15 @@ for an accepted layer (`ClayDocument::retopo_preview`), with the result's own
 normals or area-weighted ones. The renderer draws it from buffers of its own
 through the surface pipeline, skips the source's span and its polyframe lines
 (`polyframe::Lines::spans`), and draws the result's authored edges when the
-polyframe is on. A field source is not a span of the carried buffer and cannot
-be cut out of the one field surface, so its preview is drawn over it. While a
+polyframe is on, through `polyframe::lines` as an accepted layer's are. A
+field source is not a span of the carried buffer and cannot be cut out of the
+one field surface, so the field surface is left out while its preview is held:
+drawn over it, the preview lost the depth test almost everywhere, because its
+quads chord the isosurface and lie just inside it. That hides any other field
+layer for as long as the preview is held, which is the price of seeing the
+quads at all. The preview is the result drawn alone: an in-place accept leaves
+exactly that on screen, and a beside accept adds the source back next to it, as
+placing beside always has. While a
 preview is held, the UV display is about the preview: `UvViewModel::hold_preview`
 decides whether there is a layout to show from the held result rather than the
 active layer.

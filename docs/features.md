@@ -3180,8 +3180,14 @@ same layer, UVs and single undo entry, beside the source or over it as the run
 was asked. Discarding leaves the document as it was, byte for byte, with the
 next undo still the action before the run. The preview is drawn in place of its
 source when the source is a mesh, voxel, multires or dynamic subtool — the
-source's triangles and polyframe lines step aside — and over it when the source
-is a field, which cannot be cut out of the one surface every field layer shares.
+source's triangles and polyframe lines step aside. For a field source the
+whole field surface steps aside while the preview is held: it cannot be cut to
+one layer, and drawn under the preview it hid it, since the quads lie just
+inside the isosurface. Accepted in place, the viewport then draws exactly what
+the preview drew; accepted beside, the source is drawn next to the new layer
+again. `outcomes.retopology` reports a held result with `pending: true`, a
+placed one with `pending: false`, and nothing once a result is discarded or
+dropped.
 Its quads show under the polyframe, and the UV display applies to it while it
 is held. Starting another run drops the preview; so does anything that moves its
 source — a stroke, an undo, a redo — with a notice saying so. A save keeps it

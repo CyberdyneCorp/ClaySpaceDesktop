@@ -225,8 +225,14 @@ SHALL drop it without asking, since it holds no work of the document's.
 The preview SHALL be drawn standing where acceptance would draw it, lit through
 the surface's own pipeline, with its authored edges under the polyframe. Where
 the source is a carried subtool the preview SHALL be drawn in place of it —
-its triangles and its polyframe lines left out while the preview is held. A
-field source SHALL stay drawn under the preview. The UV display SHALL describe
+its triangles and its polyframe lines left out while the preview is held.
+Where the source is a field layer, the field's surface SHALL be left out while
+the preview is held: it cannot be cut to one layer, and drawn under the preview
+it hides it, since the quads lie on or just inside its isosurface. The preview
+is the result as it is drawn alone; accepted beside its source, the source
+stays drawn next to it as before. `outcomes.retopology` SHALL report a held
+result with `pending: true`, a placed one with `pending: false`, and nothing for
+a result that was discarded or dropped. The UV display SHALL describe
 the preview while one is held: offered and shown where the preview carries a
 layout, whatever the active layer carries.
 
@@ -234,13 +240,21 @@ layout, whatever the active layer carries.
 - **WHEN** a retopology lands and the sculptor or an agent accepts it
 - **THEN** the subtool placed, its UVs and the history entry are those the job
   placed on landing, and the preview drawn before acceptance is the accepted
-  layer as the viewport then draws it
+  layer as the viewport draws it alone — which is what an in-place accept
+  leaves on screen
 
 #### Scenario: A held preview is discarded
 - **WHEN** a held preview is discarded
 - **THEN** the saved document is byte-equal to the one saved before the run,
   the history depth and the next undo are unchanged, the source is drawn again
-  exactly as before, and accepting afterwards is refused
+  exactly as before, `outcomes.retopology` reports no result, and accepting
+  afterwards is refused
+
+#### Scenario: A held preview of a field source is seen
+- **WHEN** a retopology of a field layer is held
+- **THEN** the field's surface is left out while it is held, the preview and
+  its quads under the polyframe are drawn exactly as they are with no field at
+  all, and a discard draws the field again exactly as before
 
 #### Scenario: The source moves while a preview is held
 - **WHEN** the source is stroked, or an undo or redo moves it, while its

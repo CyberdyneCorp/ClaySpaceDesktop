@@ -199,19 +199,24 @@ field evaluator with no field. We are the first of either.
       nothing. A held preview is dropped by a new run, by its source moving
       (stroke, undo, redo; with a notice) and by a replaced document (silently),
       and survives a save that writes none of it. It is drawn in place of a
-      carried source (span and polyframe lines left out), over a field source,
+      carried source (span and polyframe lines left out), in place of the
+      whole field surface for a field source (drawn under it, the field hid
+      it: 395 px of the preview and 545 px of its lines lost against 0 now),
       with its quads under the polyframe and the UV display applying to it.
       Measured on the starting form at 600 quads with UVs: the accepted layer
       equals the one publishing placed bit for bit, and the preview drawn
       before accepting equals the accepted layer as drawn (657 vertices, 1,036
       triangles, 6 islands for 6 charts, 133 seams for 133 seam edges); a
-      discard leaves the 1,344,064-byte saved document byte-equal. In the
+      discard leaves the 1,344,064-byte saved document byte-equal and
+      reports no outcome (a discarded or dropped result is no longer reported
+      as `pending: false`, which means placed). In the
       viewport the preview replaced the sculpt's polyframe at 9,193 px, its
       checker darkened 11,945 px with 193 (checker) and 293 (islands) seam px
       against 0, a discard left 0 px behind (0 with the polyframe), and the
-      accepted layer differed from the held preview at 0 px (0 with the
-      polyframe); a field source's preview covered 24,962 px of an otherwise
-      empty scene. Held by `retopo_preview.rs` (engine, 5 tests), the held
+      layer accepted in place differed from the held preview at 0 px (0 with
+      the polyframe; accepted beside, the source is drawn next to it again);
+      a field source's preview covered 24,962 px and, over the real field
+      surface, differed from itself alone at 0 px (0 with the polyframe). Held by `retopo_preview.rs` (engine, 5 tests), the held
       preview tests in `clayspace-vm/tests/retopo.rs` (7 new) and
       `uv_display.rs`, `visual_retopo_preview.rs`, the MCP contract test
       `a_held_retopology_is_accepted_or_discarded_by_name`, and the agent
