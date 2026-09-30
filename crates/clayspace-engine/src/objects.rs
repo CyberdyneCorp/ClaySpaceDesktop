@@ -44,6 +44,14 @@ pub struct PlacedObject {
     /// Uniform once, on the belief that "the engine's transforms take one
     /// factor, not three". A node's has taken three since ABI 0.54.0.
     pub scale: [f32; 3],
+    /// Whether the node takes part in its layer's mirror.
+    ///
+    /// Written once, when the item is built, and read by nothing in the
+    /// engine's ABI afterwards. Only the drag preview needs it: an object
+    /// reflected through its layer's plane moves both images, and a preview
+    /// that moved one would leave the other to jump on release. An item
+    /// follows the mirror unless it opted out, so that is the default.
+    pub mirrored: bool,
 }
 
 impl PlacedObject {
@@ -69,6 +77,7 @@ impl PlacedObject {
             rotation_axis: [0.0, 1.0, 0.0],
             rotation_angle: 0.0,
             scale: [1.0; 3],
+            mirrored: true,
         }
     }
 
@@ -290,6 +299,38 @@ pub fn clip(reached: Influence, within: Option<([f32; 3], [f32; 3])>) -> Influen
     }
 }
 
+// -- the drag preview ---------------------------------------------------------
+
+/// Cells across a previewed primitive's largest extent.
+///
+/// Relative to the shape, so a pebble and a boulder are meshed alike. Enough
+/// that a box frame keeps its bars and a torus its hole; few enough that the
+/// press stays well inside a frame. Measured on the reference scene's
+/// sphere: see `the_first_object_drag_frame_draws_the_object_alone` in the
+/// application's `gizmo_first_drag` test for the figures.
+pub const PREVIEW_RESOLUTION: i32 = 48;
+
+/// A primitive's surface alone, in its own frame.
+///
+/// A document of its own, holding one item at the origin, and marched once.
+/// The object's field in its real layer is not read or written: the layer is
+/// shared with everything blended into it, and what a drag wants is the
+/// shape that is moving, not the composition it is leaving.
+pub fn preview_mesh(
+    shape: clayspace_model::Shape,
+    parameters: &[f32],
+) -> claycore::Result<claycore::Mesh> {
+    let mut alone = claycore::Document::new()?;
+    let layer = alone.add_sdf_layer("preview")?;
+    let item = claycore::Item::of(primitive_of(shape, parameters))?;
+    alone.add_item(layer, &item)?;
+    alone.mesh(claycore::MeshParams {
+        resolution: PREVIEW_RESOLUTION,
+        mesher: claycore::Mesher::SurfaceNets,
+        ..claycore::MeshParams::default()
+    })
+}
+
 // -- the side-car -----------------------------------------------------------
 
 /// Where an object table lives for a document at `path`.
@@ -364,6 +405,9 @@ pub fn write_table(path: &std::path::Path, objects: &[PlacedObject]) -> std::io:
         // corruption. Growing in the middle would have shifted the parameter
         // count and made the row unreadable.
         out.push_str(&format!(" {} {}", object.scale[1], object.scale[2]));
+        // Whether it takes part in the mirror, after the scale for the same
+        // reason: a reader that predates it stops before it.
+        out.push_str(if object.mirrored { " 1" } else { " 0" });
         out.push('\n');
     }
     std::fs::write(path, out)
@@ -452,6 +496,9 @@ fn read_row(line: &str) -> Option<PlacedObject> {
         (Some(y), Some(z)) => [scale_x, y, z],
         _ => [scale_x; 3],
     };
+    // Absent before the preview needed it, and then the engine's own default:
+    // an item follows its layer's mirror unless it said otherwise.
+    let mirrored = fields.next() != Some("0");
 
     Some(PlacedObject {
         layer,
@@ -463,6 +510,7 @@ fn read_row(line: &str) -> Option<PlacedObject> {
         rotation_axis,
         rotation_angle,
         scale,
+        mirrored,
     })
 }
 
@@ -531,6 +579,7 @@ mod tests {
             rotation_axis: [0.0, 1.0, 0.0],
             rotation_angle: 0.5,
             scale,
+            mirrored: false,
         }
     }
 
@@ -548,6 +597,10 @@ mod tests {
         assert_eq!(
             read[0].scale, object.scale,
             "the stretch was lost between writing and reading"
+        );
+        assert!(
+            !read[0].mirrored,
+            "an object kept out of the mirror came back reflected"
         );
         let _ = std::fs::remove_file(&path);
     }
@@ -581,6 +634,10 @@ mod tests {
             "the one scale a previous version wrote should be all three"
         );
         assert_eq!(object.position, [1.5, -2.0, 0.25]);
+        assert!(
+            object.mirrored,
+            "a row with no mirror field should follow the layer's mirror, as the engine does"
+        );
     }
 
     /// And a row from this version is readable by the previous one's rules:
@@ -606,7 +663,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("no parameter count at {}: {fields:?}", NAMED + NUMBERS));
         assert_eq!(
             fields.len(),
-            NAMED + NUMBERS + 1 + count + 2,
+            NAMED + NUMBERS + 1 + count + 3,
             "a field moved: a reader that predates the per-axis scale walks \
              this row by position and would take the wrong one — {fields:?}"
         );

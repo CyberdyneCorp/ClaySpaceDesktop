@@ -29,6 +29,7 @@ pub mod lattice;
 pub mod locale;
 pub mod mask;
 pub mod multires;
+pub mod object_preview;
 pub mod outline;
 pub mod profile;
 pub mod reference;
@@ -82,6 +83,7 @@ pub use multires::{
     MultiresLevels, MultiresSculptLayer, MultiresSculptLayerCost, MultiresSculptLayerId,
     MultiresSculptLayerOp, MultiresState, SmoothFrequency, SubdivisionCost, WriteDomain,
 };
+pub use object_preview::{ObjectPreview, PosedPreview};
 pub use outline::{
     cells_to_write, coverage_path, lattice_pitch, MaskGesture, MaskOutline, OutlineDraft,
     OutlineFrame, OutlineMode, CELL_CEILING, COVERING, OUTLINE_SPACING,
