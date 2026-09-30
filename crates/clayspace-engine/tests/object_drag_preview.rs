@@ -8,7 +8,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    CombineSettings, GizmoTarget, ObjectModel, SceneModel, SculptModel, Shape, Transform,
+    CombineSettings, DocumentModel, GizmoTarget, ObjectModel, SceneModel, SculptModel, Shape,
+    Transform,
 };
 
 fn starting_form() -> ClayDocument {
@@ -93,6 +94,61 @@ fn the_preview_reflects_the_object_only_where_the_engine_does() {
     let single = document.object_preview(alone).unwrap();
     assert_eq!(single.mirror, [false; 3]);
     assert_eq!(single.posed(to).positions.len(), single.positions.len());
+}
+
+/// After a save and a reopen the preview still reflects exactly what the
+/// engine reflects.
+///
+/// A reopened document builds each layer's mirror record as a fresh layer's,
+/// "no mirror", whatever the file carries. The preview read that record first,
+/// so a mirrored object reopened under X symmetry was drawn without its twin
+/// while the twin stayed in the field, and jumped on release. The engine is
+/// asked now; the object that opted out stays alone.
+#[test]
+fn a_reopened_document_previews_the_mirror_the_engine_evaluates() {
+    let mut document = starting_form();
+    let mirrored = document
+        .place_object(
+            Shape::Sphere,
+            &[0.2],
+            [0.9, 0.0, 0.0],
+            CombineSettings::default(),
+        )
+        .expect("place a mirrored sphere");
+    document.set_symmetry([false; 3]).expect("symmetry off");
+    let alone = document
+        .place_object(
+            Shape::Sphere,
+            &[0.2],
+            [0.0, 0.9, 0.0],
+            CombineSettings::default(),
+        )
+        .expect("place a one-sided sphere");
+    let path = std::env::temp_dir().join(format!(
+        "clayspace-object-preview-mirror-{}.clayspace",
+        std::process::id()
+    ));
+    document.save(&path).expect("save");
+
+    let mut reopened = starting_form();
+    reopened.open(&path).expect("open");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(clayspace_engine::objects::sidecar_for(&path));
+
+    let key = reopened.scene().active_layer().unwrap().key;
+    let layer = reopened.layer_id(key).unwrap();
+    let (carried, _) = reopened.document().layer_mirror(layer).unwrap();
+    assert_eq!(carried, [true, false, false], "the file lost the mirror");
+    assert_eq!(
+        reopened.object_preview(mirrored).unwrap().mirror,
+        carried,
+        "a reopened mirrored object lost the twin the engine still draws"
+    );
+    assert_eq!(
+        reopened.object_preview(alone).unwrap().mirror,
+        [false; 3],
+        "a one-sided object came back reflected"
+    );
 }
 
 /// A subtool that has been moved places the preview with it: the object is
