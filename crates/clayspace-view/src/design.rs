@@ -223,6 +223,13 @@ impl Tokens {
         color(palette::ACCENT)
     }
 
+    /// The fill every chart takes in the UV square under the plain checker:
+    /// a light neutral the seam colour and the square's outline both read
+    /// against, and not an island's tint.
+    pub fn uv_chart() -> egui::Color32 {
+        egui::Color32::from_gray(190)
+    }
+
     /// The tint that leaves an image as it is.
     ///
     /// Not a colour on screen: egui multiplies a drawn image by a tint, and

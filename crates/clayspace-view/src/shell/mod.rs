@@ -78,7 +78,7 @@ pub use shelf::{
     brush_shelf, brush_swatch_id, favourite_toggle_id, shelf_filter_chip_id, shelf_filter_id,
     tool_rail, ShelfFilter,
 };
-pub use uv_layout::uv_display_chip_id;
+pub use uv_layout::{square_mesh, uv_display_chip_id, uv_layout_square_id};
 pub use widgets::{chip_id, close_id, heading_id, readout_id, slider_id, slider_widget_id};
 pub use windows::{agent_access_window, agent_ask_window, recovery_window};
 pub use windows::{
@@ -242,6 +242,9 @@ pub struct ShellState<'a> {
     /// carries any — the choice is offered only where there is a layout.
     pub uv_display: clayspace_model::UvDisplay,
     pub carries_uvs: bool,
+    /// The layout the UV square draws, while a display is chosen and there is
+    /// one: the active layer's, or the held retopology preview's.
+    pub uv_layout: Option<&'a clayspace_model::UvLayout>,
     /// The curve being placed, while one is up, and the thickness a new point
     /// would be given.
     pub curve: clayspace_model::CurveState,

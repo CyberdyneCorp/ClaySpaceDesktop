@@ -463,6 +463,9 @@ struct App {
     /// the active layer when it is visible, the display asked for, and the
     /// held retopology preview's revision.
     uv_preview_key: Option<(u64, Option<LayerKey>, clayspace_model::UvDisplay, u64)>,
+    /// The layout the UV square draws, when one is shown: the active layer's
+    /// or the held retopology preview's, while a UV display is chosen.
+    uv_layout: Option<clayspace_model::UvLayout>,
     /// What the adaptive surfaces have sent to the viewport this session,
     /// per upload of the carried buffer, for the diagnostics report.
     adaptive_uploads: clayspace_model::AdaptiveUploads,
@@ -890,6 +893,7 @@ impl App {
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
             uv_preview_key: None,
+            uv_layout: None,
             adaptive_uploads: clayspace_model::AdaptiveUploads::default(),
             carried_build: None,
             cage_revision: None,
@@ -2670,6 +2674,11 @@ impl App {
             Some(result) => (None, self.held_preview_of(&result).map(|p| (p, result))),
             None => (self.uv_preview_of(active.filter(|_| display.is_on())), None),
         };
+        self.uv_layout = layer
+            .as_ref()
+            .or(held.as_ref().map(|(preview, _)| preview))
+            .filter(|preview| display.is_on() && !preview.uvs.is_empty())
+            .map(clayspace_model::UvLayout::of);
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -5936,6 +5945,7 @@ impl App {
             voxel_blur: self.document.with(|d| d.voxel_blur()),
             uv_display: *self.uv.display().get(),
             carries_uvs: *self.uv.carries_uvs().get(),
+            uv_layout: self.uv_layout.as_ref(),
             curve: self.curve.state().get().clone(),
             curve_radius: *self.curve.radius().get(),
             lattice: self.lattice.state().get().clone(),
@@ -7436,7 +7446,8 @@ impl App {
                     self.rigging,
                     self.skin_preview,
                 )
-                .with_uv_display(self.uv.shown_display()),
+                .with_uv_display(self.uv.shown_display())
+                .with_uv_layout(self.uv_layout.as_ref()),
             );
         }
         if query.references {

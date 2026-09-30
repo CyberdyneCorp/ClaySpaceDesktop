@@ -1329,8 +1329,9 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
     let charts = uv["report"]["charts"].as_u64().unwrap_or(0);
     assert!(charts > 0, "a laid layout with no charts: {uv}");
 
-    // Held: the checker chosen earlier is drawn on the preview before
-    // anything is placed.
+    // Held: the checker chosen earlier is drawn on the preview, and the UV
+    // square draws its layout — one island per chart — before anything is
+    // placed.
     assert_eq!(
         layer_count(&running, &session),
         layers + 1,
@@ -1340,6 +1341,18 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
         uv_display(&running),
         "checker",
         "the held preview carries a layout and the checker chosen earlier is not shown"
+    );
+    let square = uv_layout(&running, &session);
+    println!("held preview: {charts} charts reported; the UV square draws {square}");
+    assert_eq!(
+        square["islands"].as_u64(),
+        Some(charts),
+        "the UV square does not draw the preview's charts: {square}"
+    );
+    assert_eq!(
+        square["seams"].as_u64(),
+        uv["report"]["seam_edges"].as_u64(),
+        "the UV square does not draw the preview's seams: {square}"
     );
 
     call(&running, &session, "retopo", json!({ "action": "accept" }));
@@ -1354,6 +1367,21 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
         "checker",
         "the accepted layer carries a layout and the checker chosen earlier is not shown"
     );
+    assert_eq!(
+        uv_layout(&running, &session),
+        square,
+        "the accepted layer's layout is not the one the preview showed"
+    );
+
+    // The material chosen: the square is gone with the checker.
+    call(
+        &running,
+        &session,
+        "view",
+        json!({ "action": "set_uv_display", "display": "off" }),
+    );
+    settle(&running, &session);
+    assert!(uv_layout(&running, &session).is_null());
 }
 
 /// Whether the last retopology is held as a preview; `None` before one ran.
@@ -1365,6 +1393,17 @@ fn retopo_pending(running: &Running, session: &str) -> Option<bool> {
         json!({ "sections": ["outcomes"] }),
     );
     state["structuredContent"]["outcomes"]["retopology"]["pending"].as_bool()
+}
+
+/// What the UV square draws, or null when it draws nothing.
+fn uv_layout(running: &Running, session: &str) -> Value {
+    let state = call(
+        running,
+        session,
+        "state",
+        json!({ "sections": ["presentation"] }),
+    );
+    state["structuredContent"]["presentation"]["uv_layout"].clone()
 }
 
 /// What a document says about itself over the door, with the parts that

@@ -956,6 +956,19 @@ pub struct PresentationState {
     /// `off` whenever that layer carries no layout. While a retopology
     /// preview is held, it is the preview's layout this describes.
     pub uv_display: String,
+    /// The layout drawn in the UV square, while one is: whenever the display
+    /// is on and the active layer or the held preview carries UVs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uv_layout: Option<UvLayoutState>,
+}
+
+/// What the UV square draws: the layout's islands and seams, laid flat.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UvLayoutState {
+    pub islands: usize,
+    /// Seam edges, each counted once although the square draws both sides.
+    pub seams: usize,
+    pub triangles: usize,
 }
 
 /// One reference image plane, as the reference panel holds it.
@@ -1441,6 +1454,7 @@ mod tests {
                 rigging: false,
                 skin_preview: true,
                 uv_display: "off".into(),
+                uv_layout: None,
             }),
             references: Some(Vec::new()),
             exchange: Some(ExchangeState {
