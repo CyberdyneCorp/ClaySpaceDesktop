@@ -94,13 +94,13 @@ fn uv_square(ui: &mut egui::Ui, layout: &UvLayout, display: UvDisplay) {
     for side in &layout.islands.seam_sides {
         let ends = side.map(|v| at(rect, layout.uvs.get(v as usize).copied()));
         if let [Some(a), Some(b)] = ends {
-            painter.line_segment([a, b], egui::Stroke::new(2.0, seam));
+            painter.line_segment([a, b], egui::Stroke::new(2.0_f32, seam));
         }
     }
     painter.rect_stroke(
         rect,
         0.0,
-        egui::Stroke::new(1.0, Tokens::text_dim()),
+        egui::Stroke::new(1.0_f32, Tokens::text_dim()),
         egui::StrokeKind::Inside,
     );
 }
