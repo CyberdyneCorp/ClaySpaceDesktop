@@ -234,6 +234,40 @@ fn gizmo_geometry_update(
     }
 }
 
+/// What a placed object's drag frame draws while its field waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjectDragFrame {
+    /// The object's own surface, posed where the hand has taken it.
+    Posed,
+    /// Nothing: the object's layer is not drawn, so neither is its preview.
+    Hidden,
+    /// No preview was taken at the press: the object is moved live and the
+    /// field re-meshed, as a subtracting operand is.
+    Live,
+}
+
+/// How a placed object's drag frame is drawn, from whether the ViewModel
+/// posed a preview and whether the object's layer is drawn at all.
+///
+/// A hidden layer's object drawn as a shaded copy would be the only thing of
+/// that layer on screen (#196, D14 review).
+fn object_drag_frame(previewed: bool, layer_visible: bool) -> ObjectDragFrame {
+    match (previewed, layer_visible) {
+        (false, _) => ObjectDragFrame::Live,
+        (true, false) => ObjectDragFrame::Hidden,
+        (true, true) => ObjectDragFrame::Posed,
+    }
+}
+
+/// Whether a manipulator command drops every drag preview the renderer holds.
+///
+/// The release does, and so does an interrupting command, which reaches the
+/// viewport as a release first. A preview left standing would draw the
+/// object where the hand let go on top of the field that now holds it.
+fn drops_drag_previews(command: &Command) -> bool {
+    matches!(command, Command::EndGizmoDrag)
+}
+
 /// An unrelated command closes a live gizmo gesture before it can change its
 /// target or mode and leave a surface preview attached to the old selection.
 fn interrupts_gizmo_drag(command: &Command) -> bool {
@@ -2245,11 +2279,24 @@ impl App {
     fn preview_gizmo_geometry(&mut self) {
         match *self.objects.target().get() {
             Some(clayspace_model::GizmoTarget::Layer(target)) => self.preview_layer_drag(target),
-            Some(clayspace_model::GizmoTarget::Object(_)) => match self.objects.object_preview() {
-                Some(posed) => self.show_object_preview(Some(&posed)),
-                None => self.settle_geometry(),
-            },
+            Some(clayspace_model::GizmoTarget::Object(id)) => self.preview_object_drag(id.layer),
             _ => self.settle_geometry(),
+        }
+    }
+
+    fn preview_object_drag(&mut self, layer: clayspace_model::LayerKey) {
+        let posed = self.objects.object_preview();
+        let visible = self
+            .scene
+            .scene()
+            .get()
+            .layers
+            .iter()
+            .any(|summary| summary.key == layer && summary.visible);
+        match object_drag_frame(posed.is_some(), visible) {
+            ObjectDragFrame::Posed => self.show_object_preview(posed.as_ref()),
+            ObjectDragFrame::Hidden => self.show_object_preview(None),
+            ObjectDragFrame::Live => self.settle_geometry(),
         }
     }
 
@@ -5571,7 +5618,7 @@ impl App {
         // The document is marked unsaved once, when the gesture ends.
         // Release always drops the GPU preview, even when the target changed
         // before this command reached the viewport or the final edit failed.
-        if matches!(command, Command::EndGizmoDrag) {
+        if drops_drag_previews(command) {
             if let Some(graphics) = self.graphics.as_mut() {
                 graphics.renderer.set_surface_preview(None);
                 graphics.renderer.set_object_preview(&graphics.gpu, None);
@@ -8360,11 +8407,12 @@ mod double_press {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_command_label, agent_history_label, agent_operation_label, gizmo_geometry_update,
-        interrupts_gizmo_drag, localized_agent_refusal, localized_agent_remark,
-        localized_tool_status, notices_written, refusal_for, remark_for_an_agent,
-        stroke_needs_a_gesture, tool_status, visible_scene_bounds, AgentGesture, App, Drag,
-        GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
+        agent_command_label, agent_history_label, agent_operation_label, drops_drag_previews,
+        gizmo_geometry_update, interrupts_gizmo_drag, localized_agent_refusal,
+        localized_agent_remark, localized_tool_status, notices_written, object_drag_frame,
+        refusal_for, remark_for_an_agent, stroke_needs_a_gesture, tool_status,
+        visible_scene_bounds, AgentGesture, App, Drag, GizmoGeometryUpdate, ObjectDragFrame,
+        ToolStatusSources, NOTICE_REFUSAL_CHANNELS, NOTICE_REMARK_CHANNELS,
     };
     use clayspace_app::{SharedDocument, ViewportInput};
     use clayspace_engine::{BackendPolicy, ClayDocument};
@@ -9019,6 +9067,31 @@ mod tests {
             ),
             GizmoGeometryUpdate::Preview
         );
+    }
+
+    /// A previewed object drag draws the posed object, and only while its
+    /// layer is drawn; an object with no preview moves live (#196, D14).
+    #[test]
+    fn a_placed_object_drag_draws_its_preview_only_where_its_layer_is_drawn() {
+        assert_eq!(object_drag_frame(true, true), ObjectDragFrame::Posed);
+        assert_eq!(
+            object_drag_frame(true, false),
+            ObjectDragFrame::Hidden,
+            "a hidden layer's object was drawn as a shaded copy mid-drag"
+        );
+        assert_eq!(object_drag_frame(false, true), ObjectDragFrame::Live);
+        assert_eq!(object_drag_frame(false, false), ObjectDragFrame::Live);
+    }
+
+    /// The release drops the drag previews; a drag frame keeps them.
+    #[test]
+    fn the_release_drops_every_drag_preview() {
+        assert!(drops_drag_previews(&Command::EndGizmoDrag));
+        assert!(!drops_drag_previews(&Command::DragGizmo(
+            [1.0, 0.0, 0.0],
+            false
+        )));
+        assert!(!drops_drag_previews(&Command::SetGizmoTarget(None)));
     }
 
     #[test]
