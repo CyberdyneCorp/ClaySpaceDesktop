@@ -832,6 +832,17 @@ pub trait ObjectModel {
         Err(self.no_objects_here())
     }
 
+    /// The object's own surface, for drawing a drag before the field follows.
+    ///
+    /// Meshed in the object's frame, so one answer serves every frame of the
+    /// drag. `None` where the object has no primitive of its own to mesh — a
+    /// mesh sampled into a volume — or where there is no such object; the
+    /// drag is then evaluated live, as it was before there was a preview.
+    fn object_preview(&mut self, id: ObjectId) -> Option<crate::ObjectPreview> {
+        let _ = id;
+        None
+    }
+
     /// Which object a ray meets, where it meets one.
     ///
     /// The engine attributes a hit to "the item whose field is closest at the

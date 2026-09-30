@@ -824,6 +824,13 @@ impl ObjectModel for SharedDocument {
             .set_target_transform(target, transform)
     }
 
+    fn object_preview(
+        &mut self,
+        id: clayspace_model::ObjectId,
+    ) -> Option<clayspace_model::ObjectPreview> {
+        self.document.borrow_mut().object_preview(id)
+    }
+
     fn begin_target_drag(&mut self, target: clayspace_model::GizmoTarget) {
         self.document.borrow_mut().begin_target_drag(target)
     }

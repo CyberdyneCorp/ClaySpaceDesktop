@@ -16778,6 +16778,27 @@ impl ClayDocument {
         (transform != clayspace_model::Transform::default()).then_some(transform)
     }
 
+    /// The axes a layer's mirror reflects its items through.
+    ///
+    /// The engine's answer first, and the layer row only where the engine
+    /// cannot give one. The row is a write-avoidance record, not the truth: a
+    /// reopened document builds its rows as a fresh layer's, "no mirror",
+    /// whatever the file's layers carry, so a mirrored object read from the
+    /// row lost its twin in the preview and jumped back on release. Reading
+    /// has been free since ClayCore 0.105.0. No axes where neither answers.
+    fn layer_mirror_axes(&self, key: LayerKey) -> [bool; 3] {
+        let Ok(index) = self.index_of(key) else {
+            return [false; 3];
+        };
+        let layer = &self.layers[index];
+        self.document
+            .layer_mirror(layer.id)
+            .map(|(axes, _)| axes)
+            .ok()
+            .or(layer.mirror)
+            .unwrap_or_default()
+    }
+
     /// An object as the world sees it: its node's transform, placed by the
     /// subtool it stands in.
     ///
@@ -18289,14 +18310,17 @@ impl ObjectModel for ClayDocument {
         let closed = self.document.end_undo_group().map_err(ModelError::engine);
         let node = placed?;
         closed?;
-        let object = PlacedObject::new(
-            key,
-            node,
-            clayspace_model::ObjectSource::Shape(shape),
-            parameters,
-            combine,
-            at,
-        );
+        let object = PlacedObject {
+            mirrored,
+            ..PlacedObject::new(
+                key,
+                node,
+                clayspace_model::ObjectSource::Shape(shape),
+                parameters,
+                combine,
+                at,
+            )
+        };
         let id = object.id();
         self.objects.push(object);
         self.selected_object = Some(id);
@@ -18741,6 +18765,24 @@ impl ObjectModel for ClayDocument {
                 .curve_transform_start()
                 .map(|start| clayspace_model::Transform::at(start.pivot)),
         }
+    }
+
+    fn object_preview(&mut self, id: ObjectId) -> Option<clayspace_model::ObjectPreview> {
+        let object = &self.objects[self.object_index(id)?];
+        let shape = object.source.shape()?;
+        let mesh = crate::objects::preview_mesh(shape, &object.parameters).ok()?;
+        let mirror = if object.mirrored {
+            self.layer_mirror_axes(id.layer)
+        } else {
+            [false; 3]
+        };
+        Some(clayspace_model::ObjectPreview {
+            positions: mesh.positions().to_vec(),
+            normals: mesh.normals_or_derived(),
+            indices: mesh.indices().to_vec(),
+            layer: self.carried_placement(id.layer).unwrap_or_default(),
+            mirror,
+        })
     }
 
     fn begin_target_drag(&mut self, target: GizmoTarget) {

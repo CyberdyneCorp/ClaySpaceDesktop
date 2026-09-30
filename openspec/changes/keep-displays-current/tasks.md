@@ -32,3 +32,14 @@
       the frame before it exactly on the starting form, and within the render
       noise floor across a smooth seam, where the residual is ClayCore #649
       (`clayspace-app/tests/visual_incremental.rs`)
+
+## 6. A grid display change with no grid in view (I14)
+
+- [x] 6.1 Try a scene-specific reproduction through the running application:
+      many layers, a mesh crossing, a grid added and removed, the change made
+      mid-stroke, and sculpted grids hidden. None stalled; the audit's figure
+      is the hidden-grid smoothing #239 removed (V5)
+- [x] 6.2 Tripwire through the door, window and renderer: with no grid, and
+      with six sculpted grids hidden, the change uploads nothing and stays
+      inside a frame; shown, it smooths them
+      (`agent_end_to_end.rs::a_grid_display_change_with_no_grid_in_view_does_no_work`)
