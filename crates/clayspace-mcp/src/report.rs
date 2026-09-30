@@ -516,11 +516,23 @@ pub fn outcome_state(
             faces: outcome.faces,
             quads: outcome.is_quads(),
             uv: retopo_uv_state(&outcome.uv),
+            pending: false,
         }),
         crossing: crossing.map(|(direction, layer)| CrossingOutcomeState {
             direction: tags::tag_of(tags::DIRECTIONS, direction).to_string(),
             layer: layer.0,
         }),
+    }
+}
+
+impl OutcomeState {
+    /// The same, saying whether the retopology it reports is held as a
+    /// preview rather than placed.
+    pub fn with_retopology_pending(mut self, pending: bool) -> Self {
+        if let Some(retopology) = self.retopology.as_mut() {
+            retopology.pending = pending;
+        }
+        self
     }
 }
 
@@ -1748,6 +1760,29 @@ mod tests {
             state.retopology.expect("a retopology").uv.status,
             "not_requested"
         );
+    }
+
+    /// A held preview is reported as pending, so an agent can tell a result
+    /// waiting for its decision from one already in the document.
+    #[test]
+    fn a_held_retopology_is_reported_as_pending() {
+        let outcome = clayspace_model::RetopoOutcome {
+            triangles_before: 100,
+            faces: 40,
+            triangles: 80,
+            vertices: 42,
+            uv: clayspace_model::RetopoUv::NotRequested,
+            guidance_warnings: Vec::new(),
+        };
+        let placed = outcome_state(None, Some(&outcome), None);
+        assert!(!placed.retopology.as_ref().expect("a retopology").pending);
+        let held = placed.with_retopology_pending(true);
+        assert!(held.retopology.expect("a retopology").pending);
+        // Nothing to mark where nothing has run.
+        assert!(outcome_state(None, None, None)
+            .with_retopology_pending(true)
+            .retopology
+            .is_none());
     }
 
     /// The chrome and the fade change what a capture looks like without

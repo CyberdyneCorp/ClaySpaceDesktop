@@ -42,6 +42,7 @@ mod options;
 mod right;
 mod shapes;
 mod shelf;
+mod uv_layout;
 mod widgets;
 mod windows;
 mod workspace;
@@ -60,13 +61,14 @@ use widgets::*;
 use windows::*;
 
 pub use booleans::boolean_op_chip_id;
-pub use inspector::mesh::{create_multires_button_id, uv_display_chip_id};
+pub use inspector::mesh::create_multires_button_id;
 pub use inspector::multires::subdivide_button_id;
 pub use left::{
     layer_convert_id, layer_row_id, left_panel, multires_add_pass_id, multires_bake_id,
     multires_compact_id, multires_form_row_id, multires_lock_id, multires_merge_id,
     multires_pass_row_id, multires_remove_id, multires_strength_id, new_layer_button_id,
-    new_layer_kind_id, new_layer_kind_menu_id, optimize_button_id,
+    new_layer_kind_id, new_layer_kind_menu_id, optimize_button_id, retopo_accept_button_id,
+    retopo_discard_button_id,
 };
 pub use menus::menu_bar;
 pub use options::{alpha_control_id, deform_chip_id, layer_transform_chip_id, options_bar};
@@ -76,6 +78,7 @@ pub use shelf::{
     brush_shelf, brush_swatch_id, favourite_toggle_id, shelf_filter_chip_id, shelf_filter_id,
     tool_rail, ShelfFilter,
 };
+pub use uv_layout::uv_display_chip_id;
 pub use widgets::{chip_id, close_id, heading_id, readout_id, slider_id, slider_widget_id};
 pub use windows::{agent_access_window, agent_ask_window, recovery_window};
 pub use windows::{
@@ -173,6 +176,9 @@ pub struct ShellState<'a> {
     pub retopo_guidance: &'a clayspace_model::RetopoGuidance,
     pub retopo_draft: &'a [[f32; 3]],
     pub retopo_outcome: Option<clayspace_model::RetopoOutcome>,
+    /// Whether that outcome is held as a preview, waiting to be accepted or
+    /// discarded — nothing of it is in the document while it is.
+    pub retopo_pending: bool,
     pub retopo_unavailable: Option<String>,
     /// How far a running retopology has got, and its label. `None` when
     /// nothing is running.

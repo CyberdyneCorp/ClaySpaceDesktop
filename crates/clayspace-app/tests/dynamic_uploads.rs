@@ -324,6 +324,7 @@ fn a_patched_polyframe_draws_what_a_rebuild_draws() {
     let polyframe::Lines {
         indices: mut lines,
         layout,
+        ..
     } = drawn.lines();
     assert_eq!(lines.len(), drawn.indices.len() * 2, "two per index");
     let packed = polyframe::lines(&drawn.indices, &[]).indices.len();

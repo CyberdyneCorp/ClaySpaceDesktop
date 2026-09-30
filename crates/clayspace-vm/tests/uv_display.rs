@@ -105,3 +105,46 @@ fn choosing_a_uv_display_does_not_touch_the_document() {
         assert!(!command.changes_the_document(), "{command:?}");
     }
 }
+
+/// While a retopology preview is held the display is about the preview: a
+/// preview carrying a layout shows the chosen display over an active layer
+/// that has none, one without shows nothing over a layer that has one, and
+/// letting go of it hands the display back to the active layer.
+#[test]
+fn a_held_preview_decides_what_the_display_shows() {
+    let (mut vm, carries) = view_model();
+    vm.dispatch(&Command::SetUvDisplay(UvDisplay::Checker));
+    vm.refresh();
+    assert_eq!(vm.shown_display(), UvDisplay::Off);
+
+    vm.hold_preview(Some(true));
+    assert!(*vm.carries_uvs().get());
+    assert_eq!(vm.shown_display(), UvDisplay::Checker);
+    // Re-read each frame the way the application does, and still the preview.
+    vm.refresh();
+    assert_eq!(vm.shown_display(), UvDisplay::Checker);
+
+    carries.set(true);
+    vm.hold_preview(Some(false));
+    assert_eq!(
+        vm.shown_display(),
+        UvDisplay::Off,
+        "the active layer's layout was shown over a preview without one"
+    );
+
+    vm.hold_preview(None);
+    assert_eq!(vm.shown_display(), UvDisplay::Checker);
+}
+
+#[test]
+fn accepting_or_discarding_is_routed_like_a_landed_job() {
+    for command in [Command::AcceptRetopology, Command::DiscardRetopology] {
+        // The composition root banks an accept's undo entry where the layer
+        // is placed; neither is a document edit on the ViewModel path.
+        assert!(!command.touches_document(), "{command:?}");
+    }
+    // Accepting places a layer, so it may not land inside a gesture;
+    // discarding changes nothing.
+    assert!(Command::AcceptRetopology.changes_the_document());
+    assert!(!Command::DiscardRetopology.changes_the_document());
+}

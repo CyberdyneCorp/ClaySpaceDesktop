@@ -9,12 +9,25 @@
 //!    document is an `Rc<RefCell>` and cannot cross to a worker;
 //! 2. retopologise **on a worker**, reporting progress and asking about
 //!    cancellation between stages;
-//! 3. publish the result **on this thread**, in one undo entry — and only if
-//!    the source still stands at the revision step one read. A sculpt that
-//!    moved while the job ran gets nothing rather than a stale mesh.
+//! 3. hold the result **on this thread** as a preview — only if the source
+//!    still stands at the revision step one read. A sculpt that moved while
+//!    the job ran gets nothing rather than a stale mesh.
+//! 4. place it, in one undo entry, when the sculptor or an agent **accepts**
+//!    it — or drop it, touching nothing, when they **discard** it.
+//!
+//! **What happens to a held preview.** It is not in the document: it enters no
+//! history, sets no modified mark and is not saved, so a save leaves it held
+//! and a new, opened or closed document drops it. It stays acceptable only
+//! while its source stands at the revision it was made from — any stroke, undo
+//! or redo that moves the source drops it with a notice, since what it
+//! describes no longer exists. Starting another run drops it as well: the
+//! document records one retopology source at a time, and the new run is
+//! the sculptor's answer to the old preview.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use std::rc::Rc;
 
 use clayspace_model::{
     DensityDab, FlowGuide, RetopoGuidance, RetopoModel, RetopoOutcome, RetopoResult,
@@ -48,6 +61,12 @@ pub struct RetopoViewModel {
     /// flips `in_place` while a job runs has changed the next run, not where
     /// this one lands.
     started: Option<(u64, RetopoSettings)>,
+    /// A finished result waiting to be accepted or discarded, with the source
+    /// revision and the settings it was made from.
+    held: Option<Held>,
+    /// The held result, for the viewport and the panel to draw. `None` when
+    /// nothing is held.
+    preview: Observable<Option<Rc<RetopoResult>>>,
     /// Set from the interface thread and read from the worker.
     ///
     /// An `Arc<AtomicBool>` rather than a channel because the question is
@@ -74,8 +93,33 @@ impl RetopoViewModel {
             notice: Observable::new(None),
             jobs: JobRunner::new(),
             started: None,
+            held: None,
+            preview: Observable::new(None),
             stop: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The finished result held for accept or discard, if there is one.
+    ///
+    /// Its `revision` moves whenever a preview is held, accepted, discarded
+    /// or dropped, which is what a viewport rebuilds its picture on.
+    pub fn preview(&self) -> &Observable<Option<Rc<RetopoResult>>> {
+        &self.preview
+    }
+
+    /// Whether a finished result is waiting to be accepted or discarded.
+    pub fn is_holding(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// Drops a held preview because the document it was made from has been
+    /// replaced — a new document, an opened one, or the same one reverted.
+    ///
+    /// Said nowhere: the preview was never part of the document, so there is
+    /// no work to warn about losing, and the sculptor has just asked for a
+    /// different document.
+    pub fn forget_document(&mut self) {
+        self.release();
     }
 
     pub fn settings(&self) -> &Observable<RetopoSettings> {
@@ -137,6 +181,8 @@ impl RetopoViewModel {
             }
             Command::EditRetopo(edit) => self.edit(edit),
             Command::RunRetopology => self.start(),
+            Command::AcceptRetopology => self.accept(),
+            Command::DiscardRetopology => self.discard(),
             Command::CancelRetopology => {
                 // Read by the worker between stages. The job is not abandoned
                 // here: it finishes as cancelled and its result is discarded
@@ -281,6 +327,9 @@ impl RetopoViewModel {
                 .set(Some("uma retopologia já está em curso".to_string()));
             return;
         }
+        // A new run is the answer to the preview in front of the sculptor, and
+        // the document records one retopology source at a time.
+        self.release();
 
         // Step one, on this thread: the document cannot go to the worker.
         let source = match self.model.retopo_source() {
@@ -315,14 +364,16 @@ impl RetopoViewModel {
         });
     }
 
-    /// Collects a finished retopology and publishes it. Once per frame.
+    /// Collects a finished retopology and holds it as a preview, and drops a
+    /// held preview whose source has moved. Once per frame.
     pub fn poll(&mut self) {
+        self.drop_if_stale();
         let Some(completion) = self.jobs.poll() else {
             return;
         };
         let started = self.started.take();
         match completion {
-            Completion::Finished(result) => self.publish(result, started),
+            Completion::Finished(result) => self.hold(result, started),
             // A cancelled run arrives here as the engine's refusal, and
             // nothing was placed: the document is exactly as it was.
             Completion::Failed(why) => self.notice.set(Some(why)),
@@ -332,19 +383,19 @@ impl RetopoViewModel {
         }
     }
 
-    /// Places a finished result — if its source has not moved since the run
-    /// started.
+    /// Holds a finished result as a preview — if its source has not moved
+    /// since the run started.
     ///
-    /// Checked here, before the document is asked to change, so a stale
-    /// result is refused by one rule whatever the model does with it: the
-    /// source stayed strokeable the whole time the job ran, and a mesh made
-    /// from a sculpt that no longer exists is not a retopology of this one.
-    fn publish(&mut self, result: RetopoResult, started: Option<(u64, RetopoSettings)>) {
+    /// Checked here, before anything is shown, so a stale result is refused
+    /// by one rule whatever the model does with it: the source stayed
+    /// strokeable the whole time the job ran, and a mesh made from a sculpt
+    /// that no longer exists is not a retopology of this one.
+    fn hold(&mut self, result: RetopoResult, started: Option<(u64, RetopoSettings)>) {
         let Some((revision, settings)) = started else {
             return;
         };
-        let current = self.model.retopo_source_revision();
-        if current.ok() != Some(revision) {
+        if !self.source_stands_at(revision) {
+            self.model.discard_retopology();
             self.notice.set(Some(
                 "a camada de origem mudou enquanto a retopologia corria; \
                  o resultado foi descartado"
@@ -352,21 +403,89 @@ impl RetopoViewModel {
             ));
             return;
         }
-        match self.model.place_retopology(&result, settings) {
-            Ok(()) => {
-                // A layout that was asked for and refused is said out loud:
-                // the quads were placed, and without it.
-                let notice = match &result.outcome.uv {
-                    RetopoUv::Failed(why) => {
-                        Some(format!("os quads foram colocados sem UVs: {why}"))
-                    }
-                    _ => None,
-                };
-                let notice = result.outcome.guidance_warnings.first().cloned().or(notice);
-                self.last.set(Some(result.outcome));
-                self.notice.set(notice);
-            }
+        // A layout that was asked for and refused is said out loud: the
+        // quads are there, and without it.
+        let notice = match &result.outcome.uv {
+            RetopoUv::Failed(why) => Some(format!("os quads não têm UVs: {why}")),
+            _ => None,
+        };
+        let notice = result.outcome.guidance_warnings.first().cloned().or(notice);
+        self.last.set(Some(result.outcome.clone()));
+        self.notice.set(notice);
+        self.held = Some(Held { revision, settings });
+        self.preview.set(Some(Rc::new(result)));
+    }
+
+    /// Places the held result, exactly as it would have been placed when the
+    /// job landed: one undo entry, beside the source or over it.
+    fn accept(&mut self) {
+        let (Some(held), Some(result)) = (self.held.take(), self.preview.get().clone()) else {
+            self.notice.set(Some(
+                "não há retopologia à espera de ser aceite".to_string(),
+            ));
+            return;
+        };
+        self.preview.set(None);
+        if !self.source_stands_at(held.revision) {
+            self.model.discard_retopology();
+            self.notice.set(Some(STALE_PREVIEW.to_string()));
+            return;
+        }
+        match self.model.place_retopology(&result, held.settings) {
+            Ok(()) => self.notice.set(None),
             Err(e) => self.notice.set(Some(e.to_string())),
         }
     }
+
+    /// Drops the held result. Nothing in the document changes.
+    fn discard(&mut self) {
+        if self.held.is_none() {
+            self.notice.set(Some(
+                "não há retopologia à espera de ser descartada".to_string(),
+            ));
+            return;
+        }
+        self.release();
+        self.notice.set(None);
+    }
+
+    /// Drops the held preview whose source has moved or gone, and says so.
+    fn drop_if_stale(&mut self) {
+        let Some(held) = &self.held else {
+            return;
+        };
+        if self.source_stands_at(held.revision) {
+            return;
+        }
+        self.release();
+        self.notice.set(Some(STALE_PREVIEW.to_string()));
+    }
+
+    /// Lets go of a held preview, if there is one, and of the source the
+    /// document recorded for it.
+    fn release(&mut self) {
+        if self.held.take().is_some() {
+            self.model.discard_retopology();
+        }
+        if self.preview.get().is_some() {
+            self.preview.set(None);
+        }
+    }
+
+    fn source_stands_at(&mut self, revision: u64) -> bool {
+        self.model.retopo_source_revision().ok() == Some(revision)
+    }
+}
+
+/// Said when a held preview's source moves before it is accepted.
+const STALE_PREVIEW: &str = "a camada de origem mudou; a pré-visualização da \
+                             retopologia foi descartada";
+
+/// What a held preview was made from.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    /// The source's revision when the run read it.
+    revision: u64,
+    /// The settings the run was asked with — which decide where it lands.
+    settings: RetopoSettings,
 }

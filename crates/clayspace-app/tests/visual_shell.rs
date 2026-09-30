@@ -305,6 +305,7 @@ fn state<'a>(
         retopo_guidance: retopo_guidance(),
         retopo_draft: &[],
         retopo_outcome: None,
+        retopo_pending: false,
         retopo_unavailable: None,
         retopo_progress: None,
         uv: clayspace_model::UvSettings::default(),
@@ -6568,4 +6569,69 @@ fn the_secret_is_not_on_screen_until_it_is_asked_for() {
          (difference {}, floor {floor})",
         open.mean_difference(&closed)
     );
+}
+
+/// A held retopology is answered from the panel: Accept and Discard each ask
+/// for their command and nothing else, and are offered only while one is held.
+#[test]
+fn a_held_retopology_offers_accept_and_discard() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    // A field layer active, as when an agent retopologised the starting form:
+    // the preview block stands on its own near the top of the panel.
+    set.representation = clayspace_model::Representation::Sdf;
+    set.retopo_pending = true;
+
+    let ctx = probe_shell(&set);
+    let accept = shell_rect(&ctx, shell::retopo_accept_button_id()).expect("no Accept button");
+    let discard = shell_rect(&ctx, shell::retopo_discard_button_id()).expect("no Discard button");
+    for (button, command) in [
+        (accept, Command::AcceptRetopology),
+        (discard, Command::DiscardRetopology),
+    ] {
+        let ctx = egui::Context::default();
+        shell::apply_theme(&ctx);
+        let mut queue = CommandQueue::new();
+        for _ in 0..2 {
+            run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+        }
+        run_shell_frame(&ctx, &set, &mut queue, left_click(button.center()));
+        assert_eq!(
+            queue.commands(),
+            std::slice::from_ref(&command),
+            "{command:?}"
+        );
+    }
+
+    // Under a mesh layer, below its retopology controls.
+    set.representation = clayspace_model::Representation::Mesh;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::retopo_accept_button_id()).is_some());
+
+    // Nothing held: no decision is offered.
+    set.retopo_pending = false;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::retopo_accept_button_id()).is_none());
+    assert!(shell_rect(&ctx, shell::retopo_discard_button_id()).is_none());
+}
+
+/// A held preview is answered wherever the sculptor is: with a field layer
+/// active — where the retopology controls are not drawn — the decision is
+/// still offered.
+#[test]
+fn a_held_retopology_is_answerable_from_a_field_layer() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Sdf;
+    set.retopo_pending = true;
+    let ctx = probe_shell(&set);
+    assert!(shell_rect(&ctx, shell::retopo_accept_button_id()).is_some());
+    assert!(shell_rect(&ctx, shell::retopo_discard_button_id()).is_some());
 }

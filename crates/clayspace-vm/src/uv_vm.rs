@@ -14,6 +14,11 @@
 //! subtool carries one, and how the viewport shows it — its material, a
 //! checker, or a checker tinted by island — are held beside the report, so the
 //! panel offers the display only where there is a layout to display.
+//!
+//! **A held retopology preview takes the active subtool's place.** While one
+//! is waiting to be accepted or discarded, the display is about the preview:
+//! whether *it* carries a layout decides what is offered and shown, since the
+//! preview is what the viewport draws where its source stood.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -33,6 +38,8 @@ pub struct UvViewModel {
     notice: Observable<Option<String>>,
     display: Observable<UvDisplay>,
     carries_uvs: Observable<bool>,
+    /// Whether a held retopology preview carries a layout, while one is held.
+    held: Option<bool>,
     jobs: JobRunner<UvResult>,
     stop: Arc<AtomicBool>,
 }
@@ -48,6 +55,7 @@ impl UvViewModel {
             notice: Observable::new(None),
             display: Observable::new(UvDisplay::default()),
             carries_uvs: Observable::new(false),
+            held: None,
             jobs: JobRunner::new(),
             stop: Arc::new(AtomicBool::new(false)),
         }
@@ -77,9 +85,19 @@ impl UvViewModel {
         &self.display
     }
 
-    /// Whether the active subtool carries a UV layout to display.
+    /// Whether the active subtool — or the held retopology preview, while
+    /// one is held — carries a UV layout to display.
     pub fn carries_uvs(&self) -> &Observable<bool> {
         &self.carries_uvs
+    }
+
+    /// Says whether a retopology preview is held, and whether it carries a
+    /// layout: `Some` while one is held, `None` once it is accepted,
+    /// discarded or dropped, which hands the display back to the active
+    /// subtool.
+    pub fn hold_preview(&mut self, carries: Option<bool>) {
+        self.held = carries;
+        self.refresh();
     }
 
     /// What the viewport should draw: the chosen display where the active
@@ -103,7 +121,10 @@ impl UvViewModel {
     pub fn refresh(&mut self) {
         let reason = self.model.can_unwrap().err();
         self.unavailable.set_if_changed(reason);
-        let carries = self.model.active_layer_carries_uvs();
+        let carries = match self.held {
+            Some(carries) => carries,
+            None => self.model.active_layer_carries_uvs(),
+        };
         self.carries_uvs.set_if_changed(carries);
     }
 

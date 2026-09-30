@@ -892,6 +892,10 @@ impl clayspace_model::RetopoModel for SharedDocument {
             .borrow_mut()
             .place_retopology(result, settings)
     }
+
+    fn discard_retopology(&mut self) {
+        self.document.borrow_mut().discard_retopology();
+    }
 }
 
 impl clayspace_model::UvModel for SharedDocument {

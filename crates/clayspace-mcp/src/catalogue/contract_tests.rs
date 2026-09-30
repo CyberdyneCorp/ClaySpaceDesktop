@@ -375,6 +375,29 @@ fn a_uv_display_reaches_the_command_by_its_tag() {
     assert!(actions::build("view", "set_uv_display", &args).is_err());
 }
 
+/// A held retopology is accepted and discarded by name, with nothing to say
+/// but the name, and each command is offered back at the route it came in by.
+#[test]
+fn a_held_retopology_is_accepted_or_discarded_by_name() {
+    for (name, command) in [
+        ("accept", clayspace_vm::Command::AcceptRetopology),
+        ("discard", clayspace_vm::Command::DiscardRetopology),
+    ] {
+        let call = json!({});
+        let args = Args::new("retopo", name, &call);
+        assert_eq!(actions::build("retopo", name, &args).unwrap(), command);
+        assert!(matches!(
+            actions::home_of(&command),
+            actions::Home::In("retopo", offered) if offered == name
+        ));
+        let spec = TABLE
+            .iter()
+            .find(|spec| spec.group == "retopo" && spec.name == name)
+            .expect("offered in the table");
+        assert!(spec.arguments.is_empty(), "{name} takes no arguments");
+    }
+}
+
 #[test]
 fn clamped_values_are_reported() {
     for (group, action, call, argument, used) in [

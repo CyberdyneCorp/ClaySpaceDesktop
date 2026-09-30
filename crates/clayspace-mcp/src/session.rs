@@ -890,6 +890,9 @@ pub struct RetopoOutcomeState {
     pub quads: bool,
     /// The optional UV layout: `not_requested`, `laid` or `failed`.
     pub uv: RetopoUvState,
+    /// Whether this result is held as a preview, waiting for `retopo accept`
+    /// or `retopo discard`. Nothing of it is in the document while it is.
+    pub pending: bool,
 }
 
 /// What became of a retopology's optional UV step.
@@ -950,7 +953,8 @@ pub struct PresentationState {
     /// Whether the rig's skin is previewed, or only its ZSpheres stand.
     pub skin_preview: bool,
     /// How the active layer's UVs are drawn — `off`, `checker` or `islands`.
-    /// `off` whenever that layer carries no layout.
+    /// `off` whenever that layer carries no layout. While a retopology
+    /// preview is held, it is the preview's layout this describes.
     pub uv_display: String,
 }
 

@@ -149,6 +149,10 @@ impl RetopoModel for ClayDocument {
         }
         self.attach_quads_beside(key, revision, result).map(|_| ())
     }
+
+    fn discard_retopology(&mut self) {
+        self.forget_retopo_target();
+    }
 }
 
 /// The mesh a retopology result is placed as: with its UVs where it carries a

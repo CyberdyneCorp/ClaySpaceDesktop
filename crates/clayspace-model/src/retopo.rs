@@ -454,11 +454,23 @@ pub trait RetopoModel {
     /// Places a finished retopology in one undo entry: as a new subtool
     /// beside its source by default, or over the source when the settings
     /// asked for `in_place`.
+    ///
+    /// What accepting a held preview does, and the only thing it does: a
+    /// preview accepted is exactly the result this would have placed when the
+    /// job landed.
     fn place_retopology(
         &mut self,
         result: &RetopoResult,
         settings: RetopoSettings,
     ) -> Result<(), crate::ModelError>;
+
+    /// Forgets the source the last [`RetopoModel::retopo_source`] recorded,
+    /// because its result was discarded rather than placed.
+    ///
+    /// Nothing in the document changes and nothing enters the history: the
+    /// result never reached the document. Forgetting the record is what makes
+    /// a discarded preview unplaceable afterwards.
+    fn discard_retopology(&mut self);
 }
 
 // -- UV ---------------------------------------------------------------------
