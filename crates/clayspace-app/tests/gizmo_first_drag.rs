@@ -216,22 +216,25 @@ fn drag_live(
 
 /// The drag with the preview: the press meshes the object alone, the frame
 /// poses and draws it, and only the release writes the document.
+///
+/// Returns the posed triangles and the vertex count of one image, which is
+/// where `posed` splits into the object and each of its reflections.
 fn drag_previewed(
     harness: &mut Harness,
     document: &mut ClayDocument,
     id: ObjectId,
     to: Transform,
-) -> PosedPreview {
+) -> (PosedPreview, usize) {
     let target = GizmoTarget::Object(id);
     document.begin_target_drag(target);
-    let posed = document
+    let preview = document
         .object_preview(id)
-        .expect("a placed sphere has a surface of its own")
-        .posed(to);
+        .expect("a placed sphere has a surface of its own");
+    let posed = preview.posed(to);
     harness
         .renderer
         .set_object_preview(&harness.gpu, Some(&posed));
-    posed
+    (posed, preview.positions.len())
 }
 
 fn release(
@@ -253,14 +256,16 @@ fn sorted_triangles(geometry: &SurfaceGeometry) -> Vec<[[u32; 10]; 3]> {
     triangles
 }
 
-/// Where the posed preview lands on screen, widened by the reach of the
+type ScreenBox = (u32, u32, u32, u32);
+
+/// Where one posed image lands on screen, widened by the reach of the
 /// occlusion pass and the multisampled edge.
-fn screen_box(posed: &PosedPreview, camera: &Camera) -> (u32, u32, u32, u32) {
+fn screen_box(positions: &[[f32; 3]], camera: &Camera) -> ScreenBox {
     const REACH: f32 = 6.0;
     let (width, height) = (Harness::WIDTH as f32, Harness::HEIGHT as f32);
     let view_projection = camera.view_projection(width / height);
     let (mut x0, mut y0, mut x1, mut y1) = (width, height, 0.0f32, 0.0f32);
-    for &position in &posed.positions {
+    for &position in positions {
         let ndc = view_projection.project_point3(position.into());
         let (x, y) = ((ndc.x + 1.0) * 0.5 * width, (1.0 - ndc.y) * 0.5 * height);
         (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
@@ -274,10 +279,35 @@ fn screen_box(posed: &PosedPreview, camera: &Camera) -> (u32, u32, u32, u32) {
     )
 }
 
-/// Pixels that changed anywhere but inside `area`.
-fn changed_outside(a: &Image, b: &Image, area: (u32, u32, u32, u32)) -> usize {
-    let (x0, y0, x1, y1) = area;
-    support::differing_pixels(a, b) - support::differing_pixels_within(a, b, x0, y0, x1, y1)
+/// One box per image: the object, then each reflection.
+///
+/// One box around every image would span the form between the object and
+/// its twin, and a change there — a wrong refill, a misplaced twin — would
+/// be excluded from the check meant to catch it.
+fn image_boxes(posed: &PosedPreview, per_image: usize, camera: &Camera) -> Vec<ScreenBox> {
+    posed
+        .positions
+        .chunks(per_image)
+        .map(|image| screen_box(image, camera))
+        .collect()
+}
+
+/// Pixels that changed anywhere outside every one of `areas`.
+fn changed_outside(a: &Image, b: &Image, areas: &[ScreenBox]) -> usize {
+    let inside = |x: u32, y: u32| {
+        areas
+            .iter()
+            .any(|&(x0, y0, x1, y1)| (x0..x1).contains(&x) && (y0..y1).contains(&y))
+    };
+    let mut count = 0;
+    for y in 0..a.height.min(b.height) {
+        for x in 0..a.width.min(b.width) {
+            let (pa, pb) = (a.pixel(x, y), b.pixel(x, y));
+            let differs = (0..3).any(|c| pa[c].abs_diff(pb[c]) > support::RENDER_NOISE);
+            count += usize::from(differs && !inside(x, y));
+        }
+    }
+    count
 }
 
 /// The first drag frame of a placed object in a field draws the object alone
@@ -331,7 +361,7 @@ fn the_first_object_drag_frame_draws_the_object_alone() {
     let camera = support::framed(&previewed);
     let before = harness.capture(geometry.mesh(), &camera, false, "object-drag-before");
     let started = Instant::now();
-    let posed = drag_previewed(&mut harness, &mut previewed, id, moved);
+    let (posed, per_image) = drag_previewed(&mut harness, &mut previewed, id, moved);
     let sync = geometry.sync(&harness.gpu, &mut previewed).unwrap();
     let frame = started.elapsed();
     let during = harness.capture(geometry.mesh(), &camera, false, "object-drag-preview");
@@ -366,18 +396,25 @@ fn the_first_object_drag_frame_draws_the_object_alone() {
         "the press and first previewed frame took {frame:?}, over the {FRAME:?} budget"
     );
 
-    // (c) Only the dragged object changes on screen: the field, the rest of
-    // the form and the sphere's own old image stay exactly where they were.
-    let area = screen_box(&posed, &camera);
+    // (c) Only the dragged object and its twin change on screen: the field,
+    // the rest of the form between them and the sphere's own old images stay
+    // exactly where they were. Each image is boxed on its own, so the form
+    // between the sphere and its twin is inside the check.
+    let boxes = image_boxes(&posed, per_image, &camera);
+    assert_eq!(boxes.len(), 2, "the sphere under X symmetry has one twin");
     assert_eq!(
-        changed_outside(&before, &during, area),
+        changed_outside(&before, &during, &boxes),
         0,
         "the preview moved something other than the dragged object"
     );
-    assert!(
-        support::differing_pixels(&before, &during) > 200,
-        "the dragged object was not drawn where the hand took it"
-    );
+    for (image, &(x0, y0, x1, y1)) in boxes.iter().enumerate() {
+        let drawn = support::differing_pixels_within(&before, &during, x0, y0, x1, y1);
+        assert!(
+            drawn > 200,
+            "image {image} of the dragged object was not drawn where the hand took it: \
+             {drawn} pixels changed in its box"
+        );
+    }
 
     // The release writes the move once and leaves the live path's surface.
     release(&mut harness, &mut previewed, &mut geometry, target, moved);
