@@ -7,3 +7,9 @@
 - [x] Compare preview and committed pixels in a regression test.
 - [x] Profile the first frame and document the measured improvement.
 - [x] Run relevant ViewModel, renderer, and app tests plus OpenSpec validation.
+
+## 3. Placed objects
+- [x] 3.1 Mesh a placed object's primitive alone at the press (`ObjectModel::object_preview`) and pose it per frame with its mirror images (`ObjectPreview::posed`).
+- [x] 3.2 Record mirror participation in the object table and the side-car; old rows follow the mirror.
+- [x] 3.3 Defer the field edit of an additive object's drag to release and draw the posed preview; keep subtractive, intersecting, groove and paint operands live.
+- [x] 3.4 Regression tests: the ViewModel defers and writes once (`objects.rs`); the engine's preview is the object, placed and reflected as the engine places it (`object_drag_preview.rs`); on the reference scene the first frame re-meshes nothing and fits the frame, nothing but the object moves on screen, and the release matches the live path, bit for bit on the CPU backend (`gizmo_first_drag.rs`).

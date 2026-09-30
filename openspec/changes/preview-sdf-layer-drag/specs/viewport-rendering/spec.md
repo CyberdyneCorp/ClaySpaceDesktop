@@ -16,3 +16,31 @@ When a whole SDF subtool is dragged, the application SHALL defer field evaluatio
 - **WHEN** a selection or mode command interrupts a pending drag, or the release edit fails
 - **THEN** the renderer clears the preview before another command draws the scene
 - **AND** an interrupted drag commits to its original target before the new target is selected
+
+### Requirement: A placed object's drag in a field draws the object until release
+When a placed object that adds material to an SDF layer is dragged, the application SHALL defer the field edit until the drag ends. During the drag, the viewport SHALL draw the object's own surface where the manipulator has taken it, with each mirror image the engine emits for the object. The rest of the field SHALL stay drawn as it was. On release, the preview SHALL clear and the field SHALL be written once with the final transform, as one undo step. An operand that subtracts, intersects, grooves or paints SHALL keep the live path. Whether an object takes part in its layer's mirror SHALL survive saving and reopening.
+
+#### Scenario: First drag frame of a placed object
+- **WHEN** the sculptor starts dragging a placed sphere on the reference scene
+- **THEN** no field brick is refilled or re-meshed on that frame, and the press and the frame together take less than 16.7 ms
+- **AND** the sphere is drawn where the manipulator has taken it
+
+#### Scenario: Nothing else moves
+- **WHEN** a placed object is dragged in a field
+- **THEN** no pixel changes outside the region where the object's preview is drawn
+
+#### Scenario: A mirrored object is drawn with its twin
+- **WHEN** an object placed under X symmetry is dragged
+- **THEN** its reflected image is drawn moving with it, through the subtool's own plane
+
+#### Scenario: The release lands where the live path lands
+- **WHEN** the drag ends
+- **THEN** the surface is the one a drag evaluated live leaves, bit for bit on a deterministic backend
+
+#### Scenario: A subtracting operand stays live
+- **WHEN** a subtracting object is dragged
+- **THEN** the cavity follows the drag while the form keeps up, as before
+
+#### Scenario: Mirror participation survives a reopen
+- **WHEN** an object placed with symmetry off is saved and the document is reopened
+- **THEN** its drag draws it alone, without a reflected image
