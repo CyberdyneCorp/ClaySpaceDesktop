@@ -66,7 +66,44 @@ pub struct UvIslands {
     /// How many islands there are.
     pub count: usize,
     /// The seams, as vertex pairs — one per seam edge, on one of its sides.
+    ///
+    /// One side is what the surface needs: both sides stand at the same
+    /// positions, so drawing the second would draw the same line again.
     pub seams: Vec<[u32; 2]>,
+    /// Every side of every seam, as vertex pairs.
+    ///
+    /// What the UV square needs: there the two sides of a seam are two
+    /// different edges, one on each island's outline, and highlighting only
+    /// one would leave the other island's cut looking like its open border.
+    pub seam_sides: Vec<[u32; 2]>,
+}
+
+/// A layout as the UV square draws it: the charts laid flat, not the form.
+///
+/// The same per-vertex table the checker reads, with the islands and seams
+/// found once, so the square and the surface cannot disagree about which
+/// chart a triangle is in or where a cut runs.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UvLayout {
+    pub uvs: Vec<[f32; 2]>,
+    /// Three vertex indices a triangle, into `uvs`.
+    pub indices: Vec<u32>,
+    pub islands: UvIslands,
+}
+
+impl UvLayout {
+    /// The layout a preview carries, with its islands and seams.
+    pub fn of(preview: &UvPreview) -> Self {
+        Self {
+            uvs: preview.uvs.clone(),
+            indices: preview.indices.clone(),
+            islands: uv_islands(&preview.positions, &preview.indices),
+        }
+    }
+
+    pub fn triangles(&self) -> usize {
+        self.indices.len() / 3
+    }
 }
 
 /// Finds the islands and seams of a mesh whose UVs are one per vertex.
@@ -91,10 +128,12 @@ pub fn uv_islands(positions: &[[f32; 3]], indices: &[u32]) -> UvIslands {
         .filter(|t| t.iter().all(|&v| (v as usize) < positions.len()))
         .collect();
     let (island, count) = islands(positions.len(), &triangles);
+    let (seams, seam_sides) = seams(positions, &triangles);
     UvIslands {
         island,
         count,
-        seams: seams(positions, &triangles),
+        seams,
+        seam_sides,
     }
 }
 
@@ -132,8 +171,9 @@ fn union(parent: &mut [u32], a: u32, b: u32) {
     }
 }
 
-/// The border edges whose positions another border edge shares.
-fn seams(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec<[u32; 2]> {
+/// The border edges whose positions another border edge shares: one side of
+/// each seam, then every side of every seam.
+fn seams(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> (Vec<[u32; 2]>, Vec<[u32; 2]>) {
     let mut uses = HashMap::<(u32, u32), u32>::new();
     for triangle in triangles {
         for i in 0..3 {
@@ -148,17 +188,18 @@ fn seams(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec<[u32; 2]> {
     // Sorted so the seam list does not depend on the hash map's order.
     border.sort_unstable();
 
-    let mut sides = HashMap::<[[u32; 3]; 2], ([u32; 2], u32)>::new();
+    let mut sides = HashMap::<[[u32; 3]; 2], Vec<[u32; 2]>>::new();
     for &(a, b) in &border {
         let key = position_pair(positions[a as usize], positions[b as usize]);
-        sides.entry(key).or_insert(([a, b], 0)).1 += 1;
+        sides.entry(key).or_default().push([a, b]);
     }
-    let mut seams: Vec<[u32; 2]> = sides
-        .into_values()
-        .filter_map(|(edge, count)| (count >= 2).then_some(edge))
-        .collect();
+    let cut: Vec<Vec<[u32; 2]>> = sides.into_values().filter(|s| s.len() >= 2).collect();
+    // Each side list is in `border` order, so its first entry is the lowest.
+    let mut seams: Vec<[u32; 2]> = cut.iter().map(|s| s[0]).collect();
     seams.sort_unstable();
-    seams
+    let mut seam_sides: Vec<[u32; 2]> = cut.into_iter().flatten().collect();
+    seam_sides.sort_unstable();
+    (seams, seam_sides)
 }
 
 /// Two positions as an unordered key, bit for bit.
@@ -213,6 +254,24 @@ mod tests {
         let [a, b] = found.seams[0];
         let ends = [SPLIT[a as usize], SPLIT[b as usize]];
         assert!(ends.contains(&[1.0, 0.0, 0.0]) && ends.contains(&[1.0, 1.0, 0.0]));
+        // Both of its sides, one on each island's outline.
+        assert_eq!(found.seam_sides, vec![[1, 2], [4, 7]]);
+    }
+
+    #[test]
+    fn a_layout_carries_the_preview_table_and_its_islands() {
+        let preview = UvPreview {
+            layer: LayerKey(3),
+            positions: SPLIT.to_vec(),
+            normals: vec![[0.0, 0.0, 1.0]; 8],
+            uvs: (0..8).map(|v| [v as f32 / 8.0, 0.5]).collect(),
+            indices: SPLIT_TRIANGLES.to_vec(),
+        };
+        let layout = UvLayout::of(&preview);
+        assert_eq!(layout.uvs, preview.uvs);
+        assert_eq!(layout.indices, preview.indices);
+        assert_eq!(layout.triangles(), 4);
+        assert_eq!(layout.islands, uv_islands(&SPLIT, &SPLIT_TRIANGLES));
     }
 
     #[test]
@@ -224,6 +283,7 @@ mod tests {
         let found = uv_islands(&positions, &welded);
         assert_eq!(found.count, 1);
         assert!(found.seams.is_empty(), "{:?}", found.seams);
+        assert!(found.seam_sides.is_empty());
     }
 
     #[test]
