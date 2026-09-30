@@ -201,6 +201,94 @@ per seam edge the engine reported.
 - **WHEN** the UV display is changed
 - **THEN** no history entry is created and the document is not marked modified
 
+### Requirement: A finished retopology is held as a preview until it is answered
+A retopology job that lands on a source still at the revision it read SHALL be
+held as a preview rather than placed. While it is held, the document SHALL be
+unchanged: no subtool, no history entry, no modified mark, and nothing written
+by a save.
+
+The sculptor SHALL answer it from the retopology panel (Accept, Discard) and an
+agent through `retopo accept` and `retopo discard`; `outcomes.retopology.pending`
+SHALL report whether a result is held. Accepting SHALL place exactly what the
+job placed on landing before this requirement: the same subtool, standing in
+the same place, carrying the same UVs, in one history entry, beside the source
+or over it as the run was asked. Discarding SHALL leave the document and its
+history exactly as they were, and the discarded result SHALL NOT be placeable
+afterwards. Either answer with nothing held SHALL be refused with a reason.
+
+A held preview SHALL be dropped, with a notice, when its source moves — a
+stroke, an undo, a redo — and an accept that arrives before that is noticed
+SHALL be refused by the same check. Starting another run SHALL drop it. Saving
+SHALL keep it held and acceptable. Replacing the document — new, open, revert —
+SHALL drop it without asking, since it holds no work of the document's.
+
+The preview SHALL be drawn standing where acceptance would draw it, lit through
+the surface's own pipeline, with its authored edges under the polyframe. Where
+the source is a carried subtool the preview SHALL be drawn in place of it —
+its triangles and its polyframe lines left out while the preview is held. A
+field source SHALL stay drawn under the preview. The UV display SHALL describe
+the preview while one is held: offered and shown where the preview carries a
+layout, whatever the active layer carries.
+
+#### Scenario: A held preview is accepted
+- **WHEN** a retopology lands and the sculptor or an agent accepts it
+- **THEN** the subtool placed, its UVs and the history entry are those the job
+  placed on landing, and the preview drawn before acceptance is the accepted
+  layer as the viewport then draws it
+
+#### Scenario: A held preview is discarded
+- **WHEN** a held preview is discarded
+- **THEN** the saved document is byte-equal to the one saved before the run,
+  the history depth and the next undo are unchanged, the source is drawn again
+  exactly as before, and accepting afterwards is refused
+
+#### Scenario: The source moves while a preview is held
+- **WHEN** the source is stroked, or an undo or redo moves it, while its
+  preview is held
+- **THEN** the preview is dropped with a notice and nothing can be accepted
+
+#### Scenario: A new run while a preview is held
+- **WHEN** a retopology is started while a preview is held
+- **THEN** the held preview is dropped before the source is read, and the new
+  result is the one held when it lands
+
+#### Scenario: A save while a preview is held
+- **WHEN** the document is saved while a preview is held
+- **THEN** the file carries no trace of the preview and the preview can still
+  be accepted
+
+#### Scenario: The document is replaced while a preview is held
+- **WHEN** a new document is made or another is opened while a preview is held
+- **THEN** the preview is dropped without a prompt or a notice
+
+#### Scenario: The checker is drawn on a held preview
+- **WHEN** a held preview carries UVs and the checker or island display is chosen
+- **THEN** the preview is drawn as its layout with its seams, and
+  `state.presentation.uv_display` reports that display whatever the active
+  layer carries
+
+### Requirement: A layout is drawn in its UV square
+Wherever a UV display is chosen and the active layer, or a held retopology
+preview, carries UVs, the interface SHALL draw the layout in the unit UV square:
+every triangle at its UVs — each island in the tint the island display gives
+it on the surface, or one neutral fill under the plain checker — with both
+sides of every seam in the seam colour. It SHALL disappear when the material
+display is chosen.
+
+The square SHALL be presentation only: it SHALL NOT push a command, enter the
+history or mark the document modified. `state.presentation.uv_layout` SHALL
+report its islands, seams and triangles while it is drawn, and be absent
+otherwise.
+
+#### Scenario: A retopology's layout is drawn flat
+- **WHEN** a retopology with UVs is held or accepted and a UV display is chosen
+- **THEN** the square draws one island per chart the engine reported and one
+  seam per seam edge, and `state.presentation.uv_layout` says so
+
+#### Scenario: The material hides the square
+- **WHEN** the material display is chosen
+- **THEN** the square is not drawn and `state.presentation.uv_layout` is absent
+
 ### Requirement: Maps are baked from the field where a field is what exists
 Normal, ambient occlusion, curvature and cavity SHALL be baked through
 `cyber_bake_field`, sampling ClayCore's field directly, so that the cage ray is
