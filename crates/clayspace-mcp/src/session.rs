@@ -892,6 +892,8 @@ pub struct RetopoOutcomeState {
     pub uv: RetopoUvState,
     /// Whether this result is held as a preview, waiting for `retopo accept`
     /// or `retopo discard`. Nothing of it is in the document while it is.
+    /// `false` means it was placed: a discarded or dropped result is not
+    /// reported at all.
     pub pending: bool,
 }
 

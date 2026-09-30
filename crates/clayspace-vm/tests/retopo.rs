@@ -579,6 +579,11 @@ fn a_landed_run_is_held_until_it_is_accepted() {
     assert_eq!(subtool.discarded, 0);
     assert!(vm.preview().get().is_none() && !vm.is_holding());
     assert_eq!(*vm.notice().get(), None);
+    assert_eq!(
+        vm.last().get().as_ref(),
+        Some(&held.outcome),
+        "the accepted result's report went with the preview"
+    );
 }
 
 /// Discarding places nothing and forgets the source the document recorded,
@@ -597,6 +602,12 @@ fn a_discarded_preview_places_nothing() {
         "the viewport was not told"
     );
     assert_eq!(*vm.notice().get(), None);
+    // Nor is it reported: left behind, the held report would read as a
+    // placed result.
+    assert!(
+        vm.last().get().is_none(),
+        "the discarded result is still reported"
+    );
 
     // And accepting afterwards finds nothing to place.
     vm.dispatch(&Command::AcceptRetopology);
@@ -641,6 +652,10 @@ fn a_preview_whose_source_moves_is_dropped() {
     vm.poll();
     assert!(!vm.is_holding() && vm.preview().get().is_none());
     assert!(
+        vm.last().get().is_none(),
+        "the dropped result is still reported"
+    );
+    assert!(
         vm.notice()
             .get()
             .as_deref()
@@ -670,6 +685,10 @@ fn a_stale_preview_is_not_accepted() {
         .as_deref()
         .is_some_and(|n| n.contains("mudou")));
     assert!(!vm.is_holding());
+    assert!(
+        vm.last().get().is_none(),
+        "the refused result is still reported"
+    );
 }
 
 /// A new run drops the held preview before it reads its source, and the
@@ -687,6 +706,10 @@ fn a_new_run_drops_the_held_preview() {
     }));
     vm.dispatch(&Command::RunRetopology);
     assert!(!vm.is_holding(), "the old preview outlived a new run");
+    assert!(
+        vm.last().get().is_none(),
+        "the old preview's report outlived it"
+    );
     assert_eq!(subtool.lock().unwrap().discarded, 1);
     settle(&mut vm);
     let second = vm.preview().get().clone().expect("the new result is held");
@@ -704,6 +727,7 @@ fn a_replaced_document_drops_the_preview_silently() {
     settle(&mut vm);
     vm.forget_document();
     assert!(!vm.is_holding() && vm.preview().get().is_none());
+    assert!(vm.last().get().is_none());
     assert_eq!(*vm.notice().get(), None);
     assert!(subtool.lock().unwrap().placed.is_empty());
 }

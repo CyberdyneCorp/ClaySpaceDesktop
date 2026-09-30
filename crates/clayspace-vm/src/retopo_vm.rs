@@ -51,7 +51,9 @@ pub struct RetopoViewModel {
     gesture_before: Option<RetopoGuidance>,
     /// Why the tool is unavailable, where it is.
     unavailable: Observable<Option<String>>,
-    /// What the last retopology came to.
+    /// What the last retopology came to: the held result's while one is
+    /// held, the placed result's once it is accepted, and nothing once a held
+    /// result is discarded or dropped.
     last: Observable<Option<RetopoOutcome>>,
     notice: Observable<Option<String>>,
     jobs: JobRunner<RetopoResult>,
@@ -428,12 +430,16 @@ impl RetopoViewModel {
         self.preview.set(None);
         if !self.source_stands_at(held.revision) {
             self.model.discard_retopology();
+            self.last.set(None);
             self.notice.set(Some(STALE_PREVIEW.to_string()));
             return;
         }
         match self.model.place_retopology(&result, held.settings) {
             Ok(()) => self.notice.set(None),
-            Err(e) => self.notice.set(Some(e.to_string())),
+            Err(e) => {
+                self.last.set(None);
+                self.notice.set(Some(e.to_string()));
+            }
         }
     }
 
@@ -461,11 +467,16 @@ impl RetopoViewModel {
         self.notice.set(Some(STALE_PREVIEW.to_string()));
     }
 
-    /// Lets go of a held preview, if there is one, and of the source the
-    /// document recorded for it.
+    /// Lets go of a held preview, if there is one, of the source the
+    /// document recorded for it, and of its outcome.
+    ///
+    /// The outcome goes too: it was reported while the result was held, and
+    /// left behind with nothing held it would read as a placed result, which
+    /// is exactly what a discarded one is not.
     fn release(&mut self) {
         if self.held.take().is_some() {
             self.model.discard_retopology();
+            self.last.set(None);
         }
         if self.preview.get().is_some() {
             self.preview.set(None);

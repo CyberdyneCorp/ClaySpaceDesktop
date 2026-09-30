@@ -1199,9 +1199,11 @@ fn a_retopology_is_a_job_with_a_new_layer_and_one_undo() {
     );
 
     // Discarded: the document and its history as they were.
+    // No outcome is left behind either: `pending: false` means placed, and a
+    // discarded result was not.
     call(&running, &session, "retopo", json!({ "action": "discard" }));
     settle(&running, &session);
-    assert_eq!(retopo_pending(&running, &session), Some(false));
+    assert_eq!(retopo_pending(&running, &session), None);
     assert_eq!(layer_count(&running, &session), layers);
     assert_eq!(history_depth(&running, &session), depth);
     let refused = refused(&running, &session, "retopo", json!({ "action": "accept" }));
@@ -1384,7 +1386,8 @@ fn a_retopology_asked_for_uvs_reports_its_layout() {
     assert!(uv_layout(&running, &session).is_null());
 }
 
-/// Whether the last retopology is held as a preview; `None` before one ran.
+/// Whether the last retopology is held as a preview; `None` when none is
+/// reported — before one ran, or after one was discarded.
 fn retopo_pending(running: &Running, session: &str) -> Option<bool> {
     let state = call(
         running,
