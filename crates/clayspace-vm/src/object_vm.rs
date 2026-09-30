@@ -806,12 +806,13 @@ impl ObjectViewModel {
         ));
     }
 
-    /// Whether an object only adds to the form, so its own surface is a
-    /// faithful picture of its move.
+    /// Whether an object is a union, so its own surface is a faithful
+    /// picture of its move.
     ///
-    /// An operand that carves, intersects, grooves or paints is shown by what
-    /// it does to the form rather than by its shape — the cavity follows the
-    /// drag — so it keeps the live path and its adaptive deferral.
+    /// Every other operation — a cavity, an intersection, a groove, and the
+    /// tongue, emboss or pipe that also add material — is shown by what it
+    /// does to the form rather than by its bare shape, so it keeps the live
+    /// path and its adaptive deferral.
     fn adds_material(&self, id: ObjectId) -> bool {
         self.objects
             .get()

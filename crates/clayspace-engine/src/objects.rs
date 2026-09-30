@@ -496,8 +496,14 @@ fn read_row(line: &str) -> Option<PlacedObject> {
         (Some(y), Some(z)) => [scale_x, y, z],
         _ => [scale_x; 3],
     };
-    // Absent before the preview needed it, and then the engine's own default:
-    // an item follows its layer's mirror unless it said otherwise.
+    // Absent before the preview needed it, and then unknowable: the ABI has
+    // no reader for an item's participation, and a build that predates the
+    // field already placed objects made with symmetry off out of the mirror.
+    // Read as mirrored, because objects are placed under the starting X
+    // symmetry far more often than not. The cost of guessing wrong is only
+    // the preview's: a one-sided object from such a file is drawn with a twin
+    // during its drag that the release does not keep. The field is the
+    // engine's either way.
     let mirrored = fields.next() != Some("0");
 
     Some(PlacedObject {
@@ -636,7 +642,8 @@ mod tests {
         assert_eq!(object.position, [1.5, -2.0, 0.25]);
         assert!(
             object.mirrored,
-            "a row with no mirror field should follow the layer's mirror, as the engine does"
+            "a row with no mirror field is read as following the layer's mirror, the common \
+             case; the engine's own answer is not readable"
         );
     }
 

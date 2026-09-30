@@ -3099,11 +3099,17 @@ mirror. The field and everything else in it stay where they were drawn. The
 release writes the move once, as one undo step. The first frame now takes
 2.4–7.4 ms, press included, and refills nothing (#196, D14). The preview shows
 the bare shape: the blend into its neighbours appears on release, and until
-then the object's old image stays in the field. An object that subtracts,
-intersects, grooves or paints is shown by what it does to the form, so it keeps
-the live path: the cavity follows the drag while the form keeps up. Whether an
-object takes part in the mirror is kept in the objects side-car, after the
-per-axis scale, so an older build still reads the row.
+then the object's old image stays in the field. Only a union (`Add`) object
+is previewed. Every other operation, Tongue, Emboss and Pipe included, is shown
+by what it does to the form, so it keeps the live path: a cavity follows the
+drag while the form keeps up. While the object's layer is hidden, nothing is
+drawn of it. The twin follows the mirror the engine's layer carries, asked
+of the engine, so a reopened document draws it too. Whether an object takes
+part in the mirror is kept in the objects side-car, after the per-axis scale,
+so an older build still reads the row. A row written before that field is
+read as mirrored: nothing in the engine answers the question, and a one-sided
+object from such a file shows a twin during its drag that the release does not
+keep.
 
 **The three modes are one row of chips wherever the widget can be worked** —
 under the object list, in the shapes panel beside the selected object, and in

@@ -18,7 +18,7 @@ When a whole SDF subtool is dragged, the application SHALL defer field evaluatio
 - **AND** an interrupted drag commits to its original target before the new target is selected
 
 ### Requirement: A placed object's drag in a field draws the object until release
-When a placed object that adds material to an SDF layer is dragged, the application SHALL defer the field edit until the drag ends. During the drag, the viewport SHALL draw the object's own surface where the manipulator has taken it, with each mirror image the engine emits for the object. The rest of the field SHALL stay drawn as it was. On release, the preview SHALL clear and the field SHALL be written once with the final transform, as one undo step. An operand that subtracts, intersects, grooves or paints SHALL keep the live path. Whether an object takes part in its layer's mirror SHALL survive saving and reopening.
+When a placed object whose operation is union (`Add`) in an SDF layer is dragged, the application SHALL defer the field edit until the drag ends. During the drag, the viewport SHALL draw the object's own surface where the manipulator has taken it, with each mirror image the engine emits for the object. The rest of the field SHALL stay drawn as it was. On release, the preview SHALL clear and the field SHALL be written once with the final transform, as one undo step. While the object's layer is hidden, no preview SHALL be drawn. An object with any other operation SHALL keep the live path. Whether an object takes part in its layer's mirror SHALL survive saving and reopening.
 
 #### Scenario: First drag frame of a placed object
 - **WHEN** the sculptor starts dragging a placed sphere on the reference scene
@@ -41,6 +41,11 @@ When a placed object that adds material to an SDF layer is dragged, the applicat
 - **WHEN** a subtracting object is dragged
 - **THEN** the cavity follows the drag while the form keeps up, as before
 
+#### Scenario: A hidden layer's object draws nothing
+- **WHEN** a union object whose layer is hidden is dragged
+- **THEN** nothing is drawn of it until the layer is shown again
+
 #### Scenario: Mirror participation survives a reopen
 - **WHEN** an object placed with symmetry off is saved and the document is reopened
 - **THEN** its drag draws it alone, without a reflected image
+- **AND** an object placed under X symmetry is still drawn with its twin, as the reopened layer's mirror reflects it

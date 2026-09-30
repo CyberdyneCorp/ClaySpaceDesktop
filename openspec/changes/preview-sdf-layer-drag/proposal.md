@@ -8,8 +8,8 @@ The same first frame stalls for a placed object in a field. After the layer prev
 - Transform the retained surface in the renderer during a drag when it is the only visible layer.
 - Clear the preview before applying the final transform and rebuilding the exact SDF surface.
 - In multi-layer scenes, the widget follows the drag while the combined SDF picture waits for release because moving the composite would incorrectly move other layers.
-- Draw a placed object that adds material as its own surface during its drag, and write the field once on release. The object's primitive is meshed alone at the press and posed on the CPU each frame, with one reflected image per mirror axis it takes part in. The object table records whether each object takes part in its layer's mirror, and the side-car stores it.
-- Keep the live path for operands that subtract, intersect, groove or paint, as `object-transform` requires ("A live operand stays interactive while it is dragged").
+- Draw a placed union (`Add`) object as its own surface during its drag, and write the field once on release. The object's primitive is meshed alone at the press and posed on the CPU each frame, with one reflected image per mirror axis it takes part in. The object table records whether each object takes part in its layer's mirror, and the side-car stores it.
+- Keep the live path for every other operation. Modify `object-transform`'s "A live operand stays interactive while it is dragged" so it no longer covers a union object in a field, whose blend now appears on release.
 
 ## Impact
 The first drag frame needs only a uniform update; no engine edit or mesh upload. A single-layer preview is affine and may differ slightly from the finally re-sampled SDF, especially after a large nonuniform scale. The final surface is authoritative. Multi-layer drags have no clay preview during the gesture.
