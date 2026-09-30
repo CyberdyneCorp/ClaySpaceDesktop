@@ -2669,6 +2669,11 @@ which is the frame that needs it. The chunk pass beside this one *does* mesh
 hidden grids, deliberately and for the opposite reason — it drains the engine's
 dirty set, so skipping a layer would leave its keys queued for whichever frame
 brings it back and re-mesh the whole backlog at once.
+This is also what the audit's I14 row measured: `set_grid_display` at 169–349
+ms "with no visible grid layer", on a build that still smoothed the hidden
+ones. Through the running application, the change now costs under 0.03 ms and
+uploads nothing with no grid in view. Shown, six sculpted grids cost about
+52 ms. `agent_end_to_end.rs` holds the hidden case (#196, I14).
 
 **Suavização** is the engine's `blur`, in passes of a 3×3×3 box over occupancy,
 and its trade is real in both directions. At **0** nothing is filtered and

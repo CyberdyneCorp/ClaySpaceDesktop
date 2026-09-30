@@ -32,6 +32,18 @@ that showed what used to be true.
   band, the class ClayCore #649 leaves open. That case is bounded at the
   render noise floor rather than held exact, and nothing here pads the
   engine's bounds.
+- **I14.** Not reproducible on current builds, and explained. The audit
+  measured `set_grid_display` boxes to smooth at 169–349 ms "with no visible
+  grid layer" on `eeb158a`, which smoothed every grid on a display change,
+  hidden ones included (V5). #239 stopped that. Through the real application
+  over the door, with a window and a Metal renderer, a display change costs
+  0.003–0.005 ms and uploads nothing with no grid at all, and 0.002–0.028 ms
+  with six sculpted grids hidden. Shown, the same six cost 51–52 ms and
+  1.5 MB, which is the audit's order of magnitude for a handful of grids. The
+  change measured over a plain call mid-stroke, and with thirteen field
+  layers and a grid added and removed, stayed at 0.7–22 ms round trip with
+  nothing uploaded by the display change itself. A tripwire test holds the
+  hidden case.
 
 ## What Changes
 
