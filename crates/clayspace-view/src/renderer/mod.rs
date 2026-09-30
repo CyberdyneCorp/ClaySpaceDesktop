@@ -15,7 +15,7 @@ use crate::palette;
 use crate::profiler::{GpuFrameTiming, GpuPass, GpuProfiler};
 use crate::quality::{ShadingMode, StudioMaterial, ViewportQuality};
 use clayspace_model::{
-    GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity, Transform, UvDisplay, UvPreview,
+    GizmoHandle, GizmoMode, LayerKey, PosedPreview, SurfaceOpacity, Transform, UvDisplay, UvPreview,
 };
 
 mod ao;
@@ -991,6 +991,9 @@ pub struct Renderer {
     antialias: bool,
     camera_buffer: wgpu::Buffer,
     surface_preview: Option<(Transform, Transform)>,
+    /// A dragged object's own surface, drawn beside the field it has not
+    /// yet been moved in. Held only for the length of a drag.
+    object_preview: Option<GpuMesh>,
     material_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -1717,6 +1720,7 @@ impl Renderer {
             antialias: true,
             camera_buffer,
             surface_preview: None,
+            object_preview: None,
             material_buffer,
             bind_group,
             bind_group_layout,
@@ -1757,6 +1761,34 @@ impl Renderer {
     /// The document and GPU mesh remain at their starting positions until release.
     pub fn set_surface_preview(&mut self, preview: Option<(Transform, Transform)>) {
         self.surface_preview = preview;
+    }
+
+    /// Draws a dragged object where the hand has taken it, or stops.
+    ///
+    /// The object's own triangles, posed on the CPU and drawn with the
+    /// surface's material, depth and occlusion. The field under it is not
+    /// touched, so every other object and layer stays exactly where it is
+    /// drawn; the object's old image stays with them until the release writes
+    /// the move. `None` frees the buffers.
+    pub fn set_object_preview(&mut self, gpu: &Gpu, posed: Option<&PosedPreview>) {
+        let Some(posed) = posed else {
+            self.object_preview = None;
+            return;
+        };
+        let vertices: Vec<Vertex> = posed
+            .positions
+            .iter()
+            .zip(&posed.normals)
+            .map(|(&position, &normal)| Vertex {
+                position,
+                normal,
+                color: [1.0; 3],
+                mask: 0.0,
+            })
+            .collect();
+        self.object_preview
+            .get_or_insert_with(|| GpuMesh::new(gpu))
+            .upload(gpu, &vertices, &posed.indices);
     }
 
     /// Changes the display material.
@@ -2745,6 +2777,9 @@ impl Renderer {
             // test over nearly every one of them.
             if !self.retopo_preview_over_field() {
                 self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
+            }
+            if let Some(preview) = &self.object_preview {
+                self.draw_mesh(&mut pass, preview, surface, Primitive::Triangles);
             }
 
             // The mesh layers, in the same pass and with the same pipeline, so

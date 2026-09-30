@@ -133,6 +133,14 @@ pub struct ObjectViewModel {
     /// which is what makes a wandering drag land where it settles rather than
     /// accumulating.
     drag: Option<(GizmoDrag, GizmoTarget, Transform)>,
+    /// The dragged object's own surface, while a placed object in a field is
+    /// being dragged and the field waits for the release.
+    ///
+    /// Meshed once at the press. Every frame of the drag poses it where the
+    /// hand is, so the object follows the pointer while nothing in the field
+    /// is refilled (#196, D14): the first frame used to evaluate the move and
+    /// re-mesh what it reached before the adaptive deferral could start.
+    object_preview: Option<clayspace_model::ObjectPreview>,
     /// Where the document's history stood when the drag in flight began.
     ///
     /// A drag is one thing the sculptor did — press to release — however many
@@ -180,6 +188,7 @@ impl ObjectViewModel {
             mesh_operands: Observable::new(Vec::new()),
             mesh_cost: Observable::new(None),
             drag: None,
+            object_preview: None,
             drag_floor: None,
             pending: None,
             settling: false,
@@ -419,6 +428,16 @@ impl ObjectViewModel {
     pub fn preview_transform(&self) -> Option<(Transform, Transform)> {
         let (_, _, started) = self.drag?;
         Some((started, self.pending?))
+    }
+
+    /// The dragged object's surface, posed where the hand has taken it.
+    ///
+    /// `None` outside a previewed object drag. Before the first move it
+    /// stands where the object does.
+    pub fn object_preview(&self) -> Option<clayspace_model::PosedPreview> {
+        let preview = self.object_preview.as_ref()?;
+        let (_, _, started) = self.drag?;
+        Some(preview.posed(self.pending.unwrap_or(started)))
     }
 
     /// How long a drag frame may take before the rest of the gesture is drawn
@@ -763,9 +782,17 @@ impl ObjectViewModel {
         self.model.begin_target_drag(target);
         self.pending = None;
         // Filling an SDF layer and settling its surface exceeded one frame on
-        // the reference scene. Keep the hand live and evaluate once on release.
-        self.settling =
-            representation == Representation::Sdf && matches!(target, GizmoTarget::Layer(_));
+        // the reference scene, and so did moving one placed object in it.
+        // Keep the hand live and evaluate once on release: a layer is drawn
+        // moved as a whole, an object as its own surface.
+        self.object_preview = match (representation, target) {
+            (Representation::Sdf, GizmoTarget::Object(id)) if self.adds_material(id) => {
+                self.model.object_preview(id)
+            }
+            _ => None,
+        };
+        self.settling = representation == Representation::Sdf
+            && (matches!(target, GizmoTarget::Layer(_)) || self.object_preview.is_some());
         self.drag = Some((
             GizmoDrag {
                 mode: *self.mode.get(),
@@ -777,6 +804,21 @@ impl ObjectViewModel {
             target,
             at,
         ));
+    }
+
+    /// Whether an object is a union, so its own surface is a faithful
+    /// picture of its move.
+    ///
+    /// Every other operation — a cavity, an intersection, a groove, and the
+    /// tongue, emboss or pipe that also add material — is shown by what it
+    /// does to the form rather than by its bare shape, so it keeps the live
+    /// path and its adaptive deferral.
+    fn adds_material(&self, id: ObjectId) -> bool {
+        self.objects
+            .get()
+            .iter()
+            .find(|object| object.id == id)
+            .is_some_and(|object| object.combine.op == clayspace_model::Combine::Add)
     }
 
     fn drag_to(&mut self, to: [f32; 3], snap: bool) {
@@ -812,6 +854,7 @@ impl ObjectViewModel {
             self.edit(|model| model.set_target_transform(target, pending));
         }
         self.settling = false;
+        self.object_preview = None;
         if self.drag.take().is_some() {
             self.model.end_target_drag();
         }

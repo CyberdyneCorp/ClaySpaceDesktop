@@ -24,8 +24,9 @@ the reasoning in them rather than as status.
 | `route-layer-reorder-and-protection` | all of it: the specification promises reordering and protecting a layer from the stack, and no command reaches `SceneViewModel::reorder` or `set_protection` |
 | `a-cut-drawn-on-the-view` | a perspective-error bound and an inversion modifier, both deferred with their reasons in the tasks file |
 | `gates-that-can-fail` | wiring the remaining ViewModels and splitting `App` and `ClayDocument` |
-| `keep-displays-current` | nothing: counts, objects in a moved subtool and the bar at 1280 (#196); archive once merged |
+| `keep-displays-current` | nothing: counts, objects in a moved subtool, the bar at 1280 and the grid display tripwire (#196, I14); archive once merged |
 | `move-carried-subtools-without-refilling` | nothing: a whole mesh, grid, hierarchy or adaptive-surface drag no longer re-meshes the field under it (#196, D14); archive once merged |
+| `preview-sdf-layer-drag` | nothing: a whole SDF layer and a placed union object are drawn following the hand and the field is written on release (#196, D14); every other operation stays live by design; archive once merged |
 | `gate-performance-on-both-platforms` | nothing: both baselines recorded on the runners and gated on macOS and Linux (#189); archive once merged |
 
 **Left for later, and kept visible here.** Three changes finished what they set

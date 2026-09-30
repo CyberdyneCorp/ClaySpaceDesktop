@@ -2669,6 +2669,11 @@ which is the frame that needs it. The chunk pass beside this one *does* mesh
 hidden grids, deliberately and for the opposite reason — it drains the engine's
 dirty set, so skipping a layer would leave its keys queued for whichever frame
 brings it back and re-mesh the whole backlog at once.
+This is also what the audit's I14 row measured: `set_grid_display` at 169–349
+ms "with no visible grid layer", on a build that still smoothed the hidden
+ones. Through the running application, the change now costs under 0.03 ms and
+uploads nothing with no grid in view. Shown, six sculpted grids cost about
+52 ms. `agent_end_to_end.rs` holds the hidden case (#196, I14).
 
 **Suavização** is the engine's `blur`, in passes of a 3×3×3 box over occupancy,
 and its trade is real in both directions. At **0** nothing is filtered and
@@ -3081,6 +3086,30 @@ first frame and on every frame after it. On the mesh reference scene the first
 drag frame took 56.9 ms, 47.3 ms of it re-meshing 1,049 unchanged bricks. It
 now takes 4.7 ms, almost all of it the carried rebuild (#196, D14). A field
 subtool still refills where it stood and where it went.
+
+**Dragging a placed object draws the object, and the field follows on
+release.** A placed object in a field is one item blended into the others, so
+its drag cannot be shown by moving the drawn surface. Until this change the
+first frame wrote the move and re-meshed everything the object's old and new
+bounds reached. On the reference scene that took 45–98 ms, before the
+manipulator's adaptive deferral took over for the rest of the drag. Now the
+press meshes the object's primitive on its own, and each frame draws it where
+the hand has taken it, with its mirror twin when it takes part in the layer's
+mirror. The field and everything else in it stay where they were drawn. The
+release writes the move once, as one undo step. The first frame now takes
+2.4–7.4 ms, press included, and refills nothing (#196, D14). The preview shows
+the bare shape: the blend into its neighbours appears on release, and until
+then the object's old image stays in the field. Only a union (`Add`) object
+is previewed. Every other operation, Tongue, Emboss and Pipe included, is shown
+by what it does to the form, so it keeps the live path: a cavity follows the
+drag while the form keeps up. While the object's layer is hidden, nothing is
+drawn of it. The twin follows the mirror the engine's layer carries, asked
+of the engine, so a reopened document draws it too. Whether an object takes
+part in the mirror is kept in the objects side-car, after the per-axis scale,
+so an older build still reads the row. A row written before that field is
+read as mirrored: nothing in the engine answers the question, and a one-sided
+object from such a file shows a twin during its drag that the release does not
+keep.
 
 **The three modes are one row of chips wherever the widget can be worked** —
 under the object list, in the shapes panel beside the selected object, and in

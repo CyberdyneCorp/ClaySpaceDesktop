@@ -1665,3 +1665,120 @@ fn the_startup_banner_states_the_door_once() {
         "{agent_lines:?}"
     );
 }
+
+/// One measured grid display change, as the door reports it.
+fn measure_grid_display(running: &Running, session: &str, display: &str) -> (f64, u64) {
+    let reply = call(
+        running,
+        session,
+        "measure",
+        json!({
+            "group": "view", "action": "set_grid_display",
+            "arguments": { "display": display }
+        }),
+    );
+    let measured = &reply["structuredContent"];
+    (
+        measured["millis"].as_f64().expect("a figure"),
+        measured["uploaded_bytes"]
+            .as_u64()
+            .expect("an upload count"),
+    )
+}
+
+/// A grid display change with no grid in view costs nothing (#196, I14).
+///
+/// The audit measured boxes to smooth at 169–349 ms "with no visible grid
+/// layer", on a build that smoothed every grid on a display change, hidden
+/// ones included (V5, fixed in #239). Two attempts at the row on later builds,
+/// with no grid at all, measured 0.03–0.05 ms. This is the audit's shape
+/// through the real application, window and renderer: sculpted grids that
+/// are hidden, a field in view. Hidden, they cost nothing; shown, the same
+/// change pays for smoothing each of them, which is the figure the audit took.
+#[test]
+fn a_grid_display_change_with_no_grid_in_view_does_no_work() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+    // No grid at all, as the two earlier attempts at the row measured it.
+    let empty: Vec<(f64, u64)> = ["smooth", "boxes"]
+        .iter()
+        .map(|display| measure_grid_display(&running, &session, display))
+        .collect();
+    const GRIDS: usize = 6;
+    let mut grids = Vec::new();
+    for at in 0..GRIDS {
+        call(
+            &running,
+            &session,
+            "layer",
+            json!({ "action": "add", "representation": "grid" }),
+        );
+        let key = active_layer(&running, &session);
+        let x = at as f32 * 0.3 - 0.75;
+        call(
+            &running,
+            &session,
+            "stroke",
+            json!({ "action": "begin", "at": [x, 0.0, 0.0], "pressure": 1.0 }),
+        );
+        call(
+            &running,
+            &session,
+            "stroke",
+            json!({ "action": "continue", "at": [x, 0.3, 0.0], "pressure": 1.0 }),
+        );
+        call(&running, &session, "stroke", json!({ "action": "end" }));
+        call(
+            &running,
+            &session,
+            "layer",
+            json!({ "action": "set_visible", "layer": key, "visible": false }),
+        );
+        grids.push(key);
+    }
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "select", "layer": 1 }),
+    );
+    settle(&running, &session);
+
+    let hidden: Vec<(f64, u64)> = ["smooth", "boxes", "smooth", "boxes"]
+        .iter()
+        .map(|display| measure_grid_display(&running, &session, display))
+        .collect();
+    for &key in &grids {
+        call(
+            &running,
+            &session,
+            "layer",
+            json!({ "action": "set_visible", "layer": key, "visible": true }),
+        );
+    }
+    settle(&running, &session);
+    let shown = measure_grid_display(&running, &session, "smooth");
+    measure_grid_display(&running, &session, "boxes");
+    eprintln!(
+        "grid display with no grid: {empty:?}; with {GRIDS} sculpted grids hidden: \
+         {hidden:?}; shown, boxes to smooth: {:.2} ms, {} bytes",
+        shown.0, shown.1
+    );
+
+    for (millis, uploaded) in empty.into_iter().chain(hidden) {
+        assert_eq!(
+            uploaded, 0,
+            "a display change with no grid in view uploaded geometry"
+        );
+        assert!(
+            millis < 16.7,
+            "a display change with no grid in view took {millis} ms"
+        );
+    }
+    assert!(
+        shown.1 > 0,
+        "shown, the grids were not smoothed, so the hidden case proves nothing"
+    );
+}
