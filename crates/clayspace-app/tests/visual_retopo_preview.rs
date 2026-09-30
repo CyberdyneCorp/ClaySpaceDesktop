@@ -138,12 +138,22 @@ fn a_held_retopology_draws_in_place_of_its_source_and_accepting_draws_it_again()
     let discarded_wire = harness.capture(&surface, &camera, false, "75-retopo-discarded-polyframe");
     harness.renderer.set_polyframe(&gpu, false);
 
-    // Accepted: placed as the job used to place it, the source hidden so the
-    // layer is drawn alone — which is what the preview showed.
+    // Accepted in place: the source rebuilt as the quads, so the layer is
+    // drawn alone with nothing hidden by hand — which is what the preview
+    // showed. (Accepted beside, the source stays drawn next to the new layer,
+    // as it always has; the preview is the new layer as it is drawn alone.)
+    let in_place = RetopoSettings {
+        in_place: true,
+        ..with_uvs()
+    };
     document
-        .place_retopology(&result, with_uvs())
+        .place_retopology(&result, in_place)
         .expect("the preview is accepted");
-    document.set_layer_visible(source, false).expect("hides");
+    assert_eq!(
+        document.scene().active_layer().map(|layer| layer.key),
+        Some(source),
+        "an in-place accept rebuilt a different layer"
+    );
     upload_layers(&mut harness, &mut document);
     let accepted = harness.capture(&surface, &camera, false, "75-retopo-accepted");
     harness.renderer.set_polyframe(&gpu, true);
@@ -200,10 +210,16 @@ fn a_held_retopology_draws_in_place_of_its_source_and_accepting_draws_it_again()
 }
 
 /// A field source is not a carried span and cannot be cut out of the field's
-/// one surface, so its preview is drawn over it — outside the carried layers'
-/// pass, which a scene with no mesh layer never enters.
+/// one surface, so the field surface is left out while its preview is held.
+/// Drawn under it, the field hid the preview entirely: the quads chord the
+/// isosurface and lie just inside it, so the field won the depth test over
+/// nearly every one of them.
+///
+/// Drawn against the real field surface, not an empty one, since that is the
+/// scene a sculptor or an agent has — and outside the carried layers' pass,
+/// which a scene with no mesh layer never enters.
 #[test]
-fn a_preview_of_a_field_source_draws_in_a_scene_with_no_mesh_layer() {
+fn a_preview_of_a_field_source_is_seen_over_the_field_it_was_made_from() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -212,9 +228,14 @@ fn a_preview_of_a_field_source_draws_in_a_scene_with_no_mesh_layer() {
         .and_then(ClayDocument::with_starting_form)
         .expect("the starting form");
     let camera = framed(&document);
-    let surface = GpuMesh::new(&harness.gpu);
     let gpu = harness.gpu.clone();
-    let empty = harness.capture(&surface, &camera, false, "75-retopo-field-empty");
+    let empty = GpuMesh::new(&gpu);
+    let field = support::upload_engine_mesh(&gpu, &support::mesh_document(document.document(), 96));
+
+    let sculpt = harness.capture(&field, &camera, false, "75-retopo-field");
+    harness.renderer.set_polyframe(&gpu, true);
+    let sculpt_wire = harness.capture(&field, &camera, false, "75-retopo-field-polyframe");
+    harness.renderer.set_polyframe(&gpu, false);
 
     let result = held(
         &mut document,
@@ -232,12 +253,56 @@ fn a_preview_of_a_field_source_draws_in_a_scene_with_no_mesh_layer() {
         !harness.renderer.retopo_preview_shows_layout(),
         "a result with no layout was drawn as one"
     );
-    let drawn = harness.capture(&surface, &camera, false, "75-retopo-field-held");
-    let covered = differing_pixels(&empty, &drawn);
-    println!("the held preview of a field source covers {covered} px");
+    let alone = harness.capture(&empty, &camera, false, "75-retopo-field-preview-alone");
+    let held_over = harness.capture(&field, &camera, false, "75-retopo-field-held");
+    harness.renderer.set_polyframe(&gpu, true);
+    let alone_wire = harness.capture(
+        &empty,
+        &camera,
+        false,
+        "75-retopo-field-preview-alone-polyframe",
+    );
+    let held_wire = harness.capture(&field, &camera, false, "75-retopo-field-held-polyframe");
+    harness.renderer.set_polyframe(&gpu, false);
+
+    harness.renderer.set_retopo_preview(&gpu, None);
+    let discarded = harness.capture(&field, &camera, false, "75-retopo-field-discarded");
+
+    let covered = differing_pixels(
+        &harness.capture(&empty, &camera, false, "75-retopo-field-empty"),
+        &alone,
+    );
+    let under_field = differing_pixels(&alone, &held_over);
+    let under_field_wire = differing_pixels(&alone_wire, &held_wire);
+    let quads_seen = differing_pixels(&sculpt_wire, &held_wire);
+    let lingering = differing_pixels(&sculpt, &discarded);
+    println!(
+        "the held preview of a field source covers {covered} px; over the field it \
+         differs from itself alone at {under_field} px ({under_field_wire} with the \
+         polyframe); its quads change {quads_seen} px of the field under the polyframe; after \
+         discard {lingering} px linger"
+    );
     assert!(
         covered > 10_000,
         "the preview of a field source drew {covered} px — see \
-         target/visual/75-retopo-field-held.png"
+         target/visual/75-retopo-field-preview-alone.png"
     );
+    assert_eq!(
+        under_field, 0,
+        "the field hid part of its preview — see target/visual/75-retopo-field-held.png"
+    );
+    assert_eq!(
+        under_field_wire, 0,
+        "the field hid the preview's quads — see \
+         target/visual/75-retopo-field-held-polyframe.png"
+    );
+    // The field has no polyframe of its own, so this is the quads' thin,
+    // translucent lines alone over a sphere — hundreds of pixels, not the
+    // thousands a carried source's replaced triangles give.
+    assert!(
+        quads_seen > 400,
+        "the preview's quads did not show over the field ({quads_seen} px) — see \
+         target/visual/75-retopo-field-held-polyframe.png"
+    );
+    assert_eq!(lingering, 0, "discarding did not put the field back");
 }

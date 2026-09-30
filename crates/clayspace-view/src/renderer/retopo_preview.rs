@@ -8,7 +8,9 @@
 //! source's span and its polyframe lines are left out while the preview is
 //! held, so the sculptor judges the quads rather than the quads fighting the
 //! sculpt for the same pixels. A field source cannot be cut out of the one
-//! surface every field layer shares, so there the preview is drawn over it.
+//! surface every field layer shares, so there the whole field surface is left
+//! out while the preview is held: drawn under it, the field hides it, since
+//! the quads chord the isosurface and lie just inside it.
 //!
 //! **With the layer's own material**, through the surface's own pipeline, so
 //! it is lit, shaded and drawn through exactly as the accepted layer will be.
@@ -17,8 +19,9 @@
 
 use clayspace_model::{LayerKey, UvDisplay, UvPreview};
 
+use super::polyframe;
 use super::uv_preview::{uv_geometry, UvPreviewMesh};
-use super::{GpuMesh, Vertex};
+use super::{GpuMesh, MeshSpan, Vertex};
 
 /// The preview on the device.
 pub(super) struct HeldPreviewMesh {
@@ -60,7 +63,8 @@ impl HeldPreviewMesh {
 ///
 /// The authored edges where the result has them — a quad drawn as its four
 /// edges rather than its fan triangulation — and the triangulation's unique
-/// edges where it has none, as the polyframe derives them for any layer.
+/// edges where it has none: through [`polyframe::lines`], the derivation the
+/// accepted layer's polyframe goes through, so the two cannot disagree.
 pub fn held_geometry(preview: &UvPreview, edges: &[u32]) -> (Vec<Vertex>, Vec<u32>) {
     let vertices = preview
         .positions
@@ -73,33 +77,17 @@ pub fn held_geometry(preview: &UvPreview, edges: &[u32]) -> (Vec<Vertex>, Vec<u3
             mask: 0.0,
         })
         .collect();
+    let authored = (!edges.is_empty()).then(|| edges.to_vec());
+    let span = MeshSpan::with_edges(preview.layer, 0..preview.indices.len() as u32, authored);
     let count = preview.positions.len() as u32;
-    let lines = if edges.is_empty() {
-        triangle_edges(&preview.indices)
-    } else {
-        edges.to_vec()
-    };
-    let lines = lines
+    let lines = polyframe::lines(&preview.indices, &[span])
+        .indices
         .chunks_exact(2)
         .filter(|line| line.iter().all(|&v| v < count))
         .flatten()
         .copied()
         .collect();
     (vertices, lines)
-}
-
-fn triangle_edges(indices: &[u32]) -> Vec<u32> {
-    let mut seen = std::collections::HashSet::new();
-    let mut lines = Vec::new();
-    for triangle in indices.chunks_exact(3) {
-        for i in 0..3 {
-            let (a, b) = (triangle[i], triangle[(i + 1) % 3]);
-            if a != b && seen.insert((a.min(b), a.max(b))) {
-                lines.extend([a, b]);
-            }
-        }
-    }
-    lines
 }
 
 #[cfg(test)]
@@ -136,7 +124,12 @@ mod tests {
     fn authored_edges_are_drawn_rather_than_the_diagonal() {
         let quad_edges = [0, 1, 1, 2, 2, 3, 3, 0];
         let (_, lines) = held_geometry(&quad(), &quad_edges);
-        assert_eq!(lines, quad_edges.to_vec(), "four edges and no diagonal");
+        // Each edge as the polyframe orders it, lower vertex first.
+        assert_eq!(
+            lines,
+            vec![0, 1, 1, 2, 2, 3, 0, 3],
+            "four edges and no diagonal"
+        );
         // Without them, the triangulation's five unique edges.
         let (_, derived) = held_geometry(&quad(), &[]);
         assert_eq!(derived.len(), 10);

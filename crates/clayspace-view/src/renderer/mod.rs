@@ -2276,6 +2276,24 @@ impl Renderer {
         self.retopo_preview.as_ref().map(|held| held.source)
     }
 
+    /// Whether a held retopology preview stands in for a field layer rather
+    /// than a carried subtool: its source is not one of the carried spans,
+    /// and the field's one surface is left out of the draw in its place.
+    fn retopo_preview_over_field(&self) -> bool {
+        self.retopo_preview_source()
+            .is_some_and(|source| !self.mesh_spans.iter().any(|span| span.layer == source))
+    }
+
+    /// The surface's pipeline for the current shading, solid or drawn through.
+    fn surface_pipeline(&self, solid: bool) -> &wgpu::RenderPipeline {
+        match (self.shading, solid) {
+            (ShadingMode::MatCap, true) => &self.pipeline,
+            (ShadingMode::MatCap, false) => &self.ghost_pipeline,
+            (ShadingMode::Studio, true) => &self.studio_pipeline,
+            (ShadingMode::Studio, false) => &self.studio_ghost_pipeline,
+        }
+    }
+
     /// Whether the held preview is drawn as its layout this frame — a display
     /// is chosen, it carries one, and the surface is solid.
     pub fn retopo_preview_shows_layout(&self) -> bool {
@@ -2711,12 +2729,7 @@ impl Renderer {
             // surface back. One choice for both the surface and the mesh
             // layers: a document with one of each half solid and half ghosted
             // would read as two objects.
-            let surface = match (self.shading, self.drawn_opacity().is_solid()) {
-                (ShadingMode::MatCap, true) => &self.pipeline,
-                (ShadingMode::MatCap, false) => &self.ghost_pipeline,
-                (ShadingMode::Studio, true) => &self.studio_pipeline,
-                (ShadingMode::Studio, false) => &self.studio_ghost_pipeline,
-            };
+            let surface = self.surface_pipeline(self.drawn_opacity().is_solid());
             // The studio pipelines carry a second group. It is bound once for
             // the whole pass rather than per draw: every draw that uses those
             // pipelines samples the same map.
@@ -2725,7 +2738,14 @@ impl Renderer {
                 pass.set_bind_group(1, &map.sampled, &[]);
             }
 
-            self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
+            // Left out while a preview of a field source is held, as a carried
+            // source's span is. The field cannot be cut to one layer, and
+            // under it the preview cannot be seen at all: its quads chord the
+            // isosurface and lie just inside it, so the field wins the depth
+            // test over nearly every one of them.
+            if !self.retopo_preview_over_field() {
+                self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
+            }
 
             // The mesh layers, in the same pass and with the same pipeline, so
             // they take the same material, the same depth and the same
