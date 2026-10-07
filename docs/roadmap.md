@@ -615,7 +615,6 @@ capability nothing here asks for yet:
 
 | entry point | ABI | what adopting it buys |
 |---|---|---|
-| `clay_item_set_mirror_axes`, `clay_layer_set_node_mirror` / `_node_mirror` | 0.121.0 | an item that keeps the axes it was made under when the layer's symmetry is turned off or switched — `symmetry-that-mirrors-what-you-make` task 5.1, #170 |
 | `clay_item_volume_move_topological_from` | 0.122.0 | a topological move sampled from the document directly, so an outward pull is not clipped by the volume it was sampled into |
 | `clay_voxel_grid_clone`, `clay_voxel_get_occupied` | 0.123.0 | the grid-to-field crossing's read without one FFI call per cell: 0.074 ms to clone 89k cells where the box walk through `clay_voxel_get` is the host's 17–46 ms (#285) |
 | `clay_mesh_from_arrays` | 0.124.0 | a mesh with uvs, normals and colours built from arrays, retiring the vertex-aligned OBJ text `claycore::mesh` writes and parses back |

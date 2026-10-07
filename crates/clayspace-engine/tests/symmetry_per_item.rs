@@ -1,14 +1,18 @@
 //! Symmetry mirrors what is made while it is on, not what was already there.
 //!
-//! The engine's mirror is a property of the *layer*: `clay_set_layer_mirror`
-//! reflects every item the layer holds, past and future. Read naively, that
-//! makes the symmetry switch reach backwards — a lump sculpted one-sided grew a
-//! twin the moment the next stroke wrote the mirror, and a box placed with
-//! symmetry off became two when it was turned on (#170, Y2).
+//! The engine's layer mirror reflects every item that inherits it, past and
+//! future. Read naively, that makes the symmetry switch reach backwards — a
+//! lump sculpted one-sided grew a twin the moment the next stroke wrote the
+//! mirror, a box placed with symmetry off became two when it was turned on,
+//! and a lump sculpted under X lost its twin when symmetry was turned off or
+//! moved to Z (#170, Y2).
 //!
-//! Each item says whether it takes part (`clay_item_set_mirror`), so the
-//! answer is to decide that when the item is made: made with symmetry off, it
-//! stays out of every mirror the layer is given later.
+//! Each item carries the axes it was made under (`clay_item_set_mirror_axes`,
+//! ClayCore v0.126.0), and the engine reflects it through those whatever the
+//! layer's mirror is pointed at. The layer's mirror reaches only the items
+//! that inherit it — the starting form, and documents saved before the engine
+//! had per-item axes — and only a Move or a Pinçar writes it, since their
+//! drag images follow it for those items.
 //!
 //! And a mirror change moves surface the brick cache holds. The images the old
 //! mirror made are gone from the field, and unless the bricks under them are
@@ -17,8 +21,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    ArmatureModel, BrushSettings, Combine, CombineSettings, CurveModel, GestureSample, NodeIndex,
-    ObjectModel, Representation, SceneModel, SculptModel, Shape, ToolKind,
+    ArmatureModel, BrushSettings, Combine, CombineSettings, CurveModel, GestureSample, GizmoTarget,
+    NodeIndex, ObjectModel, Representation, SceneModel, SculptModel, Shape, ToolKind, Transform,
 };
 
 const OFF: [bool; 3] = [false; 3];
@@ -104,8 +108,47 @@ fn assert_drawn_as_it_is(document: &ClayDocument, x: f32, what: &str) {
     }
 }
 
+/// A short Move drag from `from` by `delta`, with the symmetry the sculptor
+/// asked for. Move is one of the two verbs that still write the layer's
+/// mirror, so this is also how a test changes it.
+fn drag(document: &mut ClayDocument, from: [f32; 3], delta: [f32; 3], symmetry: [bool; 3]) {
+    SculptModel::set_symmetry(document, symmetry).expect("record the setting");
+    let samples: Vec<GestureSample> = (0..=4)
+        .map(|i| {
+            let t = i as f32 / 4.0;
+            GestureSample {
+                position: std::array::from_fn(|axis| from[axis] + delta[axis] * t),
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect();
+    document
+        .apply_stroke(
+            ToolKind::Mover,
+            BrushSettings {
+                size: 0.35,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            symmetry,
+        )
+        .expect("a drag");
+}
+
+/// Stands the starting form at `at`. It inherits its layer's mirror, as the
+/// base form of a subtool does, so off the plane it is the one item a later
+/// change of the layer's mirror still moves.
+fn move_the_starting_form_to(document: &mut ClayDocument, at: [f32; 3]) {
+    let id = document.objects()[0].id;
+    document
+        .set_target_transform(GizmoTarget::Object(id), Transform::at(at))
+        .expect("move the starting form");
+}
+
 /// A lump sculpted one-sided stays one-sided when symmetry is turned on and
-/// the next stroke writes the mirror.
+/// the next stroke is made under it.
 #[test]
 fn turning_symmetry_on_leaves_existing_items_alone() {
     let mut document = document();
@@ -116,8 +159,10 @@ fn turning_symmetry_on_leaves_existing_items_alone() {
     assert!(solid(&document, lump), "the dab deposited nothing");
     assert!(!solid(&document, twin), "an unmirrored dab has a twin");
 
-    // Symmetry on, and a stroke on the plane, which is what writes the mirror.
+    // Symmetry on: a stroke on the plane, and a drag, which is what writes
+    // the layer's mirror.
     dab(&mut document, [0.0, 0.0, -1.0], X);
+    drag(&mut document, [0.6, 0.0, 0.8], [0.0, 0.0, 0.2], X);
 
     assert!(
         !solid(&document, twin),
@@ -142,24 +187,28 @@ fn a_stroke_made_with_symmetry_on_is_mirrored() {
 
 /// A mirror change takes surface away as well as adding it, and the bricks
 /// under what it took away are refilled.
+///
+/// The item that moves is the starting form, stood off the plane: it inherits
+/// the layer's mirror, and a drag made with Z symmetry is what re-points that
+/// mirror. An item made under symmetry carries its own axes and is not what a
+/// layer-mirror change moves any more.
 #[test]
 fn a_mirror_change_dirties_both_images() {
     let mut document = document();
-    dab(&mut document, [1.8, 0.0, 0.0], X);
+    move_the_starting_form_to(&mut document, [1.8, 0.0, 0.0]);
     assert!(solid(&document, [-1.8, 0.0, 0.0]), "no twin to take away");
     assert_drawn_as_it_is(&document, -1.8, "before the change");
 
-    // Switched to Z: the next stroke writes the mirror across z, which takes
-    // the twin across x out of the field. (Turning symmetry off no longer
-    // changes the mirror a stroke leaves behind.)
-    dab(&mut document, [0.0, 0.0, -1.0], Z);
+    // A drag with Z symmetry writes the layer's mirror across z, which takes
+    // the inherited twin across x out of the field.
+    drag(&mut document, [1.8, 1.0, 0.0], [0.0, 0.2, 0.0], Z);
     assert!(
         !solid(&document, [-1.8, 0.0, 0.0]),
         "the mirror did not change"
     );
 
     assert_drawn_as_it_is(&document, -1.8, "after the mirror changed");
-    assert_drawn_as_it_is(&document, 1.8, "the stroke's own side");
+    assert_drawn_as_it_is(&document, 1.8, "the drag's own side");
 }
 
 /// Hidden after a mirror change, a layer leaves nothing behind.
@@ -170,7 +219,8 @@ fn a_hidden_layer_draws_nothing_after_a_mirror_change() {
         .add_layer("Lado", Representation::Sdf)
         .expect("a second subtool");
     dab(&mut document, [1.8, 0.0, 0.0], X);
-    dab(&mut document, [1.8, 0.0, 0.4], Z);
+    assert!(solid(&document, [-1.8, 0.0, 0.0]), "the lump has no twin");
+    drag(&mut document, [1.8, 0.0, 0.3], [0.0, 0.0, 0.1], Z);
 
     document
         .set_layer_visible(key, false)
@@ -254,14 +304,14 @@ fn a_placed_object_is_not_duplicated_by_a_later_symmetry_change() {
     assert_drawn_as_it_is(&document, -1.8, "the placed sphere's far side");
 }
 
-/// Undoing the stroke that changed the mirror brings the old images back, and
+/// Undoing the drag that changed the mirror brings the old images back, and
 /// the viewport draws them.
 #[test]
 fn undoing_a_mirror_change_draws_the_old_images_again() {
     let mut document = document();
-    dab(&mut document, [1.8, 0.0, 0.0], X);
+    move_the_starting_form_to(&mut document, [1.8, 0.0, 0.0]);
     let before = document.history().depth;
-    dab(&mut document, [0.0, 0.0, -1.0], Z);
+    drag(&mut document, [1.8, 1.0, 0.0], [0.0, 0.2, 0.0], Z);
     assert!(
         !solid(&document, [-1.8, 0.0, 0.0]),
         "the mirror is still across x"
@@ -519,10 +569,9 @@ fn a_bake_with_symmetry_off_is_not_copied_across_a_kept_mirror() {
     }
 }
 
-/// A Move drag with symmetry off still moves one side only. Its drag images
-/// follow the layer's mirror, so it is the verb that still writes the mirror
-/// off — the price, until the engine has per-item axes (ClayCore #664), is
-/// the twin of a lump made under X.
+/// A Move drag with symmetry off moves one side of the starting form only.
+/// The form inherits the layer's mirror, and Move writes that mirror off; the
+/// lump made under X keeps its twin, since its axes are its own.
 #[test]
 fn a_drag_with_symmetry_off_moves_one_side() {
     let mut document = document();
@@ -545,4 +594,120 @@ fn a_drag_with_symmetry_off_moves_one_side() {
         "a drag with symmetry off moved the far side from {far_before} to {far_after}"
     );
     assert_drawn_as_it_is(&document, -0.6, "the far side of the drag");
+    assert!(
+        solid(&document, [-1.8, 0.0, 0.0]),
+        "the drag with symmetry off took the twin away from a lump made under X"
+    );
+}
+
+/// Switching symmetry to another axis leaves what was made under the old one
+/// exactly as it was: the lump keeps its X twin and gains no Z twin, through a
+/// stroke and through the drag that re-points the layer's mirror.
+#[test]
+fn switching_the_axis_leaves_items_made_under_the_old_axis_unchanged() {
+    let mut document = document();
+    let (lump, twin, across_z) = ([1.8, 0.0, 0.4], [-1.8, 0.0, 0.4], [1.8, 0.0, -0.4]);
+    dab(&mut document, lump, X);
+    assert!(solid(&document, twin), "the lump has no X twin");
+    assert!(!solid(&document, across_z), "the lump has a Z twin already");
+
+    dab(&mut document, [1.0, 1.5, 0.5], Z);
+    assert!(
+        solid(&document, [1.0, 1.5, -0.5]),
+        "the dab made under Z is not mirrored across z"
+    );
+    drag(&mut document, [0.6, 0.0, 0.8], [0.0, 0.0, 0.2], Z);
+
+    assert!(
+        solid(&document, twin),
+        "switching symmetry to Z took the X twin away from a lump made under X"
+    );
+    assert!(
+        !solid(&document, across_z),
+        "switching symmetry to Z gave a lump made under X a Z twin"
+    );
+    assert_drawn_as_it_is(&document, twin[0], "the kept X twin");
+    assert_drawn_as_it_is(&document, lump[0], "the lump");
+}
+
+/// Turning symmetry off leaves a mirrored item mirrored, through the two
+/// verbs that write the layer's mirror off: a Move and a Pinçar made with
+/// symmetry off.
+#[test]
+fn turning_symmetry_off_leaves_a_mirrored_item_mirrored() {
+    let mut document = document();
+    let (lump, twin) = ([1.8, 0.0, 0.0], [-1.8, 0.0, 0.0]);
+    dab(&mut document, lump, X);
+    assert!(solid(&document, twin), "the lump has no twin");
+
+    drag(&mut document, [0.6, 0.0, 0.8], [0.0, 0.0, 0.2], OFF);
+    assert!(
+        solid(&document, twin),
+        "a Move with symmetry off took the twin away from a lump made under X"
+    );
+
+    let path: Vec<[f32; 3]> = (0..4).map(|i| [0.0, 0.6 + i as f32 * 0.05, 0.8]).collect();
+    stroke(&mut document, ToolKind::Pincar, &path, 0.3, OFF);
+    assert!(
+        solid(&document, twin),
+        "a Pinçar with symmetry off took the twin away from a lump made under X"
+    );
+    assert_drawn_as_it_is(&document, twin[0], "the kept twin");
+    assert_drawn_as_it_is(&document, lump[0], "the lump");
+}
+
+/// An item made under symmetry is one item with its reflections, and a drag
+/// that reaches it moves them together whatever symmetry the drag is made
+/// with — the engine's rule for an item carrying its own axes, pinned so a
+/// change of it is noticed. The starting form, which inherits the layer's
+/// mirror, is the one a drag with symmetry off moves on one side.
+#[test]
+fn a_drag_with_symmetry_off_on_an_item_made_under_symmetry_moves_both_images() {
+    let mut document = document();
+    dab(&mut document, [1.8, 0.0, 0.0], X);
+    let (near, far) = ([1.8, 0.0, 0.5], [-1.8, 0.0, 0.5]);
+    let (near_before, far_before) = (field(&document, near), field(&document, far));
+    assert!(
+        (near_before - far_before).abs() < 1e-3,
+        "the lump and its twin differ before the drag"
+    );
+
+    drag(&mut document, [1.8, 0.0, 0.25], [0.0, 0.0, 0.2], OFF);
+
+    let (near_after, far_after) = (field(&document, near), field(&document, far));
+    assert!(
+        near_after < near_before - 1e-3,
+        "the drag did not move the lump: {near_before} to {near_after}"
+    );
+    assert!(
+        (near_after - far_after).abs() < 1e-2,
+        "the drag moved the lump to {near_after} and its twin to {far_after}: an \
+         item made under X is reached through its own reflections, so both \
+         images follow a drag together"
+    );
+    assert_drawn_as_it_is(&document, -1.8, "the twin after the drag");
+}
+
+/// An item made under symmetry is mirrored through the layer's planes even
+/// where the layer's own mirror has never been pointed: a fresh subtool's
+/// engine mirror is off, and a lump made on it under X still has its twin.
+#[test]
+fn an_item_made_under_symmetry_is_mirrored_on_a_layer_whose_mirror_is_off() {
+    let mut document = document();
+    let key = document
+        .add_layer("Lado", Representation::Sdf)
+        .expect("a second subtool");
+    let layer = document.layer_id(key).expect("its engine id");
+    dab(&mut document, [1.8, 0.0, 0.0], X);
+
+    let (carried, _) = document
+        .document()
+        .layer_mirror(layer)
+        .expect("the layer answers");
+    assert_eq!(carried, OFF, "a stroke wrote the layer's mirror");
+    assert!(
+        solid(&document, [-1.8, 0.0, 0.0]),
+        "a lump made under X on a layer whose mirror is off has no twin"
+    );
+    assert_drawn_as_it_is(&document, -1.8, "the twin on the fresh subtool");
 }

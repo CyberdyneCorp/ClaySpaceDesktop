@@ -18,9 +18,12 @@
 //! Measured before the fix: a dab made with symmetry **off** moved the far
 //! side of the form by 0.28 units.
 //!
-//! Symmetry off no longer writes the mirror at all — a stroke made with it off
-//! stays out of whatever mirror the layer keeps (#170) — so the change these
-//! tests drive is to another axis, which still does.
+//! A stamping stroke no longer writes the layer's mirror at all: every item
+//! carries the axes it was made under (#170), and the layer's mirror reaches
+//! only the items that inherit it, the starting form among them. The verbs
+//! that still write it are Move and Pinçar, whose drag images follow it for
+//! those items — so the gesture these tests drive is a Move on the starting
+//! form, and the change is to another axis.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SceneModel, SculptModel, ToolKind};
@@ -41,18 +44,22 @@ fn radius_along(document: &ClayDocument, direction: [f32; 3]) -> Option<f32> {
     Some(hit.iter().map(|c| c * c).sum::<f32>().sqrt())
 }
 
-/// A stamping stroke on the +x pole, which the far side must not feel.
+/// A Move drag outward at the +x pole, which the far side must not feel
+/// unless the mirror is across x.
 fn dab(document: &mut ClayDocument, symmetry: [bool; 3]) {
-    let samples: Vec<GestureSample> = (0..3)
-        .map(|i| GestureSample {
-            position: [1.0, i as f32 * 0.02, 0.0],
-            pressure: 1.0,
-            time: i as f32,
+    let samples: Vec<GestureSample> = (0..=4)
+        .map(|i| {
+            let t = i as f32 / 4.0;
+            GestureSample {
+                position: [1.0 + t * 0.2, 0.0, 0.0],
+                pressure: 1.0,
+                time: t,
+            }
         })
         .collect();
     document
         .apply_stroke(
-            ToolKind::Padrao,
+            ToolKind::Mover,
             BrushSettings {
                 size: 0.35,
                 intensity: 1.0,
@@ -61,7 +68,7 @@ fn dab(document: &mut ClayDocument, symmetry: [bool; 3]) {
             &samples,
             symmetry,
         )
-        .expect("a dab");
+        .expect("a drag");
 }
 
 /// The far side stays put when the sculptor has moved symmetry off x, even
@@ -70,10 +77,10 @@ fn dab(document: &mut ClayDocument, symmetry: [bool; 3]) {
 fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
     let mut document = sphere();
     // The starting form carries `Layer::STARTING_SYMMETRY`, which is x. Asking
-    // for y is therefore a real change, and the first stroke is what writes
-    // it — putting a `clay_set_layer_mirror` inside that stroke's gesture. A
-    // dab on the +x pole reflected across y stays on the +x pole, so the far
-    // (-x) pole feels it only through an x mirror.
+    // for y is therefore a real change, and the first drag is what writes
+    // it — putting a `clay_set_layer_mirror` inside that gesture. A drag on
+    // the +x pole reflected across y is the drag itself, so the far (-x) pole
+    // feels it only through an x mirror.
     let off = [false, true, false];
     SculptModel::set_symmetry(&mut document, off).expect("record the setting");
 
@@ -89,12 +96,12 @@ fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
         (unmirrored - rested).abs()
     );
 
-    // Exactly what the dab recorded — the stroke and the mirror edit inside
+    // Exactly what the drag recorded — the grab and the mirror edit inside
     // it — so the starting form survives and the mirror does not.
     let recorded = document.history().depth.saturating_sub(before);
     assert!(
         recorded >= 2,
-        "the dab recorded {recorded} entries; the mirror edit is supposed to \
+        "the drag recorded {recorded} entries; the mirror edit is supposed to \
          be one of them, and without it this test proves nothing"
     );
     for _ in 0..recorded {
@@ -108,7 +115,7 @@ fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
     let moved = (again - reverted).abs();
     assert!(
         moved < 1e-3,
-        "the far side moved by {moved} on a dab the sculptor asked to be \
+        "the far side moved by {moved} on a drag the sculptor asked to be \
          mirrored across y only. The undo took the engine's mirror back to x \
          and this side went on believing its own record of it, so \
          `point_the_mirror` skipped the call that would have moved it"
@@ -123,7 +130,7 @@ fn a_stroke_after_an_undone_mirror_edit_is_still_unmirrored() {
 fn a_stroke_after_an_undone_mirror_edit_is_still_mirrored_when_asked() {
     let mut document = sphere();
     let on = [true, false, false];
-    // Across y first, so that asking for x back is a change the stroke must
+    // Across y first, so that asking for x back is a change the drag must
     // write.
     let y = [false, true, false];
     SculptModel::set_symmetry(&mut document, y).expect("record");
@@ -143,9 +150,9 @@ fn a_stroke_after_an_undone_mirror_edit_is_still_mirrored_when_asked() {
 
     assert!(
         (again - reverted).abs() > 1e-3,
-        "the far side did not move on a MIRRORED dab: it read {reverted} and \
+        "the far side did not move on a MIRRORED drag: it read {reverted} and \
          then {again}. Forgetting the mirror after an undo must make the next \
-         stroke write it, not skip it"
+         gesture write it, not skip it"
     );
 }
 
@@ -183,7 +190,7 @@ fn a_forgotten_mirror_is_read_back_rather_than_assumed() {
     let key = document.scene().active_layer().expect("a layer").key;
     let layer = document.layer_id(key).expect("its engine id");
 
-    // A stroke mirrored across y, which writes the layer's mirror as y.
+    // A drag mirrored across y, which writes the layer's mirror as y.
     let y = [false, true, false];
     document.set_symmetry(y).expect("symmetry across y");
     dab(&mut document, y);
@@ -194,7 +201,7 @@ fn a_forgotten_mirror_is_read_back_rather_than_assumed() {
         .expect("an SDF layer answers what mirror it carries");
     assert_eq!(
         carried, y,
-        "the stroke asked for a mirror across y and the engine says it has another"
+        "the drag asked for a mirror across y and the engine says it has another"
     );
 
     // A history step, which is what forgets this side's account of it.

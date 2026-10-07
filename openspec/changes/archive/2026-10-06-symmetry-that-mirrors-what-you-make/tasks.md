@@ -40,11 +40,16 @@
 - [x] 4.3 The mirror-change and mirror-after-undo tests drive a change of axis,
       which still writes the mirror, instead of turning it off
 
-## 5. Waiting on the engine (#170)
+## 5. Per-item axes (#170, ClayCore v0.126.0)
 
-- [ ] 5.1 Changing the axis, or a Move or Pinch with symmetry off, leaves items
-      made under the old mirror unchanged — needs per-item axes or an engine
-      mirror bake (ClayCore #664)
-- [ ] 5.2 A Move drag on the mirror plane moves as far as an unmirrored drag —
-      the coincident drag image is the engine's (ClayCore #663); un-ignore
-      `a_move_on_the_plane_is_applied_once` when it lands
+- [x] 5.1 Every item carries the axes it was made under, so changing the
+      axis, or a Move or Pinch with symmetry off, leaves items made under
+      the old mirror unchanged; verify
+      `switching_the_axis_leaves_items_made_under_the_old_axis_unchanged`,
+      `turning_symmetry_off_leaves_a_mirrored_item_mirrored`,
+      `a_drag_with_symmetry_off_on_an_item_made_under_symmetry_moves_both_images`,
+      `an_item_made_under_symmetry_is_mirrored_on_a_layer_whose_mirror_is_off`
+      and `a_reopened_document_keeps_each_items_own_axes`; the `claycore`
+      wrappers are verified by `item_mirror_axes.rs`
+- [x] 5.2 A Move drag on the mirror plane moves as far as an unmirrored drag;
+      `a_move_on_the_plane_is_applied_once` is no longer ignored
