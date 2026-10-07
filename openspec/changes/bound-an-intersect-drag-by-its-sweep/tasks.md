@@ -12,5 +12,8 @@
       of it on `reference-10x`.
 - [x] File the remaining engine-side cost, the chain pad (ClayCore#666).
 - [x] Update the documentation and the specification.
-- [ ] Pass focused tests, lint, format, layering and OpenSpec validation.
+- [x] Tighten the scaling test to the v0.126.0 answer (an intersect frame
+      refills no more than its subtracting control) and measure both
+      acceptance criteria on the new pin.
+- [x] Pass focused tests, lint, format, layering and OpenSpec validation.
 - [ ] Pass CI.
