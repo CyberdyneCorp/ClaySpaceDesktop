@@ -211,6 +211,95 @@ fn starting_over_gives_back_the_starting_form() {
     );
 }
 
+/// Each item's own mirror axes survive a save and a reopen, so a lump made
+/// under X keeps its twin and one made one-sided stays one-sided — through
+/// the drag that re-points the reopened layer's mirror as well. The format
+/// minor this build writes, 20, is what carries them (ClayCore v0.126.0).
+#[test]
+fn a_reopened_document_keeps_each_items_own_axes() {
+    let path = scratch("own-axes.clayspace");
+    let mut document = fresh_document();
+    let (lump, twin) = ([1.8, 0.0, 0.0], [-1.8, 0.0, 0.0]);
+    let (one_sided, its_mirror) = ([1.0, 1.5, 0.0], [-1.0, 1.5, 0.0]);
+    let stamp = |document: &mut ClayDocument, at: [f32; 3], symmetry: [bool; 3]| {
+        document.set_symmetry(symmetry).expect("symmetry");
+        document.set_combine(clayspace_model::CombineSettings {
+            op: clayspace_model::Combine::Add,
+            ..clayspace_model::CombineSettings::default()
+        });
+        document
+            .apply_stroke(
+                ToolKind::Padrao,
+                BrushSettings {
+                    size: 0.3,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &[GestureSample {
+                    position: at,
+                    pressure: 1.0,
+                    time: 0.0,
+                }],
+                symmetry,
+            )
+            .expect("stroke");
+    };
+    let solid = |document: &ClayDocument, at: [f32; 3]| {
+        document
+            .document()
+            .eval_points(None, &[at])
+            .expect("the field answers")[0]
+            < 0.0
+    };
+    stamp(&mut document, lump, [true, false, false]);
+    stamp(&mut document, one_sided, [false; 3]);
+    assert!(solid(&document, twin), "the lump has no twin");
+    assert!(!solid(&document, its_mirror), "the one-sided dab has one");
+    document.save(&path).expect("save");
+
+    let mut reopened = fresh_document();
+    reopened.open(&path).expect("open");
+    let _ = std::fs::remove_file(&path);
+    assert!(solid(&reopened, lump), "the lump did not survive");
+    assert!(solid(&reopened, twin), "the reopened lump lost its twin");
+    assert!(
+        !solid(&reopened, its_mirror),
+        "the reopened one-sided dab grew a twin"
+    );
+
+    // A drag with Z symmetry points the reopened layer's mirror at z, which
+    // reaches only what inherits it: both items are as they were.
+    let z = [false, false, true];
+    reopened.set_symmetry(z).expect("symmetry");
+    let samples: Vec<GestureSample> = (0..=4)
+        .map(|i| GestureSample {
+            position: [0.6, 0.0, 0.8 + i as f32 * 0.05],
+            pressure: 1.0,
+            time: i as f32,
+        })
+        .collect();
+    reopened
+        .apply_stroke(
+            ToolKind::Mover,
+            BrushSettings {
+                size: 0.35,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            z,
+        )
+        .expect("a drag");
+    assert!(
+        solid(&reopened, twin),
+        "re-pointing the reopened layer's mirror took the twin from a lump made under X"
+    );
+    assert!(
+        !solid(&reopened, its_mirror),
+        "re-pointing the reopened layer's mirror gave the one-sided dab a twin"
+    );
+}
+
 #[test]
 fn a_reopened_document_keeps_its_layers_as_they_were() {
     // ClayCore #69, from this side. Until 0.29.0 there was no enumeration at

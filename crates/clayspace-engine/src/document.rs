@@ -337,18 +337,26 @@ struct Layer {
     symmetry: [bool; 3],
     /// What the engine was last told this layer's mirror is.
     ///
-    /// Recorded rather than read: the ABI sets a layer mirror and has no call
-    /// that reads one back, so this is the only account of it there is — the
-    /// same reason the layer transform is kept here.
+    /// A write-avoidance record, kept so a gesture that wants the mirror it
+    /// already has writes nothing — the same reason the layer transform is
+    /// kept here.
     ///
     /// Held apart from the setting above because the two change at different
     /// moments and for different reasons. The setting is the sculptor's and
     /// costs nothing; writing the mirror is an *edit*, with its own entry in
-    /// the engine's history, and it belongs inside the stroke that needs it —
+    /// the engine's history, and it belongs inside the gesture that needs it —
     /// where the ViewModel counts it and one undo spends it along with the
     /// rest of the gesture. Written at the toggle instead, it would sit on the
     /// engine's stack unaccounted, and the next undo would spend itself on the
     /// mirror and leave part of the stroke standing.
+    ///
+    /// Few gestures need it now. Every item is made with the axes symmetry
+    /// had when it was made (`made_under`), and the engine reflects such an
+    /// item through *those*, so the layer's mirror reaches only the items
+    /// that inherit it: the starting form, and whatever a document saved
+    /// before the engine had per-item axes holds. A Move and a Pinçar still
+    /// point it — their drag images follow it for those items — and nothing
+    /// else writes it.
     ///
     /// `None` means **nobody knows**. Writing the mirror is an edit, so an
     /// undo can revert it — and because the ABI has no call that reads a
@@ -444,8 +452,9 @@ impl Layer {
             sculpt_layers: Vec::new(),
             symmetry: Self::STARTING_SYMMETRY,
             // A layer the engine has just made carries no mirror — axes
-            // 0/0/0 is what "off" is — so that is what it has been told, and
-            // the first stroke that wants the setting above is what writes it.
+            // 0/0/0 is what "off" is — so that is what it has been told. The
+            // items made on it carry their own axes; the first Move or Pinçar
+            // that wants the setting above is what writes it.
             mirror: Some([false; 3]),
             armature: None,
             armature_bounds: None,
@@ -4176,37 +4185,27 @@ impl ClayDocument {
         self.point_the_mirror_of(self.active, symmetry)
     }
 
-    /// The same, for a verb whose whole effect is items it adds.
+    /// The same, for the layer at `index` rather than the active one.
     ///
-    /// **Symmetry off leaves the layer's mirror where it stands.** Every item
-    /// such a verb makes with symmetry off stays out of the mirror (see
-    /// `takes_part_in_the_mirror`), so the mirror has nothing to say about it
-    /// — while writing it off took the twins away from every item made while
-    /// it was on: a lump sculpted with X lost its far side at the next stroke
-    /// made with symmetry off (#170). Left alone, that lump keeps both sides
-    /// and the new stroke is one-sided anyway.
-    ///
-    /// The drag verbs do not come through here. A Move grab and a Pinch
-    /// region are reflected into every image the engine emits of an item that
-    /// takes part, so a drag with symmetry off on a mirrored form moved both
-    /// sides unless the mirror really was off; they still point it. Turning
-    /// the mirror to another axis still re-points it for everything as well —
-    /// both wait on per-item axes or a mirror bake (ClayCore #664).
-    fn point_the_mirror_for_items(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
-        if !takes_part_in_the_mirror(symmetry) {
-            return Ok(());
-        }
-        self.point_the_mirror(symmetry)
-    }
-
-    /// The same, for the layer at `index` rather than the active one — a curve
-    /// is placed on the layer it was begun on, whichever is active now.
+    /// **Only a Move or a Pinçar comes through here.** Every other verb's
+    /// effect is items, and an item carries the axes it was made under
+    /// (`made_under`), which the layer's mirror does not reach — so a stamp,
+    /// a pull, a curve, a placed object or a bake leaves the layer's mirror
+    /// as it stands whatever symmetry it is made with. A drag and a magnify
+    /// are reflected by the engine into every image of the items under them,
+    /// and for an item that inherits the layer's mirror — the starting form,
+    /// or anything from a document saved before the engine had per-item axes
+    /// — those images are the layer's. So the two verbs point it, inside their
+    /// own gesture, and a drag with symmetry off on the starting form moves
+    /// the side it touched alone. Before per-item axes every stroke pointed
+    /// it, and a lump sculpted with X lost its far side at the next stroke
+    /// made with symmetry off or with another axis (#170).
     ///
     /// **A real change refills both images.** The mirror moves surface the
     /// brick cache holds: the reflections the old mirror made leave the field
     /// and the ones the new mirror makes arrive, and neither is inside the
-    /// region of the stroke that asked for the change. Only the new region was
-    /// ever refilled, so a mirror turned off left its reflections drawn —
+    /// region of the gesture that asked for the change. Only the new region
+    /// was ever refilled, so a mirror turned off left its reflections drawn —
     /// 38,913 bright pixels of them measured, and still there after the layer
     /// was hidden, because hiding refills what the layer reaches *now* (#170).
     /// So the reflections the change moved are marked — see
@@ -4261,7 +4260,7 @@ impl ClayDocument {
     /// Marks what a mirror change moved: the reflections, not the items.
     ///
     /// Only a node whose bound changed with the mirror is touched — one that
-    /// stays out of the mirror, or whose reflection lands on its own box, has
+    /// carries its own axes, or whose reflection lands on its own box, has
     /// the same bound either way. Marking the whole layer instead refilled the
     /// starting form on the first stroke after symmetry was turned off: 1043
     /// keys for a dab that dirties a few dozen. The gap this leaves is a node
@@ -4398,14 +4397,11 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
-        // The mirror is still pointed where the sculptor asked, because these
-        // verbs share a layer with the ones it does reach — except with
-        // symmetry off, where only Move still writes it: its drag images
-        // follow the mirror, and the others lay down a bake it never reaches.
+        // Only Move points the mirror: its drag images follow it for an item
+        // that inherits the layer's. The others lay down a bake the layer
+        // mirror never reaches, reflected by hand below.
         if tool == ToolKind::Mover {
             self.point_the_mirror(symmetry)?;
-        } else {
-            self.point_the_mirror_for_items(symmetry)?;
         }
         // Unreflected, because the commit reflects it again; one dab per
         // segment, where `live_relax_dab` puts it.
@@ -4492,13 +4488,9 @@ impl ClayDocument {
                 self.point_the_mirror(symmetry)?;
                 self.magnify_surface_stroke(brush, samples)
             }
-            // Pulls a lobe out along the path, as items — so the layer
-            // mirror does reach it, and pointing the mirror is the whole
-            // of what symmetry means here.
-            ToolKind::Puxar => {
-                self.point_the_mirror_for_items(symmetry)?;
-                self.snakehook_stroke(brush, samples, symmetry)
-            }
+            // Pulls a lobe out along the path, as an item that carries the
+            // stroke's symmetry as its own axes.
+            ToolKind::Puxar => self.snakehook_stroke(brush, samples, symmetry),
             _ => self.stroke_sdf(tool, brush, samples, symmetry),
         }
     }
@@ -4511,7 +4503,6 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
-        self.point_the_mirror_for_items(symmetry)?;
         // Every tool that reaches here combines a stamp with the surface.
         // There is no catch-all arm: the one that was here mapped anything
         // unlisted to `Op::Add`, which adds a *sphere* — so the planing tools
@@ -4630,10 +4621,8 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         // Every stamp is a copy of this template, so the stroke's symmetry is
         // decided here, once, and stays with the items it made — see
-        // `takes_part_in_the_mirror`.
-        stamp
-            .set_mirror(takes_part_in_the_mirror(symmetry))
-            .map_err(ModelError::engine)?;
+        // `made_under`.
+        made_under(&mut stamp, symmetry)?;
 
         // No alpha here, and `alpha_for` is what says so rather than a
         // condition repeated at this call site. A field takes one as a
@@ -5033,7 +5022,7 @@ impl ClayDocument {
         }
 
         let placed = self.active_layer().transform;
-        let mirror = Mirror(self.mirror_for_dirtying(self.active_layer()));
+        let mirror = Mirror(self.axes_a_warp_can_reach(self.active));
         let regions = Self::magnify_regions(&centres, radius, mirror, &placed);
         self.refill_regions(&regions)?;
         Ok(EditOutcome {
@@ -5314,13 +5303,9 @@ impl ClayDocument {
             // dirty and the wide bound was the correct answer. The two fixes
             // are one fix.
             let placed = self.active_layer().transform;
-            // A tendril pulled with symmetry off is out of the mirror, which
-            // the layer can keep carrying; its reflections are not its own.
-            let mirror = if takes_part_in_the_mirror(symmetry) {
-                Mirror(self.mirror_for_dirtying(self.active_layer()))
-            } else {
-                Mirror([false; 3])
-            };
+            // The tendril's own axes are the stroke's symmetry, whatever the
+            // layer's mirror carries.
+            let mirror = Mirror(symmetry);
             let regions =
                 Self::tendril_tail_regions(&points, hook.points, brush.size, mirror, &placed);
             self.live_hook = Some(LiveHook {
@@ -5417,8 +5402,7 @@ impl ClayDocument {
             brush.size * Self::TENDRIL_FILLET,
         )
         .map_err(ModelError::engine)?;
-        item.set_mirror(takes_part_in_the_mirror(symmetry))
-            .map_err(ModelError::engine)?;
+        made_under(&mut item, symmetry)?;
         if let Some(painted) = self.active_mask() {
             // Refused for a mask that protects nothing, and an ungated
             // tendril is exactly right then — see `stroke_sdf`.
@@ -5836,27 +5820,17 @@ impl ClayDocument {
         if self.live_smooth.is_some() || !self.live_smooth_is_possible() {
             return false;
         }
-        // Before the transaction opens, never during it. `baked_stroke` points
-        // the mirror on every segment, and the first segment of a gesture that
-        // changed it would be an edit to the layer the transaction is holding
-        // — which the commit then refuses, correctly, as a preview computed
-        // against a document that has since moved.
-        let before = self.engine_undo_depth();
-        if self.point_the_mirror_for_items(symmetry).is_err() {
-            return false;
-        }
-        // Pointing it is an edit of its own, and one this gesture caused. It is
-        // counted here so that closing or abandoning the gesture spends it —
-        // the held path counts it inside its first segment, and a symmetry
-        // change that outlived the stroke that asked for it would be a
-        // difference between the two paths a sculptor could feel.
-        let opening = self.engine_undo_depth().saturating_sub(before);
+        // A relax is a bake the layer mirror never reaches, and its dabs are
+        // reflected by hand at the commit, so nothing is written to the layer
+        // before the transaction opens — which is what keeps the commit from
+        // refusing a layer that changed since begin. The gesture therefore
+        // owes no opening entries.
         let id = self.active_layer().id;
         let rest = self.the_rest_beside_the_preview();
         match crate::live::LiveSmooth::begin(&mut self.document, id, Self::BRICK_CONFIG, rest) {
             Ok(live) => {
                 self.live_smooth = Some(live);
-                self.live_opening_entries = opening;
+                self.live_opening_entries = 0;
                 self.surface_epoch = self.surface_epoch.wrapping_add(1);
                 true
             }
@@ -6007,15 +5981,10 @@ impl ClayDocument {
         } else {
             0
         };
-        // Before anything is laid down, for the reason the smoothing gesture
-        // gives: pointing the mirror is an edit this gesture caused, and one a
-        // preview's take-back must not spend.
-        let before = self.engine_undo_depth();
-        if self.point_the_mirror_for_items(symmetry).is_err() {
-            self.live_opening_entries = orphaned;
-            return false;
-        }
-        self.live_opening_entries = orphaned + self.engine_undo_depth().saturating_sub(before);
+        // Nothing is written to the layer before the previews start: a
+        // flatten is a bake the layer mirror never reaches, reflected by hand
+        // inside the gesture. Only the orphan's opening is still owed.
+        self.live_opening_entries = orphaned;
         self.live_flatten = Some(LiveFlatten::new(symmetry));
         true
     }
@@ -11659,15 +11628,26 @@ struct SdfRecipe {
     spacing: f32,
 }
 
-/// Whether an item made under `symmetry` takes part in its layer's mirror.
+/// Gives an item the mirror axes symmetry had when it was made.
 ///
-/// The engine's mirror belongs to the *layer* and reflects every item that
-/// takes part, whenever it was made. Taking part by default made the symmetry
-/// switch reach backwards: a lump sculpted with symmetry off grew a twin as
-/// soon as a later stroke turned the layer's mirror on, and a box placed
-/// one-sided became two (#170). So an item is told when it is made: made with
-/// symmetry on, it follows the layer's mirror; made with it off, it stays out
-/// of every mirror the layer is given afterwards.
+/// The engine's layer mirror reflects every item that inherits it, whenever
+/// the item was made, so a symmetry switch reached backwards: a lump sculpted
+/// one-sided grew a twin when a later stroke turned the layer's mirror on,
+/// and one sculpted under X lost its twin when the mirror was turned off or
+/// pointed at Z (#170). Since ClayCore v0.126.0 an item carries its own axes
+/// (`clay_item_set_mirror_axes`), and the engine reflects it through those
+/// whatever the layer's mirror is now or is pointed at later — a Move or a
+/// magnify included, which reach such an item through *its* reflections. So
+/// every item this application makes is given the symmetry it was made with,
+/// none included, and the layer's mirror has nothing to say about it.
+fn made_under(item: &mut Item, symmetry: [bool; 3]) -> Result<(), ModelError> {
+    item.set_mirror_axes(claycore::MirrorAxes::Axes(symmetry))
+        .map_err(ModelError::engine)
+}
+
+/// Whether an item made under `symmetry` has a reflection: what the object
+/// table records of a placement, for a drag preview that cannot ask the
+/// engine.
 fn takes_part_in_the_mirror(symmetry: [bool; 3]) -> bool {
     symmetry.contains(&true)
 }
@@ -14599,31 +14579,17 @@ impl ClayDocument {
 
         let mut item = self.curve_item(curve, &guide, kind)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
-        // Mirrored like a stroke. A curve never pointed the layer's mirror, so
-        // one begun with symmetry on stayed one-sided until some brush stroke
-        // happened to write it (#170). The mirror is pointed only for a curve
-        // that takes part in it, for the reason `place_object` gives, and in
-        // one group with the item so one undo takes back both.
-        let symmetry = self.layers[index].symmetry;
-        let mirrored = takes_part_in_the_mirror(symmetry);
-        item.set_mirror(mirrored).map_err(ModelError::engine)?;
-
-        self.document
-            .begin_undo_group()
+        // Mirrored like a stroke, under the symmetry of the layer it was
+        // begun on: the item carries those axes itself, so it is mirrored
+        // from the moment it is placed and one undo takes it back whole. A
+        // curve never pointed the layer's mirror, so one begun with symmetry
+        // on stayed one-sided until some brush stroke happened to write it
+        // (#170).
+        made_under(&mut item, self.layers[index].symmetry)?;
+        let node = self
+            .document
+            .add_item(layer, &item)
             .map_err(ModelError::engine)?;
-        let added = if mirrored {
-            self.point_the_mirror_of(index, symmetry)
-        } else {
-            Ok(())
-        }
-        .and_then(|()| {
-            self.document
-                .add_item(layer, &item)
-                .map_err(ModelError::engine)
-        });
-        let closed = self.document.end_undo_group().map_err(ModelError::engine);
-        let node = added?;
-        closed?;
         if let Some(curve) = self.curve.as_mut() {
             curve.node = Some(node);
             // A sweep placed afresh is the one the curve has now, whatever id
@@ -15923,11 +15889,11 @@ impl ClayDocument {
         item.set_op(Op::Add).map_err(ModelError::engine)?;
         // **A rig stays out of the layer's mirror.** It mirrors itself:
         // `add_zsphere` puts the reflected node into the tree, because the
-        // host holds the topology. Taking part as well made every node a
+        // host holds the topology. Reflected as well, every node was a
         // candidate for a second reflection, so a stroke made with symmetry on
         // on the rig's own subtool gave a sphere placed one-sided a twin
         // (#170, A5).
-        item.set_mirror(false).map_err(ModelError::engine)?;
+        made_under(&mut item, [false; 3])?;
 
         let node = self
             .document
@@ -16778,25 +16744,49 @@ impl ClayDocument {
         (transform != clayspace_model::Transform::default()).then_some(transform)
     }
 
-    /// The axes a layer's mirror reflects its items through.
+    /// The axes an object is drawn reflected through: what the engine says
+    /// its node is reflected through right now.
     ///
-    /// The engine's answer first, and the layer row only where the engine
-    /// cannot give one. The row is a write-avoidance record, not the truth: a
-    /// reopened document builds its rows as a fresh layer's, "no mirror",
-    /// whatever the file's layers carry, so a mirrored object read from the
-    /// row lost its twin in the preview and jumped back on release. Reading
-    /// has been free since ClayCore 0.105.0. No axes where neither answers.
-    fn layer_mirror_axes(&self, key: LayerKey) -> [bool; 3] {
-        let Ok(index) = self.index_of(key) else {
+    /// Asked of the engine rather than of the object table or the layer row.
+    /// The table records whether the object was placed with a reflection, and
+    /// the row is a write-avoidance record of the layer's mirror; neither is
+    /// the truth for an item that carries its own axes, and a reopened
+    /// document builds its rows as a fresh layer's, "no mirror", whatever the
+    /// file's items carry — so a mirrored object read from the row lost its
+    /// twin in the preview and jumped back on release. No axes where the
+    /// engine refuses.
+    fn object_mirror_axes(&self, layer: LayerKey, node: NodeId) -> [bool; 3] {
+        let Ok(index) = self.index_of(layer) else {
             return [false; 3];
         };
-        let layer = &self.layers[index];
         self.document
-            .layer_mirror(layer.id)
-            .map(|(axes, _)| axes)
-            .ok()
-            .or(layer.mirror)
+            .node_mirror(self.layers[index].id, node)
+            .map(|mirror| mirror.effective)
             .unwrap_or_default()
+    }
+
+    /// The axes a Move or a magnify on `index`'s layer can move surface
+    /// across: the layer's mirror, and every axis an item there carries as
+    /// its own.
+    ///
+    /// The engine reaches an item through *its* reflections, so a magnify
+    /// made with symmetry off still moves the far side of an item that kept
+    /// X — and a host dirtying the ball alone would serve that side stale.
+    /// The union over the whole layer rather than over the items the gesture
+    /// reached, which the magnify entry point does not report: a reflection
+    /// nobody made costs a refill of empty bricks, where a missed one is a
+    /// stale surface with nothing to correct it.
+    fn axes_a_warp_can_reach(&self, index: usize) -> [bool; 3] {
+        let layer = &self.layers[index];
+        let mut axes = self.mirror_for_dirtying(layer);
+        for node in self.document.layer_nodes(layer.id).unwrap_or_default() {
+            if let Ok(mirror) = self.document.node_mirror(layer.id, node) {
+                for (axis, on) in axes.iter_mut().zip(mirror.effective) {
+                    *axis |= on;
+                }
+            }
+        }
+        axes
     }
 
     /// An object as the world sees it: its node's transform, placed by the
@@ -16983,7 +16973,7 @@ impl ClayDocument {
         parameters: &[f32],
         at: [f32; 3],
         combine: CombineSettings,
-        mirrored: bool,
+        axes: claycore::MirrorAxes,
     ) -> Result<NodeId, ModelError> {
         let mut item =
             claycore::Item::of(primitive_of(shape, parameters)).map_err(ModelError::engine)?;
@@ -16991,7 +16981,7 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         item.set_blend(engine_blend(combine.blend), combine.radius)
             .map_err(ModelError::engine)?;
-        item.set_mirror(mirrored).map_err(ModelError::engine)?;
+        item.set_mirror_axes(axes).map_err(ModelError::engine)?;
         // Built where it stands rather than added at the origin and then
         // moved there. The two are the same slot — an item's creation
         // position is its node transform — but the second is two engine edits
@@ -18343,19 +18333,19 @@ impl ObjectModel for ClayDocument {
             .begin_undo_group()
             .map_err(ModelError::engine)?;
         // Placed under the symmetry the layer is worked with, like a stroke:
-        // mirrored from the start when it is on, and left out of any mirror
-        // the layer is given later when it is off. Only an item that takes
-        // part needs the layer's mirror, so it is pointed only then — inside
-        // the group, so one undo takes back the placement and the mirror it
-        // needed together.
+        // the item carries those axes itself, so it is mirrored from the start
+        // when symmetry is on and stays one-sided under any mirror the layer
+        // is given later when it is off.
         let symmetry = self.active_layer().symmetry;
         let mirrored = takes_part_in_the_mirror(symmetry);
-        let placed = if mirrored {
-            self.point_the_mirror(symmetry)
-        } else {
-            Ok(())
-        }
-        .and_then(|()| self.place_item(layer, shape, &parameters, at, combine, mirrored));
+        let placed = self.place_item(
+            layer,
+            shape,
+            &parameters,
+            at,
+            combine,
+            claycore::MirrorAxes::Axes(symmetry),
+        );
         // Closed on the failing path too: a group left open swallows every
         // edit after it into one undo step.
         let closed = self.document.end_undo_group().map_err(ModelError::engine);
@@ -18403,10 +18393,18 @@ impl ObjectModel for ClayDocument {
         let (key, layer, node) = self.insert_subtool(&name, move |doc, layer| {
             // At the layer's own origin, and the layer stands where the
             // sculptor pointed — see `stand_subtool_at`.
-            // Taking part in the mirror, as every item did before an item was
-            // told: the subtool is new, so there is nothing older on it for a
-            // later mirror to reach, and its first stroke points the mirror.
-            let node = doc.place_item(layer, shape, &placed, [0.0; 3], combine, true)?;
+            // Inheriting the layer's mirror, as the starting form does: it is
+            // the base form of its subtool, standing on the mirror planes, so
+            // a drag on it follows the symmetry the drag is made with rather
+            // than axes fixed at its birth.
+            let node = doc.place_item(
+                layer,
+                shape,
+                &placed,
+                [0.0; 3],
+                combine,
+                claycore::MirrorAxes::Inherit,
+            )?;
             doc.stand_subtool_at(layer, at)?;
             Ok(node)
         })?;
@@ -18822,11 +18820,7 @@ impl ObjectModel for ClayDocument {
         let object = &self.objects[self.object_index(id)?];
         let shape = object.source.shape()?;
         let mesh = crate::objects::preview_mesh(shape, &object.parameters).ok()?;
-        let mirror = if object.mirrored {
-            self.layer_mirror_axes(id.layer)
-        } else {
-            [false; 3]
-        };
+        let mirror = self.object_mirror_axes(object.layer, object.node);
         Some(clayspace_model::ObjectPreview {
             positions: mesh.positions().to_vec(),
             normals: mesh.normals_or_derived(),
@@ -19487,9 +19481,9 @@ impl ClayDocument {
         // Reflecting it removes material on the far side of the form they
         // cannot see from where they are standing.
         //
-        // Opted out per item rather than by clearing the layer's mirror, which
-        // would un-reflect every stamp already on it.
-        item.set_mirror(false).map_err(ModelError::engine)?;
+        // Held at no axes of its own rather than by clearing the layer's
+        // mirror, which would un-reflect every item still inheriting it.
+        made_under(&mut item, [false; 3])?;
 
         // Bracketed for the reason `place_object` is: the item and where it
         // stands are two engine edits and a sculptor asked for one thing.

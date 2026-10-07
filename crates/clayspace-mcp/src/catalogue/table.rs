@@ -614,7 +614,10 @@ pub const TABLE: &[ActionSpec] = &[
     ActionSpec {
         group: "brush",
         name: "toggle_symmetry",
-        summary: "Turns mirroring across an axis on or off.",
+        summary: "Turns mirroring across an axis on or off for what the brush makes \
+                  next. An item keeps the axes it was made under: turning \
+                  symmetry off or switching its axis leaves existing items as \
+                  they are.",
         arguments: &[r("axis", Kind::Choice(axes), "which axis")],
         example: r#"{"axis":"x"}"#,
     },

@@ -11,7 +11,7 @@ use crate::descriptor::Descriptor;
 use crate::document::ArmatureEdit;
 use crate::error::{check, Result};
 use crate::mask::MaskField;
-use crate::{Document, Item, LayerId, NodeId};
+use crate::{Document, Item, LayerId, MirrorAxes, NodeId};
 
 /// How an item combines with what is already there.
 ///
@@ -1343,6 +1343,121 @@ impl Document {
         )
     }
 
+    /// Adds an empty group under `parent` ([`NodeId::ROOT`] for the layer's
+    /// top level), appended or at `index`, and returns its id.
+    ///
+    /// A group combines its children with `combine` before the result meets
+    /// the rest of the layer. The engine refuses a transition op and a parent
+    /// that is not a group.
+    pub fn add_group(
+        &mut self,
+        layer: LayerId,
+        parent: NodeId,
+        index: Option<usize>,
+        combine: GroupCombine,
+    ) -> Result<NodeId> {
+        let index = match index {
+            None => -1,
+            Some(index) => i32::try_from(index).map_err(|_| {
+                crate::raw_failure("clay_layer_add_group", crate::ErrorKind::InvalidArgument)
+            })?,
+        };
+        let mut node = sys::clay_node_id::default();
+        // SAFETY: valid handle, plain values, and one out-parameter the engine
+        // fills on success.
+        check(
+            unsafe {
+                sys::clay_layer_add_group(
+                    self.as_ptr(),
+                    layer.0,
+                    parent.0,
+                    index,
+                    combine.op.raw(),
+                    combine.blend.raw(),
+                    combine.blend_k,
+                    combine.rounding,
+                    &mut node,
+                )
+            },
+            "clay_layer_add_group",
+        )?;
+        Ok(NodeId(node))
+    }
+
+    /// Sets a placed item's mirror participation and its own axes, as one
+    /// undo step.
+    ///
+    /// The same two values [`Item::set_mirror`] and [`Item::set_mirror_axes`]
+    /// give a builder, for an item already in the document: `reflected` is
+    /// the participation flag, `axes` the item's own axes, with
+    /// [`MirrorAxes::Inherit`] putting it back on the layer's mirror. Undo
+    /// puts back both values the item had. Setting what the item already
+    /// holds is still recorded — this is not the layer mirror's no-op
+    /// short-circuit — and invalidates only the item's own influence.
+    ///
+    /// A group is refused with `InvalidArgument`: evaluation never reads a
+    /// group's mirror, so a value there would be a control that does not act.
+    /// A protected layer refuses as every node edit does.
+    pub fn set_node_mirror(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        reflected: bool,
+        axes: MirrorAxes,
+    ) -> Result<()> {
+        // SAFETY: valid handle; the engine range-checks the ids and the byte.
+        check(
+            unsafe {
+                sys::clay_layer_set_node_mirror(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    if reflected { 1 } else { -1 },
+                    axes.raw(),
+                )
+            },
+            "clay_layer_set_node_mirror",
+        )
+    }
+
+    /// What mirror a placed item follows, and what it is reflected through
+    /// on this layer right now.
+    ///
+    /// The reader for [`Self::set_node_mirror`]. `effective` is the item's
+    /// own axes when it has any, else the layer's when it takes part, else
+    /// none — the answer a preview needs, since it is what the field holds.
+    /// A group is refused as its setter is.
+    pub fn node_mirror(&self, layer: LayerId, node: NodeId) -> Result<NodeMirror> {
+        let mut reflected = 0i32;
+        let (mut axes, mut effective) = (0u8, 0u8);
+        // SAFETY: valid handle and three out-parameters the engine fills.
+        check(
+            unsafe {
+                sys::clay_layer_node_mirror(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    &mut reflected,
+                    &mut axes,
+                    &mut effective,
+                )
+            },
+            "clay_layer_node_mirror",
+        )?;
+        let effective = match MirrorAxes::from_raw(effective) {
+            MirrorAxes::Axes(axes) => axes,
+            // The engine answers with real axes here; the sentinel would be
+            // a contract break, and no axes is the answer that draws nothing
+            // the field does not hold.
+            MirrorAxes::Inherit => [false; 3],
+        };
+        Ok(NodeMirror {
+            reflected: reflected > 0,
+            axes: MirrorAxes::from_raw(axes),
+            effective,
+        })
+    }
+
     /// Re-places an existing node.
     pub fn set_node_transform(
         &mut self,
@@ -1614,6 +1729,30 @@ pub enum Influence {
 pub struct Undone {
     pub moved: bool,
     pub reached: Influence,
+}
+
+/// How a group combines its children: the operation, the seam's shape and
+/// width, and the rounding, as [`Document::add_group`] takes them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct GroupCombine {
+    pub op: Op,
+    pub blend: Blend,
+    pub blend_k: f32,
+    pub rounding: f32,
+}
+
+/// What mirror a placed item follows, read back with
+/// [`Document::node_mirror`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeMirror {
+    /// Whether the item takes part in the layer's mirror — and, once it
+    /// carries its own axes, in the layer's radial mode.
+    pub reflected: bool,
+    /// The item's own axes, or [`MirrorAxes::Inherit`] for the layer's.
+    pub axes: MirrorAxes,
+    /// The axes the item is actually reflected through on this layer now:
+    /// its own, else the layer's when it takes part, else none.
+    pub effective: [bool; 3],
 }
 
 /// Whether undo is recording, and how much there is to undo or redo.

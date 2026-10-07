@@ -496,7 +496,10 @@ only a genuinely new colour adds one.
 
 **Symmetry about X, Y and Z reaches all four representations**, and belongs to
 the *subtool* rather than to the document: switching subtools restores that
-subtool's own axes. A new subtool starts with X on.
+subtool's own axes. A new subtool starts with X on. Symmetry mirrors what is
+made while it is on: every stroke, curve and placed object carries the axes it
+was made under, so turning symmetry on, off or to another axis leaves what is
+already there exactly as it was.
 
 ### Focus mode, and the regions that move
 

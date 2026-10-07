@@ -359,13 +359,16 @@ fn two_falloff_curves_are_two_different_pulls() {
 /// A drag centred on the mirror plane, pulling along it, moves the surface as
 /// far as the same drag with no mirror (#170, F10).
 ///
-/// On the plane the drag's reflection is the drag itself, and the engine gives
-/// the item under it one grab per image, so the same grab twice: measured on
-/// v0.120.1, 0.2307 against 0.1458 (1.58x), live and held alike. The images are
-/// resolved inside the engine and the host has no lever on them, so this waits
-/// on ClayCore #663.
+/// On the plane the drag's reflection is the drag itself, and through
+/// v0.120.1 the engine gave the item under it one grab per image, so the same
+/// grab twice: 0.2307 against 0.1458 (1.58x), live and held alike. ClayCore
+/// v0.126.0 (#669) resolves images whose centres coincide as one grab, and
+/// the pull is the unmirrored one: measured here on that engine, +0.1458
+/// mirrored against +0.1458 unmirrored on the starting sphere (Apple Silicon,
+/// the default backend). The tolerance is a tenth of the pull: a doubled grab
+/// is 1.58x, and the two numbers agree to the printed precision, so it covers
+/// backend rounding rather than a difference.
 #[test]
-#[ignore = "ClayCore #663: a drag's reflected image coincides with it on the plane"]
 fn a_move_on_the_plane_is_applied_once() {
     let along_the_plane = |symmetry: [bool; 3]| {
         let mut document = sphere();
@@ -398,6 +401,7 @@ fn a_move_on_the_plane_is_applied_once() {
 
     let unmirrored = along_the_plane([false; 3]);
     let mirrored = along_the_plane([true, false, false]);
+    eprintln!("on the plane: unmirrored +{unmirrored:.4}; mirrored +{mirrored:.4}");
     assert!(
         (mirrored - unmirrored).abs() < unmirrored * 0.1,
         "a drag on the mirror plane moved the surface +{mirrored:.4} where the \

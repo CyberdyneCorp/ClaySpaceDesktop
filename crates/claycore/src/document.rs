@@ -47,6 +47,57 @@ pub enum ArmatureEdit {
     },
 }
 
+/// Which mirror an item is reflected through: the layer's, or its own.
+///
+/// The engine's spelling is one byte — `CLAY_MIRROR_X|Y|Z` OR'd together, 0
+/// for no reflection, or `CLAY_MIRROR_AXES_INHERIT` (255) for "take the
+/// layer's" — and the sentinel is what this type keeps a caller from
+/// confusing with a set of axes. See [`Item::set_mirror_axes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MirrorAxes {
+    /// The layer's mirror, whatever it is pointed at now or later. The
+    /// default of every item, and what every document saved before format
+    /// minor 20 loads with.
+    #[default]
+    Inherit,
+    /// The item's own axes, which the layer's mirror no longer reaches.
+    Axes([bool; 3]),
+}
+
+impl MirrorAxes {
+    /// Own axes with none set: no reflection on any layer.
+    pub const NONE: Self = Self::Axes([false; 3]);
+
+    pub(crate) fn raw(self) -> u8 {
+        match self {
+            Self::Inherit => sys::CLAY_MIRROR_AXES_INHERIT as u8,
+            Self::Axes(axes) => {
+                let bits = [
+                    sys::clay_mirror::CLAY_MIRROR_X,
+                    sys::clay_mirror::CLAY_MIRROR_Y,
+                    sys::clay_mirror::CLAY_MIRROR_Z,
+                ];
+                axes.iter()
+                    .zip(bits)
+                    .filter(|(on, _)| **on)
+                    .fold(0u32, |mask, (_, bit)| mask | bit) as u8
+            }
+        }
+    }
+
+    pub(crate) fn from_raw(raw: u8) -> Self {
+        if u32::from(raw) == sys::CLAY_MIRROR_AXES_INHERIT {
+            return Self::Inherit;
+        }
+        let raw = u32::from(raw);
+        Self::Axes([
+            raw & sys::clay_mirror::CLAY_MIRROR_X != 0,
+            raw & sys::clay_mirror::CLAY_MIRROR_Y != 0,
+            raw & sys::clay_mirror::CLAY_MIRROR_Z != 0,
+        ])
+    }
+}
+
 /// A node placed in a layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub(crate) sys::clay_node_id);
@@ -483,6 +534,9 @@ impl Item {
     /// in the engine's words. The flag was an opt-*in* through 0.27.3, which
     /// made `clay_set_layer_mirror` a silent no-op unless every item also
     /// passed 1; 1 is still accepted and still means reflected.
+    ///
+    /// Once the item carries its own axes ([`Self::set_mirror_axes`]) this
+    /// decides only its radial participation.
     pub fn set_mirror(&mut self, reflected: bool) -> Result<()> {
         // SAFETY: the handle is non-null and owned here; the flag is one of
         // the two values the entry point documents.
@@ -490,6 +544,45 @@ impl Item {
             unsafe { sys::clay_item_set_mirror(self.raw.as_ptr(), if reflected { 1 } else { -1 }) },
             "clay_item_set_mirror",
         )
+    }
+
+    /// The item's own mirror axes, which replace the layer's for this item.
+    ///
+    /// Set, the axes are the item's whatever the layer's mirror is now or is
+    /// pointed at later, and whatever [`Self::set_mirror`] says — so an item
+    /// given the axes symmetry had when it was made keeps its twin when the
+    /// layer's mirror is turned off or moved to another axis, and an item
+    /// given [`MirrorAxes::NONE`] has no twin on any layer. The seam, the
+    /// planes (the layer's local frame) and the radial mode stay the layer's.
+    /// [`MirrorAxes::Inherit`] is the default and puts the item back on the
+    /// layer's mirror.
+    ///
+    /// A Move or a magnify reaches such an item through *its* reflections:
+    /// both sides of an item that kept X move together whatever the layer's
+    /// mirror says, and one held at no axes moves on the touched side alone.
+    ///
+    /// A document holding an item with its own axes cannot be written below
+    /// format minor 20, which is what [`Document::FORMAT`] has stood at since
+    /// the v0.126.0 pin.
+    pub fn set_mirror_axes(&mut self, axes: MirrorAxes) -> Result<()> {
+        // SAFETY: the handle is non-null and owned here; the byte is one of
+        // the values the entry point documents.
+        check(
+            unsafe { sys::clay_item_set_mirror_axes(self.raw.as_ptr(), axes.raw()) },
+            "clay_item_set_mirror_axes",
+        )
+    }
+
+    /// What [`Self::set_mirror_axes`] last set: [`MirrorAxes::Inherit`] for a
+    /// builder that never set any.
+    pub fn mirror_axes(&self) -> Result<MirrorAxes> {
+        let mut raw = 0u8;
+        // SAFETY: the handle is non-null and owned here; one byte out.
+        check(
+            unsafe { sys::clay_item_mirror_axes(self.raw.as_ptr(), &mut raw) },
+            "clay_item_mirror_axes",
+        )?;
+        Ok(MirrorAxes::from_raw(raw))
     }
 
     pub(crate) fn from_raw(raw: *mut sys::clay_item, operation: &'static str) -> Result<Self> {
