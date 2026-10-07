@@ -14196,21 +14196,14 @@ impl ClayDocument {
         self.stay_on_the_masked_subtool(index)
     }
 
-    /// The region an extrusion of `layer` may fill: the active mask swept
-    /// along the layer's surface normal across the band the side fills.
+    /// Refuses an extrusion the engine would measure over more cells than
+    /// the budget allows, before any of them is allocated.
     ///
-    /// Each cell of the search box takes the painted mask's value at its foot
-    /// on the layer's own surface — the layer's, not the document's, because
-    /// the engine extrudes from the layer's field and another subtool nearby
-    /// (an earlier extrusion, say) would bend the normals. Only cells whose
-    /// distance lies in the band are asked for a normal or a foot, which is
-    /// most of the cost saved: the box is mostly empty space and material.
-    fn extrusion_region(
-        &self,
-        layer: claycore::LayerId,
-        settings: ExtrudeSettings,
-    ) -> Result<claycore::Mask, ModelError> {
-        use crate::extrude_region::{candidates, centre, distance_band, fill_box, foot, in_band};
+    /// The engine measures the active mask densely over its bounds grown by
+    /// the thickness and the rim on every side, so the count is known from
+    /// the mask's bounds alone. See `extrude_budget`.
+    fn extrusion_within_budget(&self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+        use crate::extrude_budget::{measured_cells, measured_reach, within_budget};
 
         let painted = self
             .active_mask()
@@ -14220,40 +14213,15 @@ impl ClayDocument {
             .bounds()
             .map_err(ModelError::engine)?
             .ok_or_else(|| ModelError::engine("a máscara está vazia"))?;
-        let band = distance_band(settings.side, settings.thickness, size);
-        let cells = candidates(bounds, size, band.0.abs().max(band.1)).ok_or_else(|| {
-            ModelError::engine(
+        let reach = measured_reach(settings.thickness, settings.border_round, size);
+        if within_budget(measured_cells(bounds, size, reach)) {
+            Ok(())
+        } else {
+            Err(ModelError::engine(
                 "a espessura é grande demais para esta máscara; \
                  extrude uma parede mais fina",
-            )
-        })?;
-
-        let points: Vec<[f32; 3]> = cells.iter().map(|&c| centre(c, size)).collect();
-        let distances = self
-            .document
-            .layer_eval_points(layer, None, &points)
-            .map_err(ModelError::engine)?;
-        let kept = in_band(&distances, band);
-        let near: Vec<[f32; 3]> = kept.iter().map(|&i| points[i]).collect();
-        let normals = self
-            .document
-            .layer_eval_gradients(layer, None, &near)
-            .map_err(ModelError::engine)?;
-        let feet: Vec<[f32; 3]> = kept
-            .iter()
-            .zip(&normals)
-            .map(|(&i, &normal)| foot(points[i], distances[i], normal))
-            .collect();
-        let values = painted.sample_many(&feet).map_err(ModelError::engine)?;
-
-        let mut region = claycore::Mask::new(size).map_err(ModelError::engine)?;
-        for (&i, value) in kept.iter().zip(values) {
-            if value > 0.0 {
-                let (lo, hi) = fill_box(cells[i], size);
-                region.fill(lo, hi, value).map_err(ModelError::engine)?;
-            }
+            ))
         }
-        Ok(region)
     }
 
     /// Puts the sculptor back on the subtool they were masking.
@@ -15455,20 +15423,16 @@ impl MaskModel for ClayDocument {
         }
 
         let layer = self.layers[index].id;
-        // Not the painted mask itself: the engine keeps only the part of the
-        // wall inside the mask's own volume, which caps the wall at how far
-        // the paint reaches off the surface (ClayCore #660). The region below
-        // is the painted patch swept along the surface normal as far as the
-        // wall is asked to go, so the thickness is honoured and the top is
-        // even. See `extrude_region`.
-        let region = self.extrusion_region(layer, settings)?;
+        // The painted mask itself. The engine reads it at the source surface
+        // under each sample (ClayCore #667, issue #660), so the wall is as
+        // tall as the thickness asks wherever the patch is, and nothing the
+        // document could build from the mask makes it taller or more even
+        // (`mask_extrude_thickness.rs` measures both). What the engine does
+        // not bound is its own measurement, so the budget is checked first.
+        self.extrusion_within_budget(settings)?;
         let item = self
             .document
-            .mask_extrude(
-                layer,
-                claycore::MaskSource::Field(&region),
-                extrude_params(settings),
-            )
+            .mask_extrude(layer, self.active_mask_source(), extrude_params(settings))
             .map_err(ModelError::engine)?;
 
         // Into a layer of its own. An extrusion is a new piece of geometry, not
