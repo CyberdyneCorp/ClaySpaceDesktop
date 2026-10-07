@@ -1596,7 +1596,7 @@ one known weakness is a timing budget: `gesture_end`'s frame bound has failed
 once on the macOS CPU-only release row and passed on a re-run of the same
 commit, which is the runner rather than the code (#160).
 
-### Six ways a gate can be real and unenforced
+### Seven ways a gate can be real and unenforced
 
 None of these was found by a gate failing. All three were found by asking which
 runner sees what, and the question worth carrying is not *"is there a gate"* but
@@ -1655,6 +1655,22 @@ that cannot fire is indistinguishable from a check that always passes, and
 adopting one feels like diligence. A checklist taken whole from another
 repository is how you get it — a recipe check on a tree with no recipes is green
 forever and reports itself as covered.
+
+**A budget asserted where it measures the runner.** The opposite failure, and
+the one that teaches people to ignore a gate: a check that fires on every run
+for a reason that is not the code. The two first-drag budgets in
+`gizmo_first_drag.rs` held a 16.7 ms frame in every profile on every job, and
+were red on every macOS job from the day they landed (#312, #314): 95–142 ms
+in debug, 17.4 to 46.0 ms in release on `macos-14`, for a frame an M3 Pro
+reads at 4.5 ms and that costs the same on its second and third frame as on
+its first. Nobody read the failure as a regression, because it never was one,
+which is exactly the state in which a real regression on the same row would
+go unread. A millisecond budget is a property of the optimised binary on a
+known machine; a debug build measures the profile and a hosted runner measures
+the runner. The rule now (`support::hold_to_budget`, `performance-budgets`):
+the budget is a verdict in release off a hosted runner and a printed figure
+elsewhere, and the counts beside it — what was re-meshed, what moved, what was
+drawn — are the assertions that hold everywhere.
 
 The performance gate compares against the baseline for the platform it runs on
 — `benchmarks/baseline-macos-aarch64.json` or
