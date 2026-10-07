@@ -32,10 +32,17 @@ the move's sweep from seeds that predate the add (ClayCore#665).
 - A placed shape is built at its position and added in one edit, so it does
   not go through the add-then-move sequence behind ClayCore#665.
 
-What is left of #282 is on the engine side. On the benchmark scenes, the
-engine's chain pad (about 0.47 at the reference size, 1.48 at ten times it)
-keeps an intersect frame at 3,360 and about 25,000 brick keys, where the
-subtracting control is 1,012 (ClayCore#666).
+What was left of #282 at engine 0.120.1 was on the engine side: the region
+was the sweep dilated by the whole layer's chain pad (about 0.47 at the
+reference size, 1.48 at ten times it), which kept an intersect frame at 3,360
+and about 25,000 brick keys where the subtracting control was about 1,000
+(ClayCore#666). ClayCore v0.126.0 pads the region by the sum of the supports
+of the combines after the operand (ClayCore#676). A placed object is appended
+last and carries no pad, so an intersect frame now refills the bricks its
+subtracting control does on both scenes, and the application takes that up
+without a code change. The scaling test is tightened to that answer so a
+return of the layer-wide pad fails it, and the documentation carries the
+measured figures.
 
 ## Capabilities
 

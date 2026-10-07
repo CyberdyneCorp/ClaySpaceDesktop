@@ -138,10 +138,19 @@ The A/B report's addendum traced it to an intersect's influence bound being its
 whole layer, so every drag frame refilled the layer. Since #282 an object move
 refills the overlap of that bound with the region the engine says the move
 changed (`clay_layer_set_transform_bound`). That region is the sweep, dilated
-by the layer's chain pad. In brick keys per frame
-(`crates/clayspace-app/tests/intersect_drag_scaling.rs`), the intersect went
-from 5,040 to 3,360 on `reference` and from 84,672 to about 25,000 on
-`reference-10x`, against 1,012 subtracting. The rest is the engine's pad,
-CyberdyneCorp/ClayCore#666. Both committed baselines
-carry `object.drag_frame_intersect`, recorded before the change, so the gate
-holds it to the old figure until they are re-recorded.
+by a pad. At engine 0.120.1 the pad was the whole layer's chain pad, and in
+brick keys per frame (`crates/clayspace-app/tests/intersect_drag_scaling.rs`)
+the intersect went from 5,040 to 3,360 on `reference` and from 84,672 to about
+25,000 on `reference-10x`, against about 1,000 subtracting
+(CyberdyneCorp/ClayCore#666). Since engine 0.126.0 the pad is the sum of the
+supports of the combines after the operand, which for a placed object is
+nothing, and the intersect refills the same 880 to 1,232 keys a frame the
+subtract does on both scenes. The ratio within one run, measured on an Apple
+M3 Pro with Metal at the 0.126.0 pin:
+
+| pin | where | intersect ÷ subtract |
+|---|---|---:|
+| v0.126.0 | Apple M3 Pro, Metal, four local runs | 0.72x–0.87x |
+
+Both committed baselines carry `object.drag_frame_intersect` recorded before
+the change, so the gate holds it to the old figure until they are re-recorded.

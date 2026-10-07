@@ -12,8 +12,10 @@
 //! its extent.
 //!
 //! Two promises, and the second is what keeps the first honest: a frame
-//! refills about what the subtracting control does, and what it leaves behind
-//! is the surface a document built with the operand already there holds.
+//! refills no more than the subtracting control does, and what it leaves
+//! behind is the surface a document built with the operand already there
+//! holds. The two are equal on the starting form, 2,640 bricks over the four
+//! frames at ClayCore v0.126.0, where the drag refilled 18,816 by the layer.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
@@ -85,9 +87,10 @@ const FRAMES: [[f32; 3]; 4] = [
 ];
 
 /// The regression: an intersect frame refilled the whole layer, and now it
-/// refills about what the subtracting control does.
+/// refills what the subtracting control does. One-sided, so a narrower engine
+/// answer passes and any pad on the sweep fails.
 #[test]
-fn an_intersect_drag_frame_refills_about_what_a_subtract_frame_does() {
+fn an_intersect_drag_frame_refills_no_more_than_a_subtract_frame_does() {
     let (mut intersect, a) = placed(Combine::Intersect, [1.0; 3]);
     let (mut subtract, b) = placed(Combine::Subtract, [1.0; 3]);
 
@@ -97,9 +100,9 @@ fn an_intersect_drag_frame_refills_about_what_a_subtract_frame_does() {
 
     assert!(control > 0, "the control drag dirtied nothing");
     assert!(
-        (crossed as f64) < 1.5 * control as f64,
+        crossed <= control,
         "an intersect drag dirtied {crossed} bricks against {control} for the \
-         same drag subtracting, so it is still refilling the layer every frame"
+         same drag subtracting, so it is refilling more than its sweep again"
     );
 }
 
