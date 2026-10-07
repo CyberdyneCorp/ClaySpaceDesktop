@@ -40,8 +40,10 @@ a 32³ cage with one corner dragged costs more than 20x a 3³ one, because
 `clay_mesh_lattice_displacement` summed every control point. Against
 v0.126.0 the pair reads 0.026 ms against 0.224 ms over 2,048 evaluations — 9x,
 about the ratio of the divisions, which is the O(n) per-axis basis #655 builds.
-It is flipped to assert the ratio stays *under* 20 and renamed for what it now
-holds. The budget it was reported beside, `cage.drag_32`, is enforced by
+It is flipped to assert the ratio stays under 200 and renamed for what it now
+holds: a hosted macos-14 runner read 22x on the first line of 20, because the
+smaller cage's cost is per-evaluation overhead rather than its 27 points, and
+the whole-cage sum the test guards against is past 1,000x on any machine. The budget it was reported beside, `cage.drag_32`, is enforced by
 `price-a-cage-drag-by-its-dragged-points`, not here.
 
 **The rest of the suite passes unchanged**, which was run rather than
