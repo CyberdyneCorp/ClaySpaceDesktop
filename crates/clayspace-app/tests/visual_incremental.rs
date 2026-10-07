@@ -326,8 +326,21 @@ struct Allowance {
 /// handful of pixels and none of them past `RENDER_NOISE`. The audit's figure
 /// (issue #196, I16) was 1,996 pixels at up to 19 levels, which this fails on
 /// the count alone.
+///
+/// A debug build is allowed more pixels, not more levels. On the `macos-14`
+/// runners this failed at 108 pixels and 3 levels — 107 pixels by one level
+/// and one by three, scattered over the form — in the CPU-only debug job on
+/// three runs (29 and 30 September, 7 October 2026) and in the Metal debug
+/// job on one. The captures of the 7 October run say which frame is off: the
+/// debug job's *first* frame of the starting form differs from the release
+/// job's by those same 108 pixels in four unrelated tests (the cage at rest,
+/// the mask's absence, this test's frame before the edit), while its undone
+/// frame matches the release job's frames exactly. The undo is exact; it is
+/// the debug build's first picture that differs. Release stays at the
+/// handful. A stale brick is a patch dozens of levels deep, and this still
+/// fails on it.
 const EXACT: Allowance = Allowance {
-    pixels: 16,
+    pixels: if cfg!(debug_assertions) { 128 } else { 16 },
     levels: support::RENDER_NOISE,
 };
 
