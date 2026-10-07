@@ -2064,6 +2064,20 @@ Argila, Vinco, Inflar) refine *before*, so a deposit onto coarse triangles is
 not a smooth bump where the brush promised an edge; Puxar does both, because it
 re-anchors between stamps. `ToolKind::remesh_timing` states the same table.
 
+**And the remesh stays under the brush.** One stamp changes connectivity
+inside the brush's support and nowhere else. The engine adapts every edge of
+a face with a corner inside the brush radius grown by a quarter — the query
+margin that keeps a stamp's rim from being a ring of edges nobody adapts — and
+a split re-cuts the face across the edge, so nothing changes past that query
+radius plus one edge of the surface: beyond it every triangle is the same
+triangle afterwards, and a vertex whose whole one-ring stands beyond it keeps
+that ring. Measured on a 16×16
+sheet with 0.25 edges, a splitting Draw of radius 0.75 (396 splits, 53 flips)
+rewrote triangles whose nearest corner reached 1.179 from its centre, against
+the 1.1875 line, and none beyond
+(`a_stamp_changes_topology_only_inside_its_support`, which compares the
+exported triangles and one-rings by position before and after).
+
 **Converting is a decision the sculptor makes, never one a brush makes.**
 Convert to Dynamic and Freeze to Fixed Mesh are the two crossings in the
 conversion panel (and `convert` with `mesh-to-dynamic` / `dynamic-to-mesh`
@@ -2149,7 +2163,12 @@ debug build): a Draw stroke sent 271 KB at 100,352 triangles and 327 KB at
 benchmark's `dynamic` group, one dab of an open stroke in release: 175 KB and
 194 KB a dab (`dynamic.upload_scaling` 1.11, budget 2), the drawing half
 0.29 ms mean at both sizes, the whole dab 11.1 ms at 100k triangles (held to
-the 16 ms frame budget) and 15.3 ms at 1M.
+the 16 ms frame budget) and 15.3 ms at 1M. Re-measured on ClayCore v0.126.0
+(Apple M3 Pro, Metal, the machine shared with other work): 174.6 KB and
+194.2 KB a dab, scaling 1.11; the drawing half 0.22 ms and 0.24 ms mean; the
+whole dab 10.34 ms mean (p95 11.74) at 100k and 14.66 ms (p95 17.41) at 1M.
+The same stroke in the debug test still sends 270,680 bytes at 100k (50 of
+1,024 chunks) and 327,496 at 1M (56 of 8,192 chunks).
 
 The surface keeps **one sculptor for its life** rather than one per stroke
 segment. The sculptor owns the spatial index and the dirty set, so one made per
@@ -2167,7 +2186,9 @@ The diagnostics report says what the uploads sent, per settle of the viewport:
 transport copies positions, normals and indices and no attribute, so a chunked
 colour surface would lose its paint. That is the remaining engine gap (a
 per-chunk colour copy in `clay_dynamic_surface_copy_chunk` or
-`clay_surface_view_copy_chunk`).
+`clay_surface_view_copy_chunk`), and it stands on ClayCore v0.126.0: both
+calls still copy positions, normals and indices and nothing else, and a chunk
+copies as unwelded triangles with no vertex identity to map a colour through.
 
 An undo or redo on a closed surface replays the gesture's topology delta
 through the same sculptor, so it marks the chunks it touched and is patched in

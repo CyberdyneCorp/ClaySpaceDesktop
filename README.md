@@ -401,8 +401,17 @@ ceiling is measured against vertices that existed when the stroke began, which
 an adaptive stroke creates as it goes — and the shelf says so rather than
 leaving a gap. It is reported, saved and offered as itself, never as a mesh.
 A stroke redraws only the chunks it touched — about 175–195 KB a dab whether
-the surface holds 100 thousand triangles or a million — rather than the whole
-surface. See [features.md](docs/features.md#sculpting-an-adaptive-surface).
+the surface holds 100 thousand triangles or a million (174.6 and 194.2 KB on
+ClayCore v0.126.0, Apple M3 Pro, the drawing half under a quarter of a
+millisecond) — rather than the whole surface. A chunk that only moved sends
+its vertices and no indices; one the remesh re-cut sends both; and only what a
+patch cannot follow — a layer shown, hidden or moved, the mask, a snapshot
+undo on an open surface, an index rebuild the engine asked for, a chunk that
+outgrows the region's spare room — rebuilds the buffer. A surface carrying
+vertex colour is still copied whole, because the engine's chunk copy carries
+no attribute. The remesh itself stays under the brush: one stamp changes
+connectivity inside the brush radius grown by a quarter plus one edge, and
+nowhere else. See [features.md](docs/features.md#sculpting-an-adaptive-surface).
 
 The same shelf on a field, on a grid and on a mesh. The filter column on the
 left switches between what the active layer can run, each representation's own
