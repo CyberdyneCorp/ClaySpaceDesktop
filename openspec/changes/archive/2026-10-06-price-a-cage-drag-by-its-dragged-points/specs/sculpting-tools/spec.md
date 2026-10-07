@@ -13,9 +13,12 @@ for bit. An optimisation of the preview SHALL NOT approximate it.
 
 A drag frame SHALL be priced by the control points that stand away from rest
 rather than by the number of points the cage holds: a single point dragged on
-the largest cage SHALL hold a 16 ms frame on the reference mesh, and SHALL cost
-within a small multiple of the same drag on the smallest cage. The last frame's
-cost and the number of dragged points SHALL be reported with the cage.
+the largest cage SHALL cost within a small multiple of the same drag on the
+smallest cage, whatever the mesh, and SHALL hold the 16 ms interface-thread
+frame on the starting form crossed to a mesh. What a larger mesh adds to a
+frame is the bend of its own vertices, the same at every cage size, and not a
+cost of the cage. The last frame's cost and the number of dragged points SHALL
+be reported with the cage.
 
 #### Scenario: The form follows the cage
 - **WHEN** a control point is dragged
@@ -35,9 +38,13 @@ cost and the number of dragged points SHALL be reported with the cage.
 - **THEN** every vertex position and normal is bit-identical to the last preview frame
 
 #### Scenario: One corner of the largest cage
-- **WHEN** one control point of a 32×32×32 cage is dragged on the reference mesh
+- **WHEN** one control point of a 32×32×32 cage is dragged on the starting form crossed to a mesh
 - **THEN** each drag frame holds a 16 ms budget
 - **AND** the cage reports one dragged point and what the frame cost
+
+#### Scenario: A larger cage on a larger mesh
+- **WHEN** the same point is dragged on the smallest and on the largest cage over the reference mesh
+- **THEN** the largest cage's frame costs within a small multiple of the smallest's
 
 ## ADDED Requirements
 

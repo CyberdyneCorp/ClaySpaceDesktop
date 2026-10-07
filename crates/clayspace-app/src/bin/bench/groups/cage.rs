@@ -18,10 +18,23 @@
 //! Both were reported and not enforced while the engine pin predated
 //! ClayCore#655, which sums a mesh cage over its dragged points alone. Before
 //! it, one corner of a 32³ cage was 32,768 terms a vertex and the 32³ figure
-//! was seconds. The pin now carries it, and
-//! `a_mesh_cage_evaluation_is_priced_by_its_dragged_points` in
-//! `tests/claycore_repros.rs` holds the engine to it; enforcing the budget
-//! here is `price-a-cage-drag-by-its-dragged-points`' remaining task (#176).
+//! was seconds: 3.9 s here against 46 ms at 3³. The pin carries it from
+//! v0.126.0, and the three sizes now read within a few milliseconds of each
+//! other — 22.6, 23.0 and 27.1 ms at 3³, 8³ and 32³ on an Apple M3 Pro
+//! (Metal, engine v0.126.0, machine under load), `cage.scaling` 1.20x. What
+//! separates them, about 4.5 ms, is the per-axis basis of the larger cage.
+//! What they share is the bend of the reference's 296k triangles (18–20 ms
+//! of the engine's time at every size) and their upload (about 3.5 ms), so
+//! on this scene every size reads over the 16 ms line by the size of the
+//! mesh and not by the size of the cage. The budget is held where the cage
+//! is the only variable: `one_corner_of_the_largest_cage_holds_a_frame` in
+//! the engine crate's `tests/lattice.rs` holds a 32³ single-point frame on the
+//! 62,576-vertex starting mesh (9.9 ms here) to the 16 ms budget at the CI
+//! gate's own margin, and `a_mesh_cage_evaluation_is_priced_by_its_dragged_points`
+//! in `tests/claycore_repros.rs` holds the engine's evaluation to the basis.
+//! These figures are not in the committed baselines, so the gate reports them
+//! as `new` until the baselines are re-recorded, and holds them to that
+//! recording from then on.
 //!
 //! `cage.memory` is what the device holds after a long drag, released, against
 //! what it held before it: the per-frame upload goes into the buffers the
