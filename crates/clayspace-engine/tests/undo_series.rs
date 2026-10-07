@@ -362,11 +362,109 @@ fn a_stroke_on_a_grown_layer_begins_near_the_first() {
     );
 }
 
-/// A 60-sample Snake Hook pull, delivered as the interface does: every
-/// segment carries the whole path so far.
+/// One segment of a pull: what it cost, and the bricks it dirtied.
+#[derive(Clone, Copy)]
+struct Segment {
+    took: f64,
+    bricks: usize,
+}
+
+/// The audit's cheapest segment, 24 ms. The late-over-early ratio of a pull
+/// is refereed only for a late median above it: below, the quotient is of
+/// two figures small enough for a loaded host to move on its own.
+const AUDIT_EARLY_SEGMENT: f64 = 0.024;
+
+/// The audit's 60-sample Snake Hook pull, drawn away from the sphere.
+fn long_pull_path() -> Vec<GestureSample> {
+    (0..60)
+        .map(|step| {
+            let t = step as f32 / 59.0;
+            GestureSample {
+                position: [1.0 + 0.8 * t, 0.3 * t, 0.1],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect()
+}
+
+/// Delivers the pull once, as the interface does: every segment carries the
+/// whole path so far, and the dirty set is drained before each one the way
+/// the viewport drains it every frame, so a segment's brick count is what that
+/// segment dirtied. The pull is undone afterwards so the next take starts
+/// where this one did.
+fn pull_segments(
+    document: &mut ClayDocument,
+    brush: BrushSettings,
+    path: &[GestureSample],
+) -> Vec<Segment> {
+    let depth = document.history().depth;
+    document.begin_gesture();
+    let segments = (1..path.len())
+        .map(|end| {
+            document.take_dirty_keys();
+            let started = Instant::now();
+            let outcome = document
+                .apply_stroke(ToolKind::Puxar, brush, &path[..=end], [false; 3])
+                .expect("the pull was refused");
+            Segment {
+                took: started.elapsed().as_secs_f64(),
+                bricks: outcome.dirty_bricks,
+            }
+        })
+        .collect();
+    document.end_gesture();
+    for _ in depth..document.history().depth {
+        assert!(document.undo().expect("undo"), "nothing to undo");
+    }
+    segments
+}
+
+fn median(values: impl Iterator<Item = f64>) -> f64 {
+    let mut sorted: Vec<f64> = values.collect();
+    sorted.sort_by(f64::total_cmp);
+    sorted[sorted.len() / 2]
+}
+
+/// A 60-sample Snake Hook pull, delivered as the interface does, with its
+/// late segments held against its early ones: each the median of ten, with
+/// the first segment left out because it opens the tendril and warms the
+/// cache.
 ///
-/// The audit measured 24 ms rising to 72 ms over one pull. The segments here
-/// are compared late against early, each the median of ten.
+/// The audit measured a segment at 24 ms rising to 72 ms over one pull, and
+/// before the taper was anchored a pull re-evaluated its whole tendril on
+/// every segment — 880 bricks against 150, stalls of 89, 226, 335 and 440 ms
+/// (`docs/features.md`). Two things are held, and they have different
+/// natures:
+///
+/// - **The bricks a segment dirties.** The tip's region, not the tendril's:
+///   150 early and 125 late on this fixture, the same on every take, machine
+///   and backend. This is the deterministic half and the one the quadratic
+///   class cannot pass: a segment that re-evaluates the whole curve dirties
+///   the union of every tip before it, 421 bricks by the end of this pull.
+/// - **What a segment costs**, fastest of five takes. It grows with the path
+///   on every machine, because every brick of the tip evaluates the whole
+///   tendril, and it grows more the more loaded the host is, because the
+///   bricks are evaluated in parallel and a late segment has more of that
+///   work to wait for. Measured on an Apple M3 Pro (Metal, v0.126.0, sharing
+///   the host with other builds): early 0.46–0.62 ms and late 0.70–2.06 ms,
+///   1.3–4.5x over ten release runs, 1.3–2.0x over three debug runs, and
+///   6.3x on a warm take with the host loaded. On the hosted macOS runners
+///   (`macos-14`, three virtual cores at a load of four to eight per core)
+///   it failed in four of thirty jobs between 29 Sep and 7 Oct, in release
+///   and in debug, with and without Metal, reading early 0.93–1.80 ms and
+///   late 6.82–13.55 ms, 6.5–7.5x, on code the other twenty-six passed (runs
+///   36615009192, 36658810228, 37571178170, 37572423835). A ratio of two
+///   figures that small is a ratio of the scheduler, so it is refereed only
+///   above the audit's own cheapest segment: a late median stays under six
+///   times the early one or under 24 ms, whichever is larger. The floor is
+///   1.8x the worst runner reading and twelve times this Mac's; the audit's
+///   late segment is three times over it and the quadratic class's steps
+///   further still. Below it the figures are printed, and `just segments` is
+///   where a 2x is refereed. As it stands, fastest of five, this Mac reads
+///   0.40–0.47 ms against 0.67–1.60 ms in release (1.5–3.7x) and 0.56–1.34
+///   ms against 0.75–2.92 ms in debug (1.4–2.2x), at 150 and 125 bricks
+///   every time.
 #[test]
 fn a_long_pull_keeps_its_segment_cost() {
     let _turn = one_at_a_time();
@@ -376,44 +474,39 @@ fn a_long_pull_keeps_its_segment_cost() {
         intensity: 0.9,
         ..BrushSettings::default()
     };
-    let path: Vec<GestureSample> = (0..60)
-        .map(|step| {
-            let t = step as f32 / 59.0;
-            GestureSample {
-                position: [1.0 + 0.8 * t, 0.3 * t, 0.1],
-                pressure: 1.0,
-                time: t,
-            }
-        })
-        .collect();
-    document.begin_gesture();
-    let segments: Vec<f64> = (1..path.len())
-        .map(|end| {
-            let started = Instant::now();
-            document
-                .apply_stroke(ToolKind::Puxar, brush, &path[..=end], [false; 3])
-                .expect("the pull was refused");
-            started.elapsed().as_secs_f64()
-        })
-        .collect();
-    document.end_gesture();
-    let median = |slice: &[f64]| {
-        let mut sorted = slice.to_vec();
-        sorted.sort_by(f64::total_cmp);
-        sorted[sorted.len() / 2]
-    };
-    // The first segment is left out: it opens the tendril and warms the cache.
-    let early = median(&segments[1..11]);
-    let late = median(&segments[segments.len() - 10..]);
+    let path = long_pull_path();
+    let (mut early, mut late) = (f64::MAX, f64::MAX);
+    let (mut early_bricks, mut late_bricks) = (0, 0);
+    for _ in 0..TAKES {
+        let segments = pull_segments(&mut document, brush, &path);
+        let (first, last) = (&segments[1..11], &segments[segments.len() - 10..]);
+        early = early.min(median(first.iter().map(|s| s.took)));
+        late = late.min(median(last.iter().map(|s| s.took)));
+        early_bricks = median(first.iter().map(|s| s.bricks as f64)) as usize;
+        late_bricks = median(last.iter().map(|s| s.bricks as f64)) as usize;
+    }
     let ratio = late / early;
+    let bound = (6.0 * early).max(AUDIT_EARLY_SEGMENT);
     println!(
-        "pull segment, median of ten: early {:.2} ms, late {:.2} ms, {ratio:.2}x",
+        "pull segment, median of ten, fastest of {TAKES}: early {:.2} ms over \
+         {early_bricks} bricks, late {:.2} ms over {late_bricks} bricks, {ratio:.2}x \
+         against a bound of {:.1} ms",
         early * 1e3,
-        late * 1e3
+        late * 1e3,
+        bound * 1e3
     );
     assert!(
-        ratio < 6.0,
-        "a pull's late segments cost {ratio:.1}x its early ones: the segment \
-         cost is growing with the path again"
+        late_bricks * 2 <= early_bricks * 3,
+        "a late segment of the pull dirties {late_bricks} bricks against \
+         {early_bricks} early: a segment is re-evaluating the tendril again, \
+         not its tip"
+    );
+    assert!(
+        late < bound,
+        "a pull's late segments cost {:.2} ms, {ratio:.1}x its early ones and over \
+         the {:.0} ms the ratio is refereed above: the segment cost is growing \
+         with the path again",
+        late * 1e3,
+        bound * 1e3
     );
 }
