@@ -21,7 +21,8 @@
       evaluations, 9x, where the old sum put the pair past 1,000x
 - [x] 2.2 Keep the tripwire a tripwire: it is now
       `a_mesh_cage_evaluation_is_priced_by_its_dragged_points`, asserting the
-      ratio stays under the same 20 from the other side
+      ratio stays under 200 — a decade above the 22x a hosted macos-14 runner
+      reads, five times under the whole-cage sum
 
 ## 3. Say what is adopted and what is not
 
