@@ -405,6 +405,7 @@ mod tests {
                 .map(|(name, value)| (name.to_string(), *value))
                 .collect(),
             spread: BTreeMap::new(),
+            samples: BTreeMap::new(),
             skipped: BTreeMap::new(),
             load_per_core: None,
             machine: BTreeMap::new(),

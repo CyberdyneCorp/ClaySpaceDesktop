@@ -167,7 +167,10 @@ Two things about reading a comparison against either file. Each figure now
 carries the spread it was reduced from — the sample count, the minimum, the
 median, the 95th percentile and the maximum — so a change landing inside the
 range the baseline's own samples covered is marked as such rather than read as
-movement; and the conditions name the vendored engine's git revision beside its
+movement, and the recorded file keeps the samples themselves in the order they
+were taken, with a sample that stands apart from its series announced above
+the table (`benchmarks/ci-gate.md`, the stalled voxel dab, is the run that
+needed it); and the conditions name the vendored engine's git revision beside its
 version, because two builds can both say 0.120.0 and differ by a commit. A
 comparison across two engine pins is announced above the table rather than
 refused: refusing would leave an upgrade with no instrument at all. The

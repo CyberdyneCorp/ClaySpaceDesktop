@@ -7,11 +7,20 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::figures::{Figure, Record, Spread};
+use crate::figures::{Figure, Record, Spread, Stall};
 use crate::skip::Skip;
 
 pub struct Run {
     figures: BTreeMap<String, Figure>,
+    /// Every sample a timed measurement took, in the order it took them,
+    /// keyed by the measurement's prefix (`brush.voxel.padrao`).
+    ///
+    /// The spread is five numbers and says how far apart the samples were;
+    /// this says which one. The CI artifact is the only view of the runner,
+    /// and a run whose mean tripped the gate while its median and p95 sat
+    /// still could not be read without it — the first such run took a week
+    /// of runs to pin to one sample (see `visible::settle`).
+    samples: BTreeMap<String, Vec<f64>>,
     /// What the samples behind a figure looked like, where the measurement
     /// took more than one.
     ///
@@ -34,6 +43,7 @@ impl Run {
     pub fn new(filter: Option<String>) -> Self {
         Self {
             figures: BTreeMap::new(),
+            samples: BTreeMap::new(),
             spreads: BTreeMap::new(),
             skips: BTreeMap::new(),
             durations: Vec::new(),
@@ -48,6 +58,10 @@ impl Run {
 
     pub fn spreads(&self) -> &BTreeMap<String, Spread> {
         &self.spreads
+    }
+
+    pub fn samples(&self) -> &BTreeMap<String, Vec<f64>> {
+        &self.samples
     }
 
     pub fn skips(&self) -> &BTreeMap<String, Skip> {
@@ -119,10 +133,20 @@ impl Run {
     /// Records the timings of one measurement, under the names its record
     /// kind gives them.
     pub fn timings(&mut self, prefix: &str, record: Record, samples: Vec<f64>) {
+        if !self.wants_group(prefix) {
+            return;
+        }
+        if let Some(stall) = Stall::find(&samples) {
+            // Said as it happens, above the table: a sample that stands
+            // apart from its series moves the mean and nothing else, and the
+            // table cannot show which sample it was.
+            println!("  {prefix}: {}", stall.describe(samples.len()));
+        }
         for (name, figure) in record.figures(prefix, &samples) {
             self.spread(&name, &samples);
             self.insert(name, figure);
         }
+        self.samples.insert(prefix.to_string(), samples);
     }
 
     /// Says that everything named under `prefix` is not here, and why.
