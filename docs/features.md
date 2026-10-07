@@ -1253,36 +1253,65 @@ Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
 **Centrado** reaches 1.1003 — half the thickness above the surface, which is
 what half each way means.
 
-**A wall is as tall as the thickness asks, and even.** The engine keeps the part
-of the wall's shell that lies inside the mask's own volume, read at the point
-itself, and a mask painted on a surface is only a thin volume around it — a
-dab's ball, or an outline swept to just past the form. Handed the painted mask,
-every wall stopped where the paint did: on the unit sphere with an outline mask,
-0.3 and 0.6 both stopped at about 0.11, with a top that followed the dabs
-(CyberdyneCorp/ClayCore#660). On a field layer the application now hands the
-engine the painted patch *swept along the surface normal*: every cell whose
-distance from the layer's own surface lies in the band the side fills takes the
-painted mask's value at its foot on the surface. The engine's intersection then
-keeps the whole shell, and the wall's top is the shell's offset surface.
-Measured on the unit sphere, Para fora, at five spots in the patch
-(`mask_extrude_thickness.rs`):
+**A wall is as tall as the thickness asks, and even along the boundary.** The
+engine of ClayCore v0.120.1 kept the part of the wall's shell that lay inside
+the mask's own volume, read at the point itself, and a mask painted on a surface
+is only a thin volume around it — a dab's ball, or an outline swept to just past
+the form. Every wall stopped where the paint did: on the unit sphere with an
+outline mask, 0.3 and 0.6 both stopped at about 0.11, with a top that followed
+the dabs (CyberdyneCorp/ClayCore#660). The application worked around it on a
+field layer by handing the engine the painted patch swept along the surface
+normal. Since ClayCore v0.126.0 (#667) the field extrude reads the mask at the
+source surface under each sample itself, so the application hands it the
+painted mask again and the sweep is gone. Measured on the unit sphere, Para
+fora, on this machine (Apple M3 Pro, Metal), the swept region against the
+painted mask (`mask_extrude_thickness.rs`):
 
-| Mask | Thickness | Before | Now |
+| Mask | Thickness | v0.120.1 | Swept, v0.126.0 | Painted, v0.126.0 | Cost, swept | Cost, painted |
+|---|---|---|---|---|---|---|
+| Outline, 0.5 square | 0.05 | 0.050 | 0.050 | 0.050 | 67 ms | 43 ms |
+| Outline, 0.5 square | 0.1 | 0.080 – 0.100 | 0.100 | 0.100 | 115 ms | 57 ms |
+| Outline, 0.5 square | 0.6 | 0.080 – 0.103 | 0.600 | 0.600 | 2313 ms | 478 ms |
+| One Máscara dab, size 0.3 | 0.05 | 0.050 | 0.050 | 0.050 | 23 ms | 18 ms |
+| One Máscara dab, size 0.3 | 0.1 | 0.100 | 0.100 | 0.100 | 42 ms | 19 ms |
+| One Máscara dab, size 0.3 | 0.6 | 0.134 – 0.160 | 0.600 | 0.600 | 434 ms | 186 ms |
+
+The two agree to within 0.0002 at every spot, so the sweep bought nothing but
+cost — 1.3 to 4.8 times the engine's own. Along the mask boundary — eight spots
+0.02 inside the outline's square, corners and sides, and eight around the rim
+of the dab's frozen core — a 0.1 wall and a 0.6 wall vary by 0.0000 to 0.0009,
+and the test holds them to a quarter of the mask's cell (0.005). Across the
+outline's patch the 0.6 wall stays within 0.0001 of 0.600, where the old one
+ran from 0.08 to 0.13. Centrado at 0.6 puts 0.300 above the surface. What the
+engine does not bound is its own measurement of the mask, a dense array over
+the mask's bounds grown by the thickness and the rim on every side, so the
+application counts those cells first and refuses past eight million — a wall
+of about 1.6 on an outline through the starting form, and a 100-unit wall —
+with a reason instead of costing gigabytes.
+
+**A grid's wall is as tall as asked at its crown, and even while it is thin.**
+`clay_voxel_mask_extrude` grows the wall from each masked surface cell along an
+estimated normal, one cell per layer, for the number of layers the thickness
+rounds to. Measured on the starting form crossed to a 0.02 grid with one
+Máscara dab of size 0.3, Para fora, read to within one cell — coarser than 10%
+of 0.05 and of 0.1, finer than 10% of 0.6:
+
+| Thickness | Layers | At the crown | Around the dab's core (eight spots) |
 |---|---|---|---|
-| Outline, 0.5 square | 0.05 | 0.050 | 0.050 |
-| Outline, 0.5 square | 0.1 | 0.080 – 0.100 | 0.100 |
-| Outline, 0.5 square | 0.6 | 0.080 – 0.103 | 0.600 |
-| One Máscara dab, size 0.3 | 0.6 | 0.134 – 0.160 | 0.600 |
+| 0.05 | 3 | 0.060 | 0.060 – 0.061 |
+| 0.1 | 5 | 0.100 | 0.0998 – 0.1004 |
+| 0.2 | 10 | 0.200 | 0.193 – 0.197 |
+| 0.6 | 30 | 0.600 | 0.35 – 0.41 |
 
-Across the outline's patch, out to 0.02 inside its edge, the old 0.6 wall ran
-from 0.08 to 0.13; the new one stays within 0.0001 of 0.600. Centrado at 0.6
-puts 0.300 above the surface. The region is searched in the mask's bounds grown
-by the thickness, and the engine's own measurement of the mask covers the same
-box, so a wall far thicker than the patch — 100 units — is refused with a
-reason instead of costing gigabytes. A **voxel layer is still capped**: the
-engine grows a grid's wall cell by cell through masked cells only, and the
-layer's field that gives a normal is empty for a grid, so that path waits on
-ClayCore#660.
+The crown reaches the ask at every thickness, and a wall up to ten layers is
+even around the boundary to within a quarter of a cell. Past that the columns
+no longer fill the wall between them: each seed's column is one cell wide and
+follows a normal that diverges on a curved surface and is quantised to the
+grid, so at 0.6 the ring around the dab reads 0.35 to 0.41 against the crown's
+0.600, and a ray through the outline's patch finds holes down to 0.08. That is
+an engine limitation of the voxel extract; `a_thick_grid_wall_is_still_porous`
+is the tripwire that fails when a later engine fills the wall, so this passage
+moves with it.
 
 **Extrudar needs something to sample.** `clay_document_mask_extrude` samples a
 *layer's field*, and a grid has a verb of its own that works from its cells
