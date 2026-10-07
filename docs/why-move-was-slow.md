@@ -175,7 +175,16 @@ growth is the price of one brick over a longer chain (2.4 µs to about 6 µs),
 which is the only part a collapse could claim. A baked patch still undoes at
 4.4x the chain, so it cannot claim it either. A 60-sample Snake Hook pull, timed
 the same way, measured 0.42 ms a segment early and about 1.0 ms late: 2.3–2.5x,
-where the audit saw 3x at 24–72 ms on a larger layer.
+where the audit saw 3x at 24–72 ms on a larger layer. Re-measured on v0.126.0
+with the dirty set drained before every segment, as the viewport drains it:
+0.46–0.62 ms early and 0.70–2.06 ms late on an M3 Pro sharing its host, and
+0.93–1.80 ms against 6.82–13.55 ms on the hosted macOS runners, where the
+quotient failed its 6x line in four of thirty jobs on code the rest passed.
+`a_long_pull_keeps_its_segment_cost` now holds the bricks a segment dirties —
+150 early and 125 late, the tip's region, the same on every machine — as the
+exact assertion, and referees the late-over-early ratio only for a late median
+above the audit's own cheapest segment, 24 ms; below that floor a ratio of two
+sub-millisecond figures measures the host's scheduler, not the code.
 
 **Re-measured to forty gestures, the collapse still loses everywhere.**
 `measure_the_collapse_against_the_chain` in `tests/chain_compaction.rs` works one

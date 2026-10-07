@@ -962,6 +962,25 @@ changes, and a segment dirties that region instead of the whole curve: **150
 bricks against 880** on the same pull. A pull is no longer quadratic in its own
 length.
 
+What holds it there is `a_long_pull_keeps_its_segment_cost` in
+`crates/clayspace-engine/tests/undo_series.rs`, which delivers the audit's
+60-sample pull as the interface does and compares its last ten segments with
+its first ten. The exact assertion is the count: a late segment dirties the
+tip's region, 125 bricks against 150 early on the starting sphere, the same on
+every take, machine and backend, where a segment re-evaluating the whole
+tendril would dirty 421. The wall time is held beside it as a class bound. A
+segment's cost does grow mildly with the path, because every brick of the tip
+evaluates the whole tendril, and it grows more on a loaded host, because that
+work is parallel and a late segment has more of it to wait for: 0.46–0.62 ms
+early and 0.70–2.06 ms late on an Apple M3 Pro (Metal, release, sharing the
+host), 1.3–4.5x over ten runs, against 0.93–1.80 ms and 6.82–13.55 ms,
+6.5–7.5x, on the hosted macOS runners, where a flat 6x line failed four of
+thirty jobs on code the other twenty-six passed. A quotient of two figures that
+small is a quotient of the scheduler, so the ratio is refereed only above the
+audit's own cheapest segment: the late median stays under six times the early
+one or under 24 ms, whichever is larger. The floor is 1.8x the worst runner
+reading, and the audit's late segment is three times over it.
+
 The curve is held only while a gesture is open, so the next pull is its own
 tendril rather than a continuation of the last.
 
