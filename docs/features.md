@@ -2307,20 +2307,32 @@ the preview back with it. The preview is the engine's own bend, so
 **Deformar** lands exactly what the last frame showed — every position and
 normal, bit for bit.
 
-That 11.2 ms is a small cage's figure, and **a large cage is still slow on the
-engine this build pins** (#176). The engine evaluates a cage by summing every
-control point it holds, dragged or not, so one corner of a 32³ cage costs
-32,768 terms a vertex — about **1.7 s** a frame on the same mesh, against
-~10 ms at 3³ and ~35 ms at 8³. ClayCore#655 sums the dragged points alone and
-measured ~11 ms at 32³ here; it reaches this build when the pin moves to a
-release carrying it. Until then the cage's state names the cost: the agent's
-cage reads `dragged_points` and `preview_ms`, the last frame's time.
+**A frame is priced by the points in hand, not by the cage** (#176). Through
+ClayCore v0.120.1 the engine evaluated a cage by summing every control point
+it held, dragged or not, so one corner of a 32³ cage cost 32,768 terms a
+vertex — about **1.7 s** a frame on the same mesh, against ~10 ms at 3³ and
+~35 ms at 8³. From v0.126.0 (ClayCore#655) a cage sums its dragged points
+alone, with an O(n) basis per axis, and the same frame on the same 62,576
+vertices measures **7.5 ms** at 3³, **7.7 ms** at 8³ and **9.9 ms** at 32³
+(engine only, best of six, Apple M3 Pro under load): the largest cage costs a
+third again what the smallest does, for the basis, and nothing for the points
+at rest. `one_corner_of_the_largest_cage_holds_a_frame` holds that 32³ frame
+to the 16 ms budget with the CI gate's margin, and the ClayCore repro holds the
+engine's evaluation to about the ratio of the divisions (9×, where the old sum
+put it past 1,000×). The cage's state names the cost: the agent's cage reads
+`dragged_points` and `preview_ms`, the last frame's time.
 
 The benchmark's `cage` group measures the same drag on every run, one corner
 dragged on the 296k-triangle mesh reference and timed to the surface arriving:
-**45.9 ms** at 3³, **85.7 ms** at 8³ and **3.9 s** at 32³ on an M3 Pro, each
-against the 16 ms budget, with `cage.scaling` (32³ over 3³, **85.6×** against
-a budget of 3×) stating whether the cost follows the points in hand.
+**22.6 ms** at 3³, **23.0 ms** at 8³ and **27.1 ms** at 32³ on an M3 Pro
+(Metal, engine v0.126.0, under load; 45.9 ms, 85.7 ms and 3.9 s on v0.120.1),
+each against the 16 ms budget, with `cage.scaling` (32³ over 3³, **1.20×**
+against a budget of 3×, from 85.6×) stating whether the cost follows the
+points in hand. What the three sizes share on that scene is the bend of 296k
+triangles (18–20 ms of the engine's time at any size) and their upload (about
+3.5 ms), so on the reference every size reads over the line by the size of the
+mesh, not the cage. The figures are not yet in the committed baselines, so
+the gate reports them as `new` until the baselines are re-recorded.
 
 **A drag leaves no memory behind.** Each frame writes into the buffers the
 surface already holds (#166), and each frame's upload now hands its writes to

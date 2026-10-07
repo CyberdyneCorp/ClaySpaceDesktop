@@ -592,6 +592,19 @@ its control points are being dragged, without committing to it.
 The preview SHALL NOT compound across frames, SHALL leave the gesture one undo
 step, and SHALL be taken back when the cage is abandoned.
 
+The preview SHALL be the engine's own bend of the mesh, so that applying the
+cage lands exactly what was last shown — every vertex position and normal, bit
+for bit. An optimisation of the preview SHALL NOT approximate it.
+
+A drag frame SHALL be priced by the control points that stand away from rest
+rather than by the number of points the cage holds: a single point dragged on
+the largest cage SHALL cost within a small multiple of the same drag on the
+smallest cage, whatever the mesh, and SHALL hold the 16 ms interface-thread
+frame on the starting form crossed to a mesh. What a larger mesh adds to a
+frame is the bend of its own vertices, the same at every cage size, and not a
+cost of the cage. The last frame's cost and the number of dragged points SHALL
+be reported with the cage.
+
 #### Scenario: The form follows the cage
 - **WHEN** a control point is dragged
 - **THEN** the drawn surface has moved before anything is applied
@@ -604,6 +617,19 @@ step, and SHALL be taken back when the cage is abandoned.
 #### Scenario: Abandoning a cage abandons its preview
 - **WHEN** a cage is dragged and then cancelled
 - **THEN** the form is exactly as it was
+
+#### Scenario: What was shown is what lands
+- **WHEN** a cage is dragged over several frames and then applied
+- **THEN** every vertex position and normal is bit-identical to the last preview frame
+
+#### Scenario: One corner of the largest cage
+- **WHEN** one control point of a 32×32×32 cage is dragged on the starting form crossed to a mesh
+- **THEN** each drag frame holds a 16 ms budget
+- **AND** the cage reports one dragged point and what the frame cost
+
+#### Scenario: A larger cage on a larger mesh
+- **WHEN** the same point is dragged on the smallest and on the largest cage over the reference mesh
+- **THEN** the largest cage's frame costs within a small multiple of the smallest's
 
 ### Requirement: Symmetry reaches every representation
 The application SHALL apply the enabled symmetry axes to strokes on mesh and
@@ -1867,3 +1893,16 @@ the host SHALL convert between them rather than passing one as the other.
 #### Scenario: A brush past the size ceiling
 - **WHEN** a voxel brush is set larger than 31 cells of radius
 - **THEN** the dab stops growing at 63 cells across, and the documentation says so
+
+### Requirement: A cage is sized from where the form stands now
+A cage SHALL be sized from the active layer's bounds at the moment it is put
+up, after any move of the layer or of the forms in it, including whatever
+copies the layer's mirror makes.
+
+#### Scenario: A moved form
+- **WHEN** a form is moved and a cage is then put around its layer, with the mirror off
+- **THEN** the cage is the moved form's box, padded, and not the box it had before the move
+
+#### Scenario: A mirrored form
+- **WHEN** a form on a subtool mirrored on X is moved off the axis and a cage is put up
+- **THEN** the cage encloses the form and its mirrored copy

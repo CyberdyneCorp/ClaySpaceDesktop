@@ -25,10 +25,32 @@ own box.
 ## What changes
 
 - **Engine** (ClayCore#655): a mesh cage keeps the set of dragged control
-  points and sums over that set alone, with an O(n) basis per axis. Measured
-  here with that engine: 32³ single-point frame ~1.7 s → ~11 ms, 3³ and 8³
-  ~9–10 ms. Reaches this application when the pin moves to a release carrying
-  it.
+  points and sums over that set alone, with an O(n) basis per axis. Pinned
+  from ClayCore v0.126.0. Measured on that pin (Apple M3 Pro, Metal, machine
+  under load), one corner dragged:
+
+  | figure | v0.120.1 | v0.126.0 | line |
+  |---|---|---|---|
+  | engine frame, 62,576-vertex starting mesh, 3³ (best of 6) | ~10 ms | 7.5 ms | — |
+  | engine frame, same mesh, 8³ | ~35 ms | 7.7 ms | — |
+  | engine frame, same mesh, 32³ | ~1.7 s | 9.9 ms | 16 ms × 10 |
+  | `cage.drag_3.ms`, 296k-triangle reference, to the surface arriving | 45.9 ms | 22.6 ms | 16 ms |
+  | `cage.drag_8.ms` | 85.7 ms | 23.0 ms | 16 ms |
+  | `cage.drag_32.ms` | 3.9 s | 27.1 ms | 16 ms |
+  | `cage.scaling` (32³ over 3³) | 85.6× | 1.20× | 3× |
+  | `cage.memory` | 1.00× | 1.00× | 1.2× |
+  | `cage.footprint` | 1.03× | 1.00× | 1.2× |
+  | ClayCore repro, 2,048 evaluations, 32³ over 3³ | 755× | 9× | 20× |
+
+  The 32³ single-point frame holds the 16 ms budget on the issue's scale of
+  mesh, and `one_corner_of_the_largest_cage_holds_a_frame` holds it there at
+  the CI gate's own margin of ten. On the 296k-triangle reference every size
+  reads over 16 ms by 18–20 ms of engine time spent bending the whole mesh
+  and about 3.5 ms uploading it, the same at 3³ as at 32³; what the cage adds
+  is the 4.5 ms between them. The benchmark budget stays attached to all three
+  sizes and is reported like every other budget in the harness; the figures
+  are absent from the committed baselines, so the gate reports them as `new`
+  until the baselines are re-recorded.
 - **Reported**: `LatticeState` carries `dragged` (points away from rest) and
   `preview_micros` (the last mesh preview frame); the agent's cage state reads
   them as `dragged_points` and `preview_ms`.
