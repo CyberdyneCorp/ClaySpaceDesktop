@@ -52,9 +52,11 @@ those stay on the list:
 under *Upstream: released, not yet taken up here*. It is now the larger part of
 what is left, and none of it waits on anyone but this repository.
 
-Engine pinned at ClayCore **0.120.1**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.126.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. The pins before it
-were v0.116.0 (#140), which repaired a drag and stopped losing a pull; v0.113.0
+were v0.120.0 (#237), which asked the grid's drag for its taper by name, and
+v0.120.1 beside the retopology move to v0.10.0; v0.116.0 (#140), which repaired
+a drag and stopped losing a pull; v0.113.0
 (#126), which removed the whole-field re-mesh on every stroke release and gave
 the coarse level gradient normals; and v0.84.0 (#87). `git log --
 vendor/ClayCore` lists every move. On the reference
@@ -141,7 +143,7 @@ waiting on a decision rather than on an engine.
 
 **Every upstream issue this section tracks is closed.** Each entry below says
 what that means here, and it is not always the same thing: most were answered
-with an entry point that is in the pinned v0.120.1 header and **not yet adopted**
+with an entry point that is in the pinned v0.126.0 header and **not yet adopted**
 by this application, one was adopted, and one — #392 — is closed upstream while
 the defect this repository measured still reproduces at the pin. The entries
 keep the reasoning that was written while they were open, because it is the
@@ -602,11 +604,23 @@ Taken up here, each one flipping a test rather than being read about.
 
 ### Upstream: released, not yet taken up here
 
-**What the pinned v0.120.1 header offers and this application does not call.**
+**What the pinned v0.126.0 header offers and this application does not call.**
 Keeping a pin move separate from what the pin enables is a deliberate line — a
 bisect over an upgrade should land on the upgrade — but it only works if what was
 left behind stays listed. Each entry below was checked against the header and
 against a search of the workspace for a caller outside the `-sys` crates.
+
+*Added by v0.126.0*, each the engine side of an issue still open here or a
+capability nothing here asks for yet:
+
+| entry point | ABI | what adopting it buys |
+|---|---|---|
+| `clay_item_set_mirror_axes`, `clay_layer_set_node_mirror` / `_node_mirror` | 0.121.0 | an item that keeps the axes it was made under when the layer's symmetry is turned off or switched — `symmetry-that-mirrors-what-you-make` task 5.1, #170 |
+| `clay_item_volume_move_topological_from` | 0.122.0 | a topological move sampled from the document directly, so an outward pull is not clipped by the volume it was sampled into |
+| `clay_voxel_grid_clone`, `clay_voxel_get_occupied` | 0.123.0 | the grid-to-field crossing's read without one FFI call per cell: 0.074 ms to clone 89k cells where the box walk through `clay_voxel_get` is the host's 17–46 ms (#285) |
+| `clay_mesh_from_arrays` | 0.124.0 | a mesh with uvs, normals and colours built from arrays, retiring the vertex-aligned OBJ text `claycore::mesh` writes and parses back |
+| `clay_multires_delta_*`, the `_recorded` stamp and stroke, `_commit_into` | 0.125.0 | a hierarchy gesture in the application's undo stack as a record 37–47% of the whole-hierarchy snapshot it replaces |
+| `clay_stroke_tx_*` and six `_apply_stroke_tx` consumers | 0.126.0 | a gesture fed in pieces, bit-identical to the whole-path call and one undo step, with the resolver no longer quadratic; the ink trails the pen by up to one spacing |
 
 *Answers to issues this repository filed*, each discussed under *What is
 blocked, and what is not*:

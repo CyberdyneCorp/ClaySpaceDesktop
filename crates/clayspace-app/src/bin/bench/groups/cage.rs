@@ -15,11 +15,13 @@
 //! a ratio, which survives a change of machine where an absolute timing does
 //! not.
 //!
-//! Both are reported and not enforced until the engine pin carries
+//! Both were reported and not enforced while the engine pin predated
 //! ClayCore#655, which sums a mesh cage over its dragged points alone. Before
-//! it, one corner of a 32³ cage is 32,768 terms a vertex and the 32³ figure is
-//! seconds; see `a_mesh_cage_evaluation_is_priced_by_every_point_the_cage_holds`
-//! in `tests/claycore_repros.rs`.
+//! it, one corner of a 32³ cage was 32,768 terms a vertex and the 32³ figure
+//! was seconds. The pin now carries it, and
+//! `a_mesh_cage_evaluation_is_priced_by_its_dragged_points` in
+//! `tests/claycore_repros.rs` holds the engine to it; enforcing the budget
+//! here is `price-a-cage-drag-by-its-dragged-points`' remaining task (#176).
 //!
 //! `cage.memory` is what the device holds after a long drag, released, against
 //! what it held before it: the per-frame upload goes into the buffers the

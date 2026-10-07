@@ -671,7 +671,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install -g @fission-ai/openspec@latest
+      # Pinned, not `@latest`. 1.14.1 (2026-10-05) turned the "requirement
+      # text is very long" warning into a strict failure, which failed 44
+      # changes that had passed the day before with nothing in them changed.
+      # A gate that moves on its own is not a gate; move this on purpose, with
+      # the specs it then asks for.
+      - run: npm install -g @fission-ai/openspec@1.13.2
       # Strict: the specification and the code are supposed to describe the
       # same application, and a change that drifts from its spec is a change
       # whose intent has been lost.

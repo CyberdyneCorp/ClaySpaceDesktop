@@ -28,12 +28,28 @@ both had moved, and the command cannot go stale.
 flight, what the engine currently gets wrong, and what the pinned engine
 already offers that this application has not taken up.
 
-**The engine pins now stand at ClayCore v0.120.1 and CyberRemesher v0.10.0.**
-ClayCore narrows operator and undo bounds, repairs smooth-seam invalidation,
-and makes voxel-layer edits undoable. CyberRemesher changes its shared C ABI to
-2.1; the bake wrapper supplies the required struct size and checks the default
-initializer before using it. Its new mesh maps and retopology operations remain
-engine capabilities until this application exposes them.
+**The engine pins now stand at ClayCore v0.126.0 and CyberRemesher v0.10.0.**
+ClayCore v0.126.0 covers 0.121.0 through 0.126.0: thirty-two C ABI functions
+added, none removed, no existing struct re-laid out, and the `.clayspace`
+format minor moved from 19 to 20, so `Document::FORMAT` moves with it and a
+document this build writes is refused by the previous pin rather than misread.
+The pin carries the engine side of five open issues here — a mesh cage priced
+by its dragged points (#176), a mask extrude as thick as asked on a grid
+(#178), a Move on the mirror plane applied once and an item that keeps its own
+mirror axes (#170), an intersect drag padded by what follows its operand (#282)
+and a voxel grid that can be cloned off the interface thread (#285) — and one
+tripwire fired on the move: the cage repro, which now holds the engine to a
+9x spread between a 3³ and a 32³ cage where the old sum put it past 1,000x.
+Each issue's remaining application-side work is its own change. The stroke
+session, the multires delta and the mesh-from-arrays constructor the release
+adds are engine capabilities until this application exposes them.
+
+The next paragraph describes the earlier **v0.120.1** pin.
+
+ClayCore v0.120.1 narrowed operator and undo bounds, repaired smooth-seam
+invalidation, and made voxel-layer edits undoable. CyberRemesher v0.10.0
+changed its shared C ABI to 2.1; the bake wrapper supplies the required struct
+size and checks the default initializer before using it.
 
 The next two paragraphs describe the earlier **v0.120.0** pin.
 
@@ -102,7 +118,7 @@ report says which part of a document a byte belongs to.
 | Visual captures | Some 640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
-| Engine | ClayCore 0.120.1, pinned to the release tag as a submodule |
+| Engine | ClayCore 0.126.0, pinned to the release tag as a submodule |
 | Sculpting tools | 21 across five representations · 15 SDF, 13 voxel, 17 mesh, 16 on a subdivision hierarchy, 16 on an adaptive surface |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
@@ -1554,8 +1570,8 @@ just diagnostics   # or: cargo run -p claycore --example diagnostics
 ```
 
 ```
-engine version   : 0.120.1
-expected ABI     : 0.120.1
+engine version   : 0.126.0
+expected ABI     : 0.126.0
 compiled backends: metal
 registered       : cpu, metal
 ```

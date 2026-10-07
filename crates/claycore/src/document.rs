@@ -638,15 +638,27 @@ impl Document {
     /// same shape, a field inside a back-to-back record — and it exchanges
     /// documents with no older build: the format is the engine's, the engine
     /// is vendored and pinned here, and a `.clayspace` this application writes
-    /// is opened by this application. What minor 19 costs is that a document
+    /// is opened by this application. What minor 19 cost is that a document
     /// written now is *refused* by a build that predates v0.113.0 rather than
     /// misread, which is the direction the format was designed to fail in.
+    ///
+    /// **Minor 20 is ClayCore v0.126.0's** (its #673): each node record gains
+    /// one byte, the item's own mirror axes, so that turning a layer's
+    /// symmetry off or switching its axis no longer rewrites what was made
+    /// under the old one. A default save writes 20 and this ABI offers no
+    /// other, so the constant follows, and a document written here is refused
+    /// by the v0.120.1 pin rather than misread. A minor-19 document opens with
+    /// every item inheriting its layer's mirror, as it did when saved, and the
+    /// engine re-encodes it once at load — 3.61 ms against 1.41 on a 1.58 MB
+    /// grid, by its own measure — so a crash journal begun on it can be paired
+    /// with the bytes a save would write now (#675). Nothing here asks for an
+    /// item's own axes yet; that is `symmetry-that-mirrors-what-you-make`.
     ///
     /// [`Self::format_of`] reads what a file actually says, so the constant is
     /// checkable rather than asserted.
     pub const FORMAT: FormatVersion = FormatVersion {
         major: 1,
-        minor: 19,
+        minor: 20,
     };
 
     /// What a `.clayspace` file's own header says it was written at.
