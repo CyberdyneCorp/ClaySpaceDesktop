@@ -64,7 +64,8 @@ frames exactly, and the same 108 pixels at 1–3 levels separate the debug and
 release jobs' first capture of the starting form in four unrelated tests of
 the same run, on both backends, on three runs. The undo is exact; the debug
 build's first picture is a one-level speckle away from release's. The exact
-allowance takes the measured count in debug and keeps its handful in release.
+allowance takes the measured count in a debug build or on a hosted runner and
+keeps its handful on a workstation in release.
 
 **I14.** Two attempts on main could not reproduce it (0.034–0.050 ms per call,
 no upload), `agent_end_to_end.rs` holds the audit's shape through the window
@@ -80,7 +81,8 @@ evidence.
   function with its own test.
 - The two budgets in `gizmo_first_drag.rs` go through it. The release budget
   is unchanged, and so are the structural assertions.
-- `visual_incremental.rs`'s exact allowance is 128 pixels in a debug build,
+- `visual_incremental.rs`'s exact allowance is 128 pixels in a debug build or
+  on a hosted runner (the CPU-only release job read the same 108 on 7 October),
   16 in release, at the same levels.
 - `performance-budgets`: a millisecond budget is asserted only in an optimised
   build off a hosted runner; elsewhere the figure is printed and the

@@ -8,7 +8,7 @@
 - [x] 2.1 `support::Verdict`, `verdict_for`, `budget_verdict` and `hold_to_budget` in `crates/clayspace-app/tests/support/mod.rs`.
 - [x] 2.2 `first_mesh_subtool_drag_frame_fits_the_frame_budget` and `the_first_object_drag_frame_draws_the_object_alone` hold their budgets through it; the release budget and the structural assertions are unchanged.
 - [x] 2.3 `a_millisecond_budget_is_a_verdict_only_in_release_off_a_hosted_runner` in `gizmo_first_drag.rs`.
-- [x] 2.4 `visual_incremental.rs`: `EXACT` allows 128 pixels in a debug build, 16 in release, at the same levels, with the runner's measured figure in its doc comment.
+- [x] 2.4 `visual_incremental.rs`: `exact()` allows 128 pixels in a debug build or on a hosted runner (`CI`), 16 on a workstation in release, at the same levels, with the runners' measured figures in its doc comment.
 
 ## 3. Close I14
 
