@@ -537,17 +537,21 @@ fn a_placed_node_reports_its_primitive_and_nothing_else() {
 /// dragged points alone, and builds the per-axis Bernstein basis in O(n).
 ///
 /// So the two cages no longer differ by the cube of their divisions, only by
-/// the basis — about the ratio of the divisions themselves. Measured here on
-/// the pin move: 3³ 0.026 ms, 32³ 0.224 ms over 2,048 evaluations, 9x, where
-/// the old sum put the same pair past 1,000x. The line is kept at 20, on the
-/// other side: a regression to the whole-cage sum crosses it by two orders of
-/// magnitude, and the basis cannot.
+/// the basis — about the ratio of the divisions themselves, with the floor of
+/// the smaller cage set by per-evaluation overhead rather than by its 27
+/// points. Measured on the pin move: 3³ 0.026 ms against 32³ 0.224 ms over
+/// 2,048 evaluations on an Apple M3 Pro, 9x; 0.036 against 0.803 ms on a
+/// hosted `macos-14` runner, 22x. The old sum put the same pair at 32,768
+/// terms against 27 — past 1,000x. The line sits at 200: a decade above the
+/// slowest machine that has measured the basis, and five times under the
+/// whole-cage sum, which no amount of runner noise brings down to it. The
+/// first line, 20, failed on the runner's 22x and taught the floor.
 #[test]
 fn a_mesh_cage_evaluation_is_priced_by_its_dragged_points() {
     use claycore::MeshLattice;
-    let points: Vec<[f32; 3]> = (0..2048)
+    let points: Vec<[f32; 3]> = (0..8192)
         .map(|at| {
-            let t = at as f32 / 2048.0;
+            let t = at as f32 / 8192.0;
             [2.0 * t - 1.0, (7.0 * t).sin() * 0.9, (3.0 * t).cos() * 0.9]
         })
         .collect();
@@ -577,7 +581,7 @@ fn a_mesh_cage_evaluation_is_priced_by_its_dragged_points() {
         large * 1e3
     );
     assert!(
-        ratio < 20.0,
+        ratio < 200.0,
         "a 32³ cage with one point dragged costs {ratio:.1}x a 3³ one: the engine \
          is pricing the cage by every point it holds again rather than by its \
          dragged points (ClayCore#655, #176)"
