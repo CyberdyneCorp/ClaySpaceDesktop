@@ -17,7 +17,7 @@ pub mod backend;
 pub mod chunked;
 pub mod compaction;
 pub mod document;
-mod extrude_region;
+mod extrude_budget;
 pub mod grid_to_field;
 mod holes;
 mod live;
