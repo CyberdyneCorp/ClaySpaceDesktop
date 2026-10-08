@@ -41,6 +41,10 @@ pub struct Baseline {
     /// not say. A comparison against one of those reads exactly as it did
     /// before.
     pub spread: BTreeMap<String, Spread>,
+    /// Every sample behind a timed measurement, in the order taken, keyed by
+    /// the measurement's prefix. Empty for a file recorded before the section
+    /// existed, which is not a claim that nothing was sampled.
+    pub samples: BTreeMap<String, Vec<f64>>,
     /// What that run did not measure, and why.
     pub skipped: BTreeMap<String, String>,
     /// The one-minute load per core the recording machine was under, where the
@@ -120,6 +124,24 @@ fn render(where_: &Conditions, machine: &Machine, load: Option<&Load>, run: &Run
     out.push_str("  \"spread\": {\n");
     out.push_str(&spread.join(",\n"));
     if !spread.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("  },\n");
+
+    // The samples themselves, in the order they were taken, under the
+    // measurement's prefix rather than under each figure reduced from them.
+    // A sibling section for the same reason the spread is one.
+    let samples: Vec<String> = run
+        .samples()
+        .iter()
+        .map(|(prefix, series)| {
+            let each: Vec<String> = series.iter().map(|s| format!("{s:.4}")).collect();
+            format!("    \"{prefix}\": [{}]", each.join(", "))
+        })
+        .collect();
+    out.push_str("  \"samples\": {\n");
+    out.push_str(&samples.join(",\n"));
+    if !samples.is_empty() {
         out.push('\n');
     }
     out.push_str("  },\n");
@@ -209,6 +231,11 @@ fn parse(text: &str) -> Result<Baseline> {
             Some(value) => spreads(value.clone())?,
             None => BTreeMap::new(),
         },
+        // Absent in a baseline recorded before the samples were kept.
+        samples: match root.get("samples") {
+            Some(value) => series(value.clone())?,
+            None => BTreeMap::new(),
+        },
         // Absent in a baseline recorded before skips were reported, which is
         // not an error: it means that run skipped nothing it told us about.
         skipped: match root.get("skipped") {
@@ -240,6 +267,24 @@ fn spreads(value: Value) -> Result<BTreeMap<String, Spread>> {
                     max: number("max")?,
                 },
             ))
+        })
+        .collect()
+}
+
+/// The `samples` section: one array of numbers per measurement prefix.
+fn series(value: Value) -> Result<BTreeMap<String, Vec<f64>>> {
+    value
+        .into_object()?
+        .into_iter()
+        .map(|(prefix, value)| {
+            let Value::Arr(items) = value else {
+                return Err(bad(format!("the samples for {prefix} are not an array")));
+            };
+            let numbers = items
+                .into_iter()
+                .map(Value::into_number)
+                .collect::<Result<Vec<f64>>>()?;
+            Ok((prefix, numbers))
         })
         .collect()
 }
@@ -436,7 +481,63 @@ mod tests {
         run.spread("dab.median", &[1.9, 2.4219, 3.1, 5.0]);
         run.insert("locality.key_ratio", Figure::ratio(0.75, Some(2.0), 1.5));
         run.skip("brush.mesh", Skip::NoHeadlessGpu);
+        run.timings(
+            "brush.voxel.padrao",
+            crate::figures::Record::Repeatable,
+            vec![1.7, 51.0, 272.05, 50.8],
+        );
         run
+    }
+
+    /// The samples come back in the order they were taken, under the
+    /// measurement's prefix: a stall is identified by its position, and a
+    /// sorted spread cannot say which position that was.
+    #[test]
+    fn the_samples_survive_the_round_trip_in_the_order_taken() {
+        let read =
+            parse(&render(&conditions(), &Machine::default(), None, &run())).expect("parses");
+        assert_eq!(
+            read.samples["brush.voxel.padrao"],
+            vec![1.7, 51.0, 272.05, 50.8]
+        );
+        // A figure recorded by hand with a spread and no series has none.
+        assert!(!read.samples.contains_key("dab.median"));
+    }
+
+    #[test]
+    fn a_baseline_from_before_the_samples_were_kept_still_reads() {
+        let text = r#"{
+  "conditions": {
+    "scenes": { "reference": "r1" },
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cpu",
+    "engine": "0.126.0",
+    "viewport": [1280, 800]
+  },
+  "figures": { "brush.voxel.padrao.mean": 25.16 },
+  "spread": { "brush.voxel.padrao.mean": { "n": 13, "min": 2.23, "median": 2.27, "p95": 52.06, "max": 52.25 } }
+}"#;
+        let read = parse(text).expect("parses");
+        assert!(read.samples.is_empty());
+        assert_eq!(read.spread["brush.voxel.padrao.mean"].n, 13);
+    }
+
+    #[test]
+    fn a_samples_entry_that_is_not_an_array_is_an_error() {
+        let text = r#"{
+  "conditions": {
+    "scenes": { "reference": "r1" },
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cpu",
+    "engine": "0.126.0",
+    "viewport": [1280, 800]
+  },
+  "figures": { "dab.median": 2.1 },
+  "samples": { "dab": 2.1 }
+}"#;
+        assert!(parse(text).is_err());
     }
 
     #[test]

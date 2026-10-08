@@ -489,6 +489,19 @@ Three things make the record trustworthy rather than merely present:
   no single process can sample it. The section is additive, so a baseline
   recorded before it existed still compares and simply cannot say how noisy it
   was.
+- **The samples themselves are kept, and a series starts from a settled
+  device.** A spread says how far apart the samples were; the `samples` section
+  beside it says which one was the far one, in the order taken, and a sample
+  more than three times the next largest in its series (and at least ten
+  milliseconds above it) is announced as it is taken. The run that needed it
+  is in `benchmarks/ci-gate.md`: for a week `brush.voxel.padrao.mean` tripped
+  the gate on one sample in thirteen while its median and p95 held, because
+  the harness never presents a frame, a field series' uploads were never
+  submitted, and the first flush of the next series carried their staging
+  (341 MB) and the release of their buffers into one of its samples. So
+  `Screen::prime` now flushes, waits for the device and marks it idle before
+  any sample is timed — the cost the application pays per frame, paid before
+  the clock starts rather than inside it.
 
 The `conditions` also name the engine's **revision** — the vendored submodule's
 `git describe`, stamped into the binary by `claycore-sys` — and not only its

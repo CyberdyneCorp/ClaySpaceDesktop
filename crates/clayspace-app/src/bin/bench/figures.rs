@@ -170,6 +170,66 @@ pub fn quantile(sorted: &[f64], q: f64) -> f64 {
     sorted[at]
 }
 
+/// One sample that stands apart from the rest of its series.
+///
+/// A gesture's samples rise across the stroke and a one-shot's three are
+/// alike, so in neither is the largest sample far from the next largest: on
+/// the Linux CI runner, which carries no load to speak of, no repeatable
+/// figure's largest sample exceeded 1.25x its second largest across a whole
+/// run (36635567473, 29 Sep) — until `brush.voxel.padrao` read 272 ms against
+/// 51 ms (36658810228, 30 Sep), one sample in thirteen, from a device release
+/// the harness had let land inside the series (see `visible::settle`). The
+/// mean carried it and the gate tripped; the median and the p95 did not move,
+/// so the figures alone could not say what had happened.
+///
+/// Three times the next largest sample, and at least ten milliseconds more
+/// than it: a sub-millisecond blip above a sub-millisecond series is not a
+/// stall anyone would feel, and the loaded macOS runner has those on every
+/// run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stall {
+    /// Which sample, counted from one in the order they were taken.
+    pub sample: usize,
+    pub ms: f64,
+    /// The largest of the others.
+    pub next: f64,
+}
+
+impl Stall {
+    const RATIO: f64 = 3.0;
+    const AT_LEAST_MS: f64 = 10.0;
+
+    /// The one sample that stands apart, or `None` where no sample does.
+    pub fn find(samples: &[f64]) -> Option<Self> {
+        if samples.len() < 3 {
+            return None;
+        }
+        let (at, &ms) = samples
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).expect("no NaN"))?;
+        let next = samples
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != at)
+            .map(|(_, &s)| s)
+            .fold(0.0_f64, f64::max);
+        (ms > next * Self::RATIO && ms - next >= Self::AT_LEAST_MS).then_some(Self {
+            sample: at + 1,
+            ms,
+            next,
+        })
+    }
+
+    /// `sample 6 of 13 took 80.21 ms; the next largest took 15.44`.
+    pub fn describe(&self, n: usize) -> String {
+        format!(
+            "sample {} of {n} took {:.2} ms; the next largest took {:.2}",
+            self.sample, self.ms, self.next
+        )
+    }
+}
+
 /// How a figure is taken.
 ///
 /// The one place the cost/noise trade-off is stated. A measurement declares
@@ -246,12 +306,15 @@ impl Record {
     /// measured repeatedly. These are a gesture's worth of different dabs, and
     /// what a sculptor pays for the gesture is their sum.
     pub fn figures(self, prefix: &str, samples: &[f64]) -> Vec<(String, Figure)> {
-        let mut samples = samples.to_vec();
-        samples.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
         if std::env::var_os("CLAYSPACE_BENCH_SAMPLES").is_some() {
+            // In the order they were taken, not sorted: a sorted line says
+            // how far apart the samples were, this one says *which* sample
+            // was the far one, and a stall is identified by its position.
             let each: Vec<String> = samples.iter().map(|s| format!("{s:.2}")).collect();
             println!("  {prefix}: {}", each.join(" "));
         }
+        let mut samples = samples.to_vec();
+        samples.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
         let at = |q: f64, tolerance: f64| Figure {
             tolerance,
             ..Figure::ms(quantile(&samples, q), None)
@@ -340,6 +403,42 @@ mod tests {
     fn a_spread_does_not_care_what_order_the_samples_arrived_in() {
         let spread = Spread::of(&[9.0, 1.0, 5.0]).expect("three samples");
         assert_eq!((spread.min, spread.median, spread.max), (1.0, 5.0, 9.0));
+    }
+
+    /// The series that tripped the gate, as the Linux runner took it on
+    /// 30 Sep: twelve ordinary samples and one that paid for something else.
+    #[test]
+    fn a_stall_is_named_by_its_position_in_the_series() {
+        let measured = [
+            1.70, 50.99, 51.10, 51.28, 51.05, 272.05, 50.80, 1.75, 1.72, 1.71, 1.70, 1.74, 1.69,
+        ];
+        let stall = Stall::find(&measured).expect("one sample stands apart");
+        assert_eq!(stall.sample, 6);
+        assert_eq!(stall.ms, 272.05);
+        assert_eq!(stall.next, 51.28);
+        assert_eq!(
+            stall.describe(13),
+            "sample 6 of 13 took 272.05 ms; the next largest took 51.28"
+        );
+    }
+
+    /// A gesture's samples rise across the stroke; the last being the largest
+    /// is the shape of the measurement, not a stall.
+    #[test]
+    fn a_rising_gesture_is_not_a_stall() {
+        let measured = [
+            43.29, 67.28, 75.15, 95.92, 115.59, 109.89, 127.37, 145.16, 226.51, 296.05, 359.64,
+            446.95,
+        ];
+        assert_eq!(Stall::find(&measured), None);
+    }
+
+    /// A sub-millisecond series with a one-millisecond sample is three times
+    /// its neighbours and nothing anyone would feel; two samples cannot say.
+    #[test]
+    fn a_blip_above_a_sub_millisecond_series_is_not_a_stall() {
+        assert_eq!(Stall::find(&[0.3, 0.3, 0.3, 1.0, 0.3]), None);
+        assert_eq!(Stall::find(&[10.0, 40.0]), None);
     }
 
     #[test]

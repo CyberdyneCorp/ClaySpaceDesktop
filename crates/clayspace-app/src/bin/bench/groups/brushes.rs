@@ -175,8 +175,21 @@ fn time(
     document
         .apply_stroke(tool, scene.brush(), segment, SYMMETRY)
         .map_err(|_| Skip::EditRefused)?;
+    let edited = started.elapsed();
     screen.refresh(gpu, document)?;
-    Ok(ms(started.elapsed()))
+    let total = started.elapsed();
+    if std::env::var_os("CLAYSPACE_BENCH_PHASES").is_some() {
+        // One line per sample, under the series' line of samples: which
+        // phase a slow one spent its time in. This is what named the flush
+        // behind the `brush.voxel.padrao` stall (see `visible::settle`).
+        println!(
+            "    {tool:?}: total={:.2} edit={:.2} {}",
+            ms(total),
+            ms(edited),
+            screen.describe_laps()
+        );
+    }
+    Ok(ms(total))
 }
 
 #[cfg(test)]

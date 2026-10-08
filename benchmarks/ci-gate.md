@@ -145,3 +145,73 @@ from 5,040 to 3,360 on `reference` and from 84,672 to about 25,000 on
 CyberdyneCorp/ClayCore#666. Both committed baselines
 carry `object.drag_frame_intersect`, recorded before the change, so the gate
 holds it to the old figure until they are re-recorded.
+
+## The stalled voxel dab
+
+From 30 Sep to 7 Oct every Performance job, on both runners, failed or nearly
+failed `brush.voxel.padrao.mean` while the figure's own median and p95 sat
+where the baseline put them. The spread section said why: one sample in
+thirteen.
+
+| run | tree | runner | mean | min / median / p95 / **max** (ms) |
+|---|---|---|---:|---|
+| 36635567473, 29 Sep | `db9a000` (#310) | `macos-14` | 19.1 | 0.81 / 13.6 / 39.4 / 48.9 |
+| same | same | `ubuntu-24.04` | 25.2 | 2.23 / 2.27 / 52.1 / 52.3 |
+| 36658810228, 30 Sep | `b0d54a8` (#315) | `macos-14` | 74.2 | 0.99 / 25.9 / 32.3 / **772** |
+| same | same | `ubuntu-24.04` | 45.3 | 1.70 / 51.0 / 51.3 / **272** |
+| 37569795577, 7 Oct | #316 | `macos-14` | 145.5 | 4.45 / 27.4 / 43.3 / **1,652** |
+| same | same | `ubuntu-24.04` | 40.7 | 1.44 / 50.5 / 50.8 / **216** |
+| 37608653014, 7 Oct | `0999dc6` (#316 on main) | `macos-14` | 165.4 | 1.01 / 24.5 / 30.1 / **1,968** |
+| same | same | `ubuntu-24.04` | 46.9 | 1.68 / 51.9 / 52.4 / **286** |
+
+The Linux baseline holds the mean at 25.16 ms; 4.5x of that is 113 ms, and a
+single 270 ms sample in a thirteen-sample mean adds 17 ms. The median hid it,
+the p95 (the second largest of thirteen) hid it, and the mean carried it. The
+figure read clean on an Apple M3 Pro with Metal (`--only brush.voxel.padrao`,
+max 15 ms) and clean on the same machine with the engine CPU-only — and
+stalled, sample 6 of 13 at 80 ms against 15 ms for its neighbours, as soon as
+the whole `brush` group ran: it needed the twelve field brushes to run first.
+
+**The cause was in the harness.** The benchmark never presents a frame. A field
+series writes its re-meshed bricks with `write_buffer` and nothing submits
+them, so wgpu holds every write's staging as a pending write: 341 MB of it,
+read off the device ledger, when the grid's first series began. The grid's and
+the mesh's route is `set_mesh_layers`, which has flushed its writes in an empty
+submission since #311 (`18b7ce3`, the one commit in the window that touches a
+submission). The first flush of the voxel series therefore carried the field
+series' whole staging and the deferred release of every buffer they had
+dropped; the device finished that a few samples later, and the sample whose
+flush found it finished paid the release — 66 of its 80 ms were inside
+`flush_writes`, with the engine's dab, the re-smooth, the meshing and the
+vertex build all at their usual cost. Before #311 the same staging leaked
+instead of being carried, which is the growth #311 was fixing; the run of
+29 Sep is the last before it.
+
+Every series now starts from a settled device: `Screen::prime` flushes the
+writes, waits for the device and marks it idle, so what an earlier series left
+pending is paid before the clock starts, as the application pays it per
+frame. Measured on the M3 Pro CPU-only, `brush.voxel.padrao` went from
+`1.79 14.97 15.32 15.10 80.21 15.44 15.22 0.56 ...` to
+`0.59 14.51 14.78 14.81 15.04 14.77 14.75 0.55 ...`, and the ledger at the
+series' start from 341 MB to 7 MB. `brush.voxel.suavizar.ms` had the same
+stall in one of its three rebuilt samples on macOS (1,328 and 2,121 ms against
+30 and 46), hidden by its median; it goes with it. The bench's own test
+`a_primed_screen_carries_nothing_the_series_before_left_pending` fails with
+the settle removed.
+
+**What the artifact now says.** Three things, so the next sample that stands
+apart is identified by the run that took it rather than reproduced a week
+later:
+
+- `now.json` carries a `samples` section beside `spread`: every sample of every
+  timed measurement, in the order taken, under the measurement's prefix.
+- A sample more than three times the next largest in its series, and at least
+  ten milliseconds above it, is announced in `report.txt` as it is taken —
+  `brush.voxel.padrao: sample 6 of 13 took 272.05 ms; the next largest took
+  51.28`. On the Linux runner of 29 Sep no repeatable figure's largest sample
+  exceeded 1.25x its second largest, so on that runner the line means
+  something; the loaded macOS runner produces one or two a run on its own.
+- `CLAYSPACE_BENCH_SAMPLES=1` prints each series as it is taken, and
+  `CLAYSPACE_BENCH_PHASES=1` prints each brush sample's phases (the engine
+  edit, the re-smooth, the meshing, the mask, the vertex build and the
+  upload), which is how the flush was named.
