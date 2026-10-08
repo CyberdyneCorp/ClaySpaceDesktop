@@ -15,6 +15,8 @@
 //! called at least once, and the assertions are about consequences — how far a
 //! vertex moved, which chunks went dirty, what a refusal *named*.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use claycore::{
     DetailMode, DynamicDesc, DynamicError, DynamicSession, DynamicSurface, DynamicTopology,
     MaintenanceKind, MaintenanceQueue, Mask, MeshBrush, MeshStamp, Pressure, SculptMemoryProfile,
@@ -323,6 +325,144 @@ fn a_stamp_changes_connectivity_and_says_so() {
         sculptor.surface().stats().expect("stats").faces > faces_before,
         "splits create faces, and the census is where that is visible rather \
          than only in the report that claimed it"
+    );
+}
+
+/// A vertex by its position bits, which two exports of one surface agree on
+/// exactly, so connectivity can be compared across a stamp without a vertex
+/// identity the export does not carry.
+type Corner = [u32; 3];
+
+/// A mesh's connectivity read off its export: every triangle as a sorted
+/// triple of corners, and every vertex's one-ring as the corners it shares an
+/// edge with.
+struct Connectivity {
+    faces: BTreeSet<[Corner; 3]>,
+    rings: BTreeMap<Corner, BTreeSet<Corner>>,
+}
+
+impl Connectivity {
+    fn of(mesh: &claycore::Mesh) -> Self {
+        let positions = mesh.positions();
+        let mut faces = BTreeSet::new();
+        let mut rings: BTreeMap<Corner, BTreeSet<Corner>> = BTreeMap::new();
+        for triangle in mesh.indices().chunks_exact(3) {
+            let mut corners = [0, 1, 2].map(|i| positions[triangle[i] as usize].map(f32::to_bits));
+            for i in 0..3 {
+                let ring = rings.entry(corners[i]).or_default();
+                ring.insert(corners[(i + 1) % 3]);
+                ring.insert(corners[(i + 2) % 3]);
+            }
+            corners.sort_unstable();
+            faces.insert(corners);
+        }
+        Self { faces, rings }
+    }
+
+    /// The triangles whose corners all stand farther than `support` from the
+    /// sheet's centre, measured in the sheet's own plane.
+    fn beyond(&self, support: f32) -> BTreeSet<[Corner; 3]> {
+        self.faces
+            .iter()
+            .filter(|face| face.iter().all(|corner| in_plane(*corner) > support))
+            .copied()
+            .collect()
+    }
+}
+
+/// How far a corner stands from the origin in the sheet's xz plane, so a
+/// vertex the stamp lifted is measured by where it stands under the brush
+/// rather than by how high it was pushed.
+fn in_plane(corner: Corner) -> f32 {
+    let [x, _, z] = corner.map(f32::from_bits);
+    (x * x + z * z).sqrt()
+}
+
+/// The representation's locality contract (#216): a stamp changes
+/// connectivity under the brush and nowhere else.
+///
+/// The engine adapts every edge of a face with a corner inside the brush
+/// radius grown by a quarter — the query margin that keeps the rim of a
+/// stamp from being a ring of edges nobody adapts — and a split re-cuts the
+/// face across the edge too, so the farthest a changed triangle's nearest
+/// corner can stand is that query radius plus one edge of the surface.
+/// Measured on a 16×16 sheet whose edges are 0.25 long, a splitting Draw of
+/// radius 0.75 (396 splits, 53 flips) rewrote triangles whose nearest corner
+/// reached 1.179 from its centre, against the 1.1875 line, and none beyond:
+/// 1,080 triangles changed and the 342 past the line did not.
+/// Beyond that line every triangle is the same triangle, and a vertex whose
+/// whole one-ring stands beyond it keeps that ring — a ring changes only
+/// through a changed incident triangle, and the vertex just past the line
+/// that gains a split midpoint through the triangle straddling it is the
+/// rim, not a leak. A remesh that ever ran over the whole surface, or moved
+/// vertices the brush did not reach, fails here.
+#[test]
+fn a_stamp_changes_topology_only_inside_its_support() {
+    let edge = 2.0 * 2.0 / 16.0;
+    let radius = 3.0 * edge;
+    let support = radius * 1.25 + edge;
+    let mut surface = adaptive(16);
+    let before = Connectivity::of(&surface.to_mesh().expect("the sheet exports"));
+
+    let report = surface
+        .sculptor()
+        .expect("sculptor")
+        .stamp(
+            MeshStamp { radius, ..draw() },
+            Some(&splitting_topology()),
+            None,
+        )
+        .expect("a splitting Draw in the middle of the sheet");
+    assert!(
+        report.split_edges > 0,
+        "the stamp has to remesh for this to pin anything"
+    );
+
+    let after = Connectivity::of(&surface.to_mesh().expect("the sheet exports"));
+    let changed: Vec<_> = before
+        .faces
+        .symmetric_difference(&after.faces)
+        .copied()
+        .collect();
+    assert!(!changed.is_empty(), "a split is a changed triangle");
+
+    let reach = changed
+        .iter()
+        .map(|face| {
+            face.iter()
+                .map(|c| in_plane(*c))
+                .fold(f32::INFINITY, f32::min)
+        })
+        .fold(0.0, f32::max);
+    assert!(
+        reach <= support,
+        "a triangle changed whose nearest corner stands {reach} from the stamp, \
+         past the remesh query radius {} plus one edge {edge}: the remesh ran \
+         outside the brush",
+        radius * 1.25
+    );
+    assert_eq!(
+        before.beyond(support),
+        after.beyond(support),
+        "every triangle beyond the support is the same triangle afterwards"
+    );
+    let beyond = |corner: &Corner| in_plane(*corner) > support;
+    for (corner, ring) in before
+        .rings
+        .iter()
+        .filter(|(c, ring)| beyond(c) && ring.iter().all(beyond))
+    {
+        assert_eq!(
+            after.rings.get(corner),
+            Some(ring),
+            "a vertex {} from the stamp, whose ring stands beyond the support, kept it",
+            in_plane(*corner)
+        );
+    }
+    eprintln!(
+        "{} triangles changed, reaching {reach:.3} from the stamp; {} beyond {support:.3} unchanged",
+        changed.len(),
+        after.beyond(support).len()
     );
 }
 

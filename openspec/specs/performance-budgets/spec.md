@@ -403,3 +403,15 @@ identified by the run that took it.
 #### Scenario: One sample stands apart
 - **WHEN** a series of thirteen reads 1.70, 50.99, 51.10, 51.28, 51.05, 272.05, 50.80 and six samples under 2 ms
 - **THEN** the run announces sample 6 of 13 at 272.05 ms against a next largest of 51.28
+
+### Requirement: A Dynamic stroke is benchmarked at two sizes
+The benchmark SHALL measure a Dynamic stroke on a fixture at two sizes of the
+same density, 100,352 and 1,002,528 triangles: the steady dab of an open
+stroke with the surface arriving, the drawing half on its own, and the bytes
+each dab uploads. The drawing half SHALL be held to the 16 ms frame budget at
+both sizes, the whole dab SHALL be held to it on the smaller fixture, and the
+larger fixture's bytes per dab SHALL be at most twice the smaller's.
+
+#### Scenario: Upload volume does not follow the model
+- **WHEN** the `dynamic` group runs
+- **THEN** `dynamic.upload_scaling` is at most 2 and `dynamic.upload_100k` and `dynamic.upload_1m` are within 16 ms

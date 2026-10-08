@@ -204,7 +204,25 @@ surface out afresh.
 triangles and 327 KB at 1,002,528 against 7.9 MB and 70.3 MB for the whole
 region (debug test); in the release benchmark 175 KB and 194 KB a dab, the
 drawing half 0.29 ms mean at both sizes, the whole dab of an open stroke 11.1 ms
-at 100k (held to 16 ms) and 15.3 ms at 1M.
+at 100k (held to 16 ms) and 15.3 ms at 1M. Re-measured on ClayCore v0.126.0
+(Apple M3 Pro, Metal, machine shared): 174.6 and 194.2 KB a dab, scaling 1.11,
+the drawing half 0.22 and 0.24 ms mean, the whole dab 10.34 ms mean (p95
+11.74) at 100k and 14.66 ms (p95 17.41) at 1M.
+
+### Locality (#216)
+
+The remesh is local by the engine's construction: `remesh_region` gathers the
+faces with a corner inside the brush radius grown by a quarter (the query
+margin that keeps a stamp's rim from being a ring of edges nobody adapts) and
+adapts their edges; a split re-cuts the face across the edge as well. So a
+changed triangle's nearest corner can stand at most that query radius plus one
+edge of the surface from the stamp, and nothing beyond it changes.
+`a_stamp_changes_topology_only_inside_its_support` pins that at the wrapper
+boundary by comparing the exported triangles and one-rings by position before
+and after one splitting Draw: measured reach 1.179 against the 1.1875 line on
+a 16×16 sheet with 0.25 edges and a 0.75 brush, 396 splits and 53 flips, every
+triangle beyond the line unchanged and every vertex whose one-ring stands
+wholly beyond it keeping that ring.
 
 **Limits.** A surface carrying vertex colour is still copied whole when it
 moves: neither `clay_dynamic_surface_copy_chunk` nor

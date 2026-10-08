@@ -38,3 +38,16 @@ on a Dynamic layer that carries no vertex colour rather than remeshing it.
 #### Scenario: Paint over a surface with no colour is refused
 - **WHEN** Paint is applied to a Dynamic layer read from a mesh without vertex colour
 - **THEN** the stroke is refused as a missing attribute and the surface and history are unchanged
+
+### Requirement: Dynamic topology changes stay local
+A stamp on a Dynamic surface SHALL change connectivity only within the brush's
+support: the engine's remesh query, which is the brush radius grown by a
+quarter so the edges at a stamp's rim are adapted, plus one edge of the
+surface for the face a split re-cuts across the edge. Beyond that distance
+every triangle SHALL be the same triangle afterwards, a vertex whose whole
+one-ring stands beyond it SHALL keep that one-ring, and every triangle the
+stamp creates or removes SHALL have a corner within it.
+
+#### Scenario: One stamp on a sheet
+- **WHEN** one splitting Draw stamp lands in the middle of a flat adaptive sheet
+- **THEN** the triangles beyond the query radius plus one edge are unchanged, every vertex whose one-ring stands wholly beyond it keeps that ring, and every triangle that changed has a corner within that distance
