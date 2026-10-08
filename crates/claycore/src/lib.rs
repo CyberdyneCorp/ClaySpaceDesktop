@@ -56,8 +56,8 @@ pub mod trace;
 mod voxel;
 
 pub use authoring::{
-    Blend, Influence, LayerInfo, LayerRepresentation, LayerTransform, Op, Protection, UndoState,
-    Undone,
+    Blend, GroupCombine, Influence, LayerInfo, LayerRepresentation, LayerTransform, NodeMirror, Op,
+    Protection, UndoState, Undone,
 };
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{
@@ -108,8 +108,8 @@ pub fn has_entry_point(name: &str) -> bool {
     ENTRY_POINTS.binary_search(&name).is_ok()
 }
 pub use document::{
-    prim, ArmatureEdit, Document, FormatVersion, GizmoCage, Item, LayerId, NodeId, PointType,
-    Primitive, Profile,
+    prim, ArmatureEdit, Document, FormatVersion, GizmoCage, Item, LayerId, MirrorAxes, NodeId,
+    PointType, Primitive, Profile,
 };
 pub use error::{ClayError, ErrorKind, Result};
 pub use live::{

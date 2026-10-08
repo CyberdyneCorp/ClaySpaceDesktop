@@ -680,6 +680,10 @@ pub struct ToolState {
     pub radius: f32,
     pub strength: f32,
     pub falloff: String,
+    /// The axes the next stroke, curve or placement is mirrored across.
+    ///
+    /// What the brush makes *next*: every item carries the axes it was made
+    /// under, so changing these leaves existing items as they are.
     pub symmetry: Vec<String>,
     pub representation: String,
     /// Which frequency a smooth acts on, where that is a choice: `form`,

@@ -577,83 +577,101 @@ the same reason the rig's item stays out of the layer mirror, so a stroke made
 with symmetry on on the rig's subtool mirrors the stroke and never gives a
 sphere added one-sided a twin (#170, A5).
 
-The setting and the engine's mirror are two things, and the mirror is written
-by the stroke that wants it rather than by the toggle that asked for it.
-Pointing a layer mirror is an *edit* — measured, `clay_set_layer_mirror` takes
-the undo depth from 0 to 1 — so it belongs inside the gesture, where the
-ViewModel counts it and one undo spends it along with the rest. Written beside
-the gesture, it would sit on the engine's stack unaccounted, and the next undo
-would spend itself on the mirror and leave part of the stroke standing.
-
-A document reopened from disk records symmetry as **off** on every subtool, and
-so does a fresh subtool's record of what the engine has been told. The file
-does keep the mirror — measured, an item mirrored before a save is still
-mirrored after a reopen — but the ABI has no call that reads one back, so what
-is recorded here is an assumption either way. Off is the assumption that
-changes nothing: the first stroke that wants otherwise writes through, and
-writing the default over what was loaded would be worse, since a mirror applies
-to items added before the call as well as after and a form saved unmirrored
-would come back mirrored.
-
 **Symmetry mirrors what is made while it is on, not what was already there.**
-The layer's mirror reflects every item that takes part in it, whenever that
-item was made, so each item is told when it is made: a stroke's stamps, a
-Puxar tendril, a curve and a placed object made with symmetry off stay out of
-every mirror the layer is given later (`clay_item_set_mirror`). Before this a
-lump sculpted one-sided grew a twin as soon as the next stroke turned the
-mirror on, and a box placed one-sided became two (#170). A curve and a placed
-object made with symmetry on point the layer's mirror themselves, in the same
-undo group as the item, so they are mirrored from the start; before, a curve
-stayed one-sided until some brush stroke happened to write the mirror.
+Every item this application makes — a stroke's stamps, a Puxar tendril, a
+curve, a placed object — carries the mirror axes symmetry had when it was
+made (`clay_item_set_mirror_axes`, ClayCore v0.126.0), and the engine
+reflects it through those whatever the layer's mirror is pointed at now or
+later. So turning symmetry on leaves a one-sided lump one-sided, turning it
+off or moving it to Z leaves a lump made under X with its X twin and no Z
+twin, and the same holds through a save and a reopen (format minor 20 carries
+the axes). Before this, participation was one flag per item and the axes were
+the layer's: a lump sculpted one-sided grew a twin as soon as the next stroke
+turned the mirror on, a box placed one-sided became two, and a lump made
+under X lost its twin at the first Move with symmetry off or the first
+stroke with another axis (#170). Measured on the starting sphere with a
+radius-0.3 lump at x 1.8: the twin at −1.8 is solid after a Move with
+symmetry off, after a Z stroke and a Z drag, and after a reopen followed by a
+Z drag, where each of those took it away before. A curve or a placed object
+made with symmetry on is mirrored from the moment it is placed, in one undo
+step; before, a curve stayed one-sided until some brush stroke happened to
+write the layer's mirror. The rig's item carries no axes, since it mirrors
+itself, and so does a cut, which is drawn in the sculptor's own sight.
 
-A real mirror change refills the reflections it moved, under the mirror the
-layer had **and** the one it gets. The reflections the old mirror made leave
-the field outside the stroke's own region, and refilling only that region left
-them drawn — on a hidden subtool too, since hiding refills only what the layer
-reaches now. Only nodes whose influence bound changed with the mirror are
-marked, and only their reflected boxes, so turning symmetry off on the starting
-sphere (whose reflection is itself) costs nothing extra; marking the whole
-layer re-meshed all 1043 of its keys on the next dab. The gap is a node whose
-box is symmetric about the plane while its shape is not.
+The layer's own mirror (`clay_set_layer_mirror`) now reaches only the items
+that *inherit* it: the starting form, the base shape of a subtool inserted as
+a shape, and every item of a document saved before this. Only two verbs
+write it — Mover and Pinçar, inside their own gesture, at the symmetry the
+gesture is made with — because the engine reflects a drag or a magnify into
+every image of the items under it, and for an inheriting item those images
+are the layer's. Pointing it is an *edit* (measured, `clay_set_layer_mirror`
+takes the undo depth from 0 to 1), which is why it lands inside the gesture
+where one undo spends it along with the grab, and why a history step forgets
+the host's record of it and the next drag reads it back. Nothing else writes
+it: a stamping stroke, a pull, a curve, a placement and the bake verbs
+(Suavizar, Planar, Mover Topológico, which the layer mirror never reaches and
+which are reflected by hand) leave it as it stands, so a symmetry change
+costs them no engine edit.
 
-**Turning symmetry off keeps the twins.** A verb whose whole effect is items
-it adds — a stamping stroke, a Puxar pull, a curve, a placed object — and the
-bake verbs (Suavizar, Planar, Mover Topológico, whose bakes the layer mirror
-never reaches) leave the layer's mirror where it stands when symmetry is off:
-what they make stays out of it anyway, and writing the mirror off took the far
-side away from every lump sculpted while it was on (#170). Move and Pinçar
-still write it off, because the engine reflects a drag or a magnify into every
-image of an item that takes part: with the mirror kept, a one-sided drag on the
-starting sphere moved both sides. So the first Move or Pinçar with symmetry off
-still turns a mirrored lump one-sided.
+**What a drag does to a mirrored item.** The starting form inherits the
+layer's mirror on purpose: it is the body a sculptor drags with symmetry off
+to pull one side out, and a Move with symmetry off moves the side it touched
+alone (measured, the far side of the plane does not move). An item made
+under symmetry is one item with its reflections, and a drag or a magnify
+that reaches it moves both images together whatever symmetry the gesture is
+made with — the engine's rule for an item carrying its own axes, and the
+reason the base sphere is not given axes of its own. Measured, a Move with
+symmetry off on a lump made under X moves the lump and its twin by the same
+amount, where before it moved the lump alone and took the twin away.
 
-Still open on #170, all waiting on the engine: that Move/Pinçar exception, and
-moving symmetry to another axis, re-point the layer's mirror and so still
-change items made under the old one, because an item's participation is one
-bool and a host cannot express a reflected copy to bake it (ClayCore #664); and
-a Move drag exactly on the mirror plane is applied once per image, 1.58x the
-unmirrored pull, because on the plane the reflected image is the drag itself
-(ClayCore #663, pinned by the ignored `a_move_on_the_plane_is_applied_once`).
+A real change of the layer's mirror refills the reflections it moved, under
+the mirror the layer had **and** the one it gets. The reflections the old
+mirror made leave the field outside the gesture's own region, and refilling
+only that region left them drawn — on a hidden subtool too, since hiding
+refills only what the layer reaches now. Only nodes whose influence bound
+changed with the mirror are marked, and only their reflected boxes: an item
+carrying its own axes has the same bound either way and is skipped, so a
+layer of such items costs nothing on the change. The gap is a node whose box
+is symmetric about the plane while its shape is not.
 
-On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
-the layer's items, so both halves belong to one operation and undo together.
-That covers the brushes that *add* an item: Padrão, Inflar, Camada and Puxar.
-It also covers Pinçar, which adds none — the engine reflects a magnify's region
-into every image the layer emits and carries the strength across each one
-untouched, so pointing the mirror is the whole of what symmetry means for it
-too.
+A magnify dirties the ball under the union of the layer's mirror and every
+axis an item on the layer carries as its own, read through
+`clay_layer_node_mirror`, because a magnify made with symmetry off still
+reaches the far side of an item that kept X. A Move takes its regions from
+`clay_layer_move_surface_regions`, which already covers such a twin.
+
+A Move drag exactly on the mirror plane is applied once (#170, F10). On the
+plane the reflected image is the drag itself, and through ClayCore v0.120.1
+the engine gave the item one grab per image, 0.2307 against 0.1458 unmirrored
+(1.58x); v0.126.0 (#669) resolves coincident images as one grab, and
+`a_move_on_the_plane_is_applied_once` measures +0.1458 either way on this
+machine (Apple Silicon, the default backend).
+
+A document reopened from disk records symmetry as **off** on every subtool,
+which is the toggle's state, not the items': each item comes back with the
+axes it was saved with, and the first drag that wants another layer mirror
+writes it.
+
+On a **field**, through the item's own mirror axes — the engine reflects an
+item through the axes it carries, so both halves belong to one item and undo
+together. That covers the brushes that *add* an item: Padrão, Inflar, Camada
+and Puxar. Pinçar adds none: the engine reflects a magnify's region into every
+image of the items it reaches and carries the strength across each one
+untouched, so its symmetry is the layer's mirror for an inheriting item and
+the item's own axes otherwise.
 
 The three that **rewrite the field** rather than adding an item — Mover,
-Suavizar and Planar — cannot be reached by the layer's mirror.
+Suavizar and Planar — cannot be reached by an item's mirror.
 Measured, a relax with X mirrored took the surface under the stroke from 1.1467
 to 1.1409 and left its reflection at **1.1467 exactly**. Their strokes are
-reflected instead, the way a mesh's and a grid's are.
+reflected instead, the way a mesh's and a grid's are; Mover alone leans on the
+layer's mirror, for the drag images of the items that inherit it.
 
 All six of those used to bypass the symmetry argument entirely, and the fault
 ran both ways: never *setting* the mirror, they inherited whatever it was last
 told, and the starting form turns X on — so a snakehook with symmetry switched
-**off** came out on both sides at 1.4625. Every SDF stroke points the mirror
-now.
+**off** came out on both sides at 1.4625. Every SDF stroke carries its
+symmetry now.
 
 On a **mesh**, a **grid** and a **hierarchy**, by mirroring the *stroke* and
 applying it again. There is nothing else to reach for: the layer mirror

@@ -481,27 +481,38 @@ fn the_surface_the_viewport_draws_swaps_with_the_gesture() {
     assert_ne!(document.surface_epoch(), opened);
 }
 
+/// A smooth is a bake the layer's mirror never reaches, and its dabs are
+/// reflected by hand, so opening its gesture under a symmetry the layer does
+/// not carry writes nothing to the layer — there is no entry for an abandoned
+/// gesture to owe, and the layer's mirror is where it was. Before items
+/// carried their own axes (#170) the opening pointed the layer's mirror, and
+/// this test pinned that the entry was taken back.
 #[test]
-fn a_gesture_that_changes_the_mirror_takes_it_back_when_abandoned() {
+fn a_gesture_opened_under_another_symmetry_writes_nothing_to_the_layer() {
     let mut document = sphere();
+    let key = document.scene().active_layer().expect("a layer").key;
+    let layer = document.layer_id(key).expect("its engine id");
     let before = document.history().depth;
 
-    // Symmetry the layer does not already have, so opening the gesture points
-    // the mirror — an edit, and one made *before* the transaction begins
-    // because an edit after it begins is one the commit refuses. Another axis
-    // rather than none: a smooth with symmetry off leaves the mirror as it
-    // stands (#170).
     assert!(document.open_live_gesture(ToolKind::Suavizar, [false, true, false]));
     assert_eq!(
         document.history().depth,
-        before + 1,
-        "pointing the mirror is an entry, and this test is about that entry"
+        before,
+        "opening a smooth recorded an entry; a smooth has nothing to write to \
+         the layer before its transaction begins"
+    );
+    let (carried, _) = document
+        .document()
+        .layer_mirror(layer)
+        .expect("the layer answers");
+    assert_eq!(
+        carried, STARTING_SYMMETRY,
+        "opening a smooth moved the layer's mirror"
     );
 
     let owed = document.discard_live_gesture();
     assert_eq!(
-        owed, 1,
-        "an abandoned gesture has to report what its opening wrote, or the \
-         symmetry change outlives the stroke that asked for it"
+        owed, 0,
+        "an abandoned gesture reported opening entries it never wrote"
     );
 }
