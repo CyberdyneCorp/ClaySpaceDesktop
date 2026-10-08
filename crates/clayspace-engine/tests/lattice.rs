@@ -1113,6 +1113,62 @@ fn a_mesh_drag_reports_what_its_frame_cost_and_what_it_was_given() {
     assert_eq!(document.lattice().preview_micros, None);
 }
 
+/// What the specification allows an engine operation to hold the interface
+/// thread for.
+const FRAME_BUDGET_MS: f64 = 16.0;
+
+/// How far over the budget a frame may measure before it is a failure.
+///
+/// Ten is the CI performance gate's own scale for a hosted macOS runner
+/// (`benchmarks/ci-gate.md`): a three-core virtual machine at a load of four
+/// to eight per core measures its own load, and a one-shot figure there reads
+/// up to twenty times a workstation's. The line is on the far side of that
+/// noise and well short of the fault: the whole-cage sum this guards against
+/// put the same frame at about 1.7 s on this mesh, more than ten times the
+/// line, and the per-axis basis cannot reach it.
+const FRAME_MARGIN: f64 = 10.0;
+
+#[test]
+fn one_corner_of_the_largest_cage_holds_a_frame() {
+    // Issue #176's first acceptance criterion, held at the engine: a drag on
+    // one control point of a 32³ cage is priced by that point and not by the
+    // 32,768 the cage holds. Through ClayCore v0.120.1 the evaluation summed
+    // every point and this frame cost about 1.7 s on the 62,576-vertex
+    // starting mesh; from v0.126.0 (ClayCore#655) it sums the dragged points
+    // alone. Measured here on that pin, Apple M3 Pro, engine only, best of
+    // six frames with the machine under load: 9.9 ms at 32³ against 7.5 ms
+    // at 3³ and 7.7 ms at 8³, the difference being the per-axis basis.
+    //
+    // The fastest frame, so a scheduler hiccup on one cannot make the figure:
+    // a shared machine only ever adds time, and the minimum is the frame
+    // closest to the work.
+    let mut document = meshed();
+    document.begin_lattice([32, 32, 32]).expect("a cage");
+    document.select_lattice_point(Some(0));
+    let start = document.lattice().points[0];
+    let frames: Vec<f64> = (1..=6)
+        .map(|frame| {
+            let by = 0.01 * frame as f32;
+            document
+                .drag_lattice_point([start[0] + by, start[1] - by, start[2]])
+                .expect("the drag was refused");
+            let cage = document.lattice();
+            assert_eq!(cage.dragged, 1, "one point was dragged");
+            cage.preview_micros.expect("a mesh preview frame ran") as f64 / 1000.0
+        })
+        .collect();
+    let best = frames.iter().copied().fold(f64::INFINITY, f64::min);
+    println!(
+        "one corner of a 32³ cage on 62,576 vertices: frames {frames:.2?} ms, best {best:.2} ms"
+    );
+    assert!(
+        best <= FRAME_BUDGET_MS * FRAME_MARGIN,
+        "the fastest of six 32³ single-point frames took {best:.2} ms against \
+         a {FRAME_BUDGET_MS} ms budget with {FRAME_MARGIN}x of margin: the cage \
+         is being priced by the points it holds again"
+    );
+}
+
 #[test]
 fn a_field_cage_reports_no_preview_cost() {
     // A field's preview is the viewport displacing what it already drew, not
