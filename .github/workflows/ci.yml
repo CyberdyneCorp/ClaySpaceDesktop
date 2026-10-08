@@ -73,14 +73,23 @@ jobs:
     # A cache goes cold on eviction, on a lockfile bump and on a toolchain
     # update, and a budget that only holds while it is warm is a gate that
     # fails for reasons that have nothing to do with the change under test.
-    # Seventy-five covers the cold case with margin and still measures one
-    # profile of one configuration, so a regression in either shows up as
+    # Seventy-five covered the cold case with margin and still measured one
+    # profile of one configuration, so a regression in either showed up as
     # itself.
     #
-    # If this is approached again, the build is where to look and not the
-    # suite: it is twenty of the forty-eight minutes with a cache and thirty
-    # without one.
-    timeout-minutes: 75
+    # It was approached again, and the build is where it went: on 7 October
+    # 2026 `macOS, Metal (release)` was cancelled at 75:00 on four PRs in a
+    # row, each with a restored cache --
+    #
+    #     build   32 min   the workspace in release on a three-core runner,
+    #                      the restored ccache sparing only the engine
+    #     tests   42 min   and still running
+    #
+    # -- against the 20 + 28 the number was set from, with the engine at
+    # v0.126.0 and the suite at some 3,230 tests. The runner, not the change
+    # under test, is what moved. One hundred and twenty is the measured pair
+    # plus the same margin seventy-five carried, and it still fails on a hang.
+    timeout-minutes: 120
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
       # worth seeing next to a green CPU run — and now a release-only one is
