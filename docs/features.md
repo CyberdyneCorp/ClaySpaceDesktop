@@ -2692,7 +2692,12 @@ This is also what the audit's I14 row measured: `set_grid_display` at 169–349
 ms "with no visible grid layer", on a build that still smoothed the hidden
 ones. Through the running application, the change now costs under 0.03 ms and
 uploads nothing with no grid in view. Shown, six sculpted grids cost about
-52 ms. `agent_end_to_end.rs` holds the hidden case (#196, I14).
+52 ms. `agent_end_to_end.rs` holds the hidden case (#196, I14). The row is
+closed on that evidence: two later attempts on main — a Metal session with no
+grid, and the command route over 33 visible SDF layers, 512 placed spheres and
+no grid — measured 0.034–0.050 ms a call with nothing uploaded, and the
+tripwire through the window holds the audit's shape with six sculpted grids
+hidden. The figure the audit took was the hidden-grid smoothing above.
 
 **Suavização** is the engine's `blur`, in passes of a 3×3×3 box over occupancy,
 and its trade is real in both directions. At **0** nothing is filtered and
@@ -3105,6 +3110,41 @@ first frame and on every frame after it. On the mesh reference scene the first
 drag frame took 56.9 ms, 47.3 ms of it re-meshing 1,049 unchanged bricks. It
 now takes 4.7 ms, almost all of it the carried rebuild (#196, D14). A field
 subtool still refills where it stood and where it went.
+
+**The first drag frame costs what every later one costs.** The frame was
+split by phase on an Apple M3 Pro (Metal, a shared machine) and compared with
+the second and third frame of the same drag. Release, frames one to three:
+the edit 0.24–0.28 ms, no brick synced, the carried rebuild 3.7–5.2 ms — read
+the layer from the engine 0.2, place its 148,122 vertices and normals 0.5,
+append 0.2–0.5, zip 0.75, upload 1.1–1.4, span bounds 0.55, flush 0.04–1.5 —
+3.5–5.5 ms in all, and the same on the second and third frame as on the first.
+Nothing is built lazily on the first frame: the one-time costs, the GPU
+buffers' allocation (2.6 ms) and the first touch of a fresh vertex buffer
+(16.6 ms), belong to the carried build at scene open, before any drag. A
+placed object's press is the same shape: meshing its primitive alone 3.4–5.9
+ms, posing 0.6, upload 0.9, and the second press reads as the first. A debug
+build runs the same per-vertex loops at 71–431 ms a frame, which is the
+profile and not the drag. Through the running application, the first
+`transform/drag` after `transform/set_mode` on an SDF layer, on a mesh crossed
+from the field and on a placed object read 5.6–10.5 ms round trip, the same as
+the second; the audit's 1.1 s does not reproduce on this build, and what it
+most plausibly was — the refill on the first frame, 45–98 ms on an object and
+50–57 ms on every mesh frame — is what the carried-subtool change above and
+the object preview below removed. The
+frame is proportional to the mesh: drawing a carried drag through a per-span
+transform on the GPU, as an SDF layer's drag is drawn, would make it a
+constant, and is the follow-up if a larger mesh needs it.
+
+**Where the frame budget is held.** The 16.7 ms is asserted in an optimised
+build on a machine that is not a hosted runner. A debug build measures the
+profile and a hosted runner measures the runner: the 4.5 ms frame above read
+17.4, 32.6 and 46.0 ms in release on `macos-14` and 95–142 ms in debug there,
+and both first-drag budgets were red on every macOS job from the day they
+landed. In a debug build or with `CI` set the figure is printed with the
+reason, and the test still fails on a brick re-meshed, a document moved before
+the release or a surface not drawn where the hand took it
+(`support::hold_to_budget`). The budget itself is not loosened to fit a
+runner; `benchmarks/ci-gate.md` has the runner's spread and the reasoning.
 
 **Dragging a placed object draws the object, and the field follows on
 release.** A placed object in a field is one item blended into the others, so

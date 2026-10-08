@@ -16,6 +16,67 @@ use clayspace_engine::ClayDocument;
 use clayspace_model::SculptModel;
 use clayspace_view::{Camera, Gpu, GpuMesh, Image, MeshSpan, OffscreenTarget, Renderer, Vertex};
 
+/// What a budget in milliseconds is in this run: a verdict, or a figure.
+///
+/// A millisecond budget is a property of the optimised binary on a known
+/// machine. A debug build measures the profile: the mesh reference's carried
+/// rebuild is 3.2–4.2 ms in release and 71–283 ms in debug on an Apple M3 Pro, the
+/// same work in the same per-vertex loops. A hosted runner measures the
+/// runner: that 4.5 ms release frame read 16.9 ms on a `macos-14` Metal job
+/// and 32–46 ms on its CPU-only one, on a three-core virtual machine at a
+/// load of four to eight per core (`benchmarks/ci-gate.md` has the spread).
+/// The two `gizmo_first_drag` budgets were red on every macOS job from the
+/// day they landed (#312, #314), in release as well as debug, and a gate that
+/// fails on the runner's noise is one people learn to ignore. So a budget is
+/// asserted in release off a hosted runner, which `CI` marks, and printed
+/// everywhere else. The assertions beside it — what was re-meshed, what moved,
+/// what was drawn — are counts, and hold in every build on every machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// The budget is asserted.
+    Asserted,
+    /// The figure is printed with the reason it is not a verdict here.
+    Reported(&'static str),
+}
+
+/// The rule, on its own so it can be tested: a debug build and a hosted
+/// runner each report rather than assert.
+pub fn verdict_for(debug_build: bool, hosted_runner: bool) -> Verdict {
+    if debug_build {
+        Verdict::Reported("debug build")
+    } else if hosted_runner {
+        Verdict::Reported("hosted runner")
+    } else {
+        Verdict::Asserted
+    }
+}
+
+/// The rule applied to this run. GitHub Actions sets `CI` on every job.
+pub fn budget_verdict() -> Verdict {
+    verdict_for(cfg!(debug_assertions), std::env::var_os("CI").is_some())
+}
+
+/// Holds `took` to `budget` where a millisecond budget is a verdict, and
+/// prints the figure where it is not.
+pub fn hold_to_budget(what: &str, took: std::time::Duration, budget: std::time::Duration) {
+    match budget_verdict() {
+        Verdict::Asserted => {
+            assert!(
+                took < budget,
+                "{what} took {took:?}, over the {budget:?} budget"
+            );
+        }
+        Verdict::Reported(why) => {
+            println!(
+                "  ({why}: {what} took {:.2} ms against the {:.3} ms budget — reported, \
+                 not asserted; run with --release off CI for the verdict)",
+                took.as_secs_f64() * 1000.0,
+                budget.as_secs_f64() * 1000.0,
+            );
+        }
+    }
+}
+
 /// Where captured frames are written.
 pub fn output_dir() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
