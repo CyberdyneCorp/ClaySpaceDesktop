@@ -13,9 +13,12 @@ Each frame of the drag SHALL refill the region that move changed and no more
 than its influence bound. The region is the overlap of the node's influence
 bound, taken before and after the move, with the region the engine reports for
 the move. For an intersecting object the engine's region is the sweep of where
-it was and where it went, not the whole layer. The cached surface SHALL then
-agree with the document, including after placing an intersecting object and
-after undoing or redoing its drag.
+it was and where it went, dilated by the blend supports of the combines after
+the object in its layer and by nothing else; an object with no smooth combine
+after it, which is how a placed object sits, SHALL refill no more bricks a
+frame than the same drag subtracting. The cached surface SHALL then agree with
+the document, including after placing an intersecting object and after undoing
+or redoing its drag.
 
 #### Scenario: The cavity follows the drag
 - **WHEN** a subtracted object is dragged across the form
@@ -26,11 +29,11 @@ after undoing or redoing its drag.
 - **THEN** the drag continues at interactive speed and the surface settles when
   it ends
 
-#### Scenario: An intersecting object does not refill its layer every frame
+#### Scenario: An intersecting object refills what a subtracting one does
 - **WHEN** an object set to intersect is dragged across a large worked form
-- **THEN** each frame refills well under the bricks its layer holds, and the
-  drawn surface matches the document where the object was, where it is and
-  everywhere else
+- **THEN** each frame refills no more bricks than the same drag with the
+  object subtracting, and the drawn surface matches the document where the
+  object was, where it is and everywhere else
 
 #### Scenario: Placing an intersecting object keeps only what it intersects
 - **WHEN** an object set to intersect is placed on the form

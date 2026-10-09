@@ -215,3 +215,20 @@ later:
   `CLAYSPACE_BENCH_PHASES=1` prints each brush sample's phases (the engine
   edit, the re-smooth, the meshing, the mask, the vertex build and the
   upload), which is how the flush was named.
+
+by a pad. At engine 0.120.1 the pad was the whole layer's chain pad, and in
+brick keys per frame (`crates/clayspace-app/tests/intersect_drag_scaling.rs`)
+the intersect went from 5,040 to 3,360 on `reference` and from 84,672 to about
+25,000 on `reference-10x`, against about 1,000 subtracting
+(CyberdyneCorp/ClayCore#666). Since engine 0.126.0 the pad is the sum of the
+supports of the combines after the operand, which for a placed object is
+nothing, and the intersect refills the same 880 to 1,232 keys a frame the
+subtract does on both scenes. The ratio within one run, measured on an Apple
+M3 Pro with Metal at the 0.126.0 pin:
+
+| pin | where | intersect ÷ subtract |
+|---|---|---:|
+| v0.126.0 | Apple M3 Pro, Metal, four local runs | 0.72x–0.87x |
+
+Both committed baselines carry `object.drag_frame_intersect` recorded before
+the change, so the gate holds it to the old figure until they are re-recorded.

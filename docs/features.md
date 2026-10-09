@@ -3686,8 +3686,8 @@ at the speed of the hand and the surface catches up **once**, when the pointer
 comes up — the same answer the region-based brushes already give, and for the
 same reason.
 
-One of the operations is still dearer than the rest to drag. An object set to
-**Interseção** has the whole layer as its influence, because an intersection
+One of the operations used to be dearer than the rest to drag. An object set
+to **Interseção** has the whole layer as its influence, because an intersection
 removes material wherever the layer has any, and a frame that refilled that
 region cost more than twice the subtracting frame: 21.3 ms against 49.1 ms in
 `benchmarks/archive/linux-x86_64-cuda-engine-0.52.2.json`, 2.73x on the
@@ -3696,14 +3696,31 @@ region cost more than twice the subtracting frame: 21.3 ms against 49.1 ms in
 
 A move changes less than an arbitrary edit. The surface can only have moved
 inside the sweep of where the object was and where it went. The engine reports
-that region (`clay_layer_set_transform_bound`), dilated by a pad for the
-blended strokes further down the layer, and a frame refills where that region
-overlaps the influence bound (#282). On the benchmark scenes that is 3,360
-bricks a frame against the layer's 5,040 at the reference size, and 23,520 to
-26,880 against 84,672 at ten times the area. The subtracting control is 1,012,
-and the engine's pad is what stands between the two (CyberdyneCorp/ClayCore#666).
-A stretched object, with different scales per axis, still refills its layer:
-the engine has no narrow answer for one.
+that region (`clay_layer_set_transform_bound`) and a frame refills where it
+overlaps the influence bound (#282). The region is the sweep dilated by a pad
+for the combines *after* the object in its layer — a smooth blend further
+down the chain can carry the change back into the band — and by nothing
+before it, which built the value the intersection reads and did not change.
+Up to engine 0.120.1 the pad was taken over the whole layer, and on a worked
+form it grew with the form: 3,360 bricks a frame against the layer's 5,040 at
+the reference size, 23,520 to 26,880 against 84,672 at ten times the area,
+where the subtracting control refilled about 1,000 (ClayCore#666). Since
+engine 0.126.0 the pad is the sum of the later combines' supports. A placed
+object is appended last, so it carries none, and the same three frames of the
+benchmark's drag refill 880, 1,056 and 1,232 bricks whether the object
+subtracts or intersects, at the reference size and at ten times it
+(`crates/clayspace-app/tests/intersect_drag_scaling.rs`). On an Apple M3 Pro
+with Metal, `object.drag_frame_intersect` is 0.72–0.87x `object.drag_frame`
+across four runs. An object with smooth combines after it still refills more
+than its sweep, by their supports, which is the engine's stated limit; a
+stretched object, with different scales per axis, still refills its layer,
+because the engine has no narrow answer for one.
+
+The ten-times scene is no longer seconds a frame — 14 to 125 ms a frame on the
+same machine, against 15 to 17 subtracting — but it is not at parity either:
+with the region identical, the engine's fill spends up to ten times longer on
+an intersect's bricks than on a subtract's on about half the frames there, a
+cost of the fill itself rather than of the bound.
 
 ### A model as an operand
 

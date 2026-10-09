@@ -845,3 +845,19 @@ above — an intersect's influence bound is its layer, so each drag frame refill
 the whole layer — and it is now tracked as issue #282 with the figure to watch.
 The committed baselines no longer hide it: both platforms' gates carry
 `object.drag_frame_intersect`. See `benchmarks/ci-gate.md`.
+
+---
+
+# Note, 2026-10-06: resolved at ClayCore v0.126.0
+
+The regression this report raised is closed by #282. The application now
+refills a move by the region the engine reports for it
+(`clay_layer_set_transform_bound`, #291), and ClayCore v0.126.0 pads that
+region by the combines after the operand rather than by the whole layer
+(ClayCore#676). A placed operand is appended last and carries no pad, so an
+intersect frame refills the same bricks its subtract control does on
+`reference` and on `reference-10x`; intersect ÷ subtract within one run is
+0.72x–0.87x on an Apple M3 Pro with Metal. The "further 5–7x that nothing here
+explains" in the superlinear scaling above survives as a per-brick cost of the
+engine's fill on `reference-10x`, now isolated from the region. The figures
+above are left as recorded; `benchmarks/ci-gate.md` carries the current ones.
