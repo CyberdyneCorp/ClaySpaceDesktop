@@ -96,3 +96,20 @@ The twenty-edit series is now a regression test (`crates/clayspace-engine/tests/
 | price of a brick | 2.4–2.5 µs | 5.6–6.5 µs | 1.93–2.24x |
 
 The region no longer grows. What is left is the price of one brick over a longer chain, and a collapse could be credited only with that part. It cannot claim it on this pin: `a_baked_patch_has_no_decisive_undo_win` measures an undo over a baked patch at 4.4x one over the chain. So the floor stays at zero. The first condition, a sampled volume that refills near an analytic item's price, is still the one that would change the verdict.
+
+## Re-measured on v0.126.0
+
+The pin moved from v0.120.1 to v0.126.0 (76 engine commits; none of them names the cost of consolidation, the baked volume or the chain's evaluation), so `measure_the_collapse_against_the_chain` was run again. Mac, release, on a host sharing its cores with another build:
+
+| brush | gesture | undo, chain | undo, collapsing | a brick, chain | a brick, collapsing |
+|---|---:|---:|---:|---:|---:|
+| 0.45 | 1 | 1.7 ms | 1.7 ms | 1.9 µs | 1.8 µs |
+| 0.45 | 10 | 8.2 ms | 35 ms (a collapse, 9,152 bricks) | 8.4 µs | 3.8 µs |
+| 0.45 | 20 | 16.3 ms | 24 ms | 16.7 µs | 24.3 µs |
+| 0.45 | 40 | 13.4 ms | 185 ms (a collapse, 10,752 bricks) | 13.7 µs | 17.2 µs |
+| 0.12 | 1 | 0.36 ms | 0.30 ms | 2.5 µs | 2.1 µs |
+| 0.12 | 10 | 0.89 ms | 76 ms (a collapse, 6,384 bricks) | 6.2 µs | 11.9 µs |
+| 0.12 | 20 | 0.70 ms | 76 ms (a collapse) | 4.8 µs | 11.9 µs |
+| 0.12 | 40 | 1.23 ms | 257 ms (a collapse) | 8.5 µs | 40.3 µs |
+
+The verdict is the v0.120.1 one. The chain's undo stays in the millisecond class over forty gestures on a region that does not grow, and the collapse costs more at every checkpoint past the first gesture: 1.5x between collapses, 4x to 210x on a gesture that collapsed. The thirteen pinned tests in `tests/undo_series.rs` and `tests/chain_compaction.rs` pass on this pin. The floor stays at zero, and the change is archived with the mechanism built, tested and off, and with the five tasks that only make sense once a baked brick is cheap left unchecked below their reason.

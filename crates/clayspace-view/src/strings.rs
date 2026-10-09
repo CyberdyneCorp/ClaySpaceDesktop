@@ -527,6 +527,10 @@ pub struct Strings {
     pub optimize_advice: &'static str,
     pub optimize_action: &'static str,
     pub optimize_busy: &'static str,
+    /// What the bake costs, said where it is offered: the subtool is
+    /// resampled at the surface's own spacing, so detail finer than one
+    /// sample is softened. A sculptor accepts a stated tolerance.
+    pub optimize_hint: &'static str,
     /// Rebuilding a mesh layer's topology through a voxel field — DynaMesh.
     ///
     /// The action is named for what it does to the form rather than for the
@@ -1385,6 +1389,8 @@ libera em vez de congelar.",
     optimize_advice: "Esta camada ficou pesada de avaliar",
     optimize_action: "Otimizar",
     optimize_busy: "Otimizando…",
+    optimize_hint: "reamostra a camada inteira no espaçamento da própria superfície: \
+                    o detalhe mais fino que uma amostra fica suavizado",
     remesh_heading: "Refazer a malha",
     remesh_action: "Refazer",
     remesh_busy: "Refazendo a malha…",
@@ -2168,6 +2174,8 @@ instead.",
     optimize_advice: "This subtool has become costly to evaluate",
     optimize_action: "Optimise",
     optimize_busy: "Optimising…",
+    optimize_hint: "resamples the whole subtool at the surface's own spacing: detail \
+                    finer than one sample is softened",
     remesh_heading: "Rebuild the mesh",
     remesh_action: "Rebuild",
     remesh_busy: "Rebuilding the mesh…",
@@ -2951,6 +2959,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     optimize_advice: "Esta capa se volvió costosa de evaluar",
     optimize_action: "Optimizar",
     optimize_busy: "Optimizando…",
+    optimize_hint: "vuelve a muestrear toda la capa en el espaciado de la propia \
+                    superficie: el detalle más fino que una muestra se suaviza",
     remesh_heading: "Rehacer la malla",
     remesh_action: "Rehacer",
     remesh_busy: "Rehaciendo la malla…",
@@ -4545,6 +4555,25 @@ mod tests {
                 second.label()
             );
         }
+    }
+
+    #[test]
+    fn the_optimise_offer_states_its_price_in_every_language() {
+        // #174, acceptance 6: a sculptor accepts a stated tolerance. The
+        // whole-layer bake resamples the subtool, and the offer has to say
+        // so in every locale rather than in the one it was written in.
+        let en = Strings::for_locale(Locale::EnUs);
+        let pt = Strings::for_locale(Locale::PtBr);
+        let es = Strings::for_locale(Locale::Es419);
+        for (strings, label) in [(&en, "en-US"), (&pt, "pt-BR"), (&es, "es-419")] {
+            assert!(
+                !strings.optimize_hint.trim().is_empty(),
+                "the optimise offer says nothing about its price in {label}"
+            );
+        }
+        assert_ne!(en.optimize_hint, pt.optimize_hint);
+        assert_ne!(en.optimize_hint, es.optimize_hint);
+        assert_ne!(pt.optimize_hint, es.optimize_hint);
     }
 
     #[test]

@@ -2949,7 +2949,9 @@ hidden layer is refused as hidden: visibility used to be folded into the
 "editable" answer, which was asked first, so a hidden layer was refused as
 locked. Optimize, the whole-layer bake, is a field's action; on a grid or a
 mesh it is refused naming the layer's representation rather than answering
-"nothing to consolidate".
+"nothing to consolidate". The Optimize button's hover says what the bake costs: the subtool
+is resampled at the surface's own spacing, so detail finer than one sample is
+softened.
 
 **Neither state can be set yet, and neither can the stack's order.** The engine
 carries all three states, `SceneModel` writes them, and `SceneViewModel` has
