@@ -12,3 +12,14 @@ The regional bake was expected to replace this refusal. It was measured instead:
 #### Scenario: A layer degraded by something other than a chain
 - **WHEN** the layer's degradation is a stack of volumes or a long edit list
 - **THEN** the whole-layer collapse is still what runs, unchanged
+
+### Requirement: The whole-layer bake states what it costs in detail
+Where the application offers to optimise a field layer, the offer SHALL say that the bake resamples the subtool at the surface's own spacing and that detail finer than one sample is softened, in every locale the interface speaks, so that a sculptor accepts a stated tolerance rather than discovering one.
+
+#### Scenario: A layer the bake would help
+- **WHEN** a field layer's degradation is a stack of volumes or a long edit list, and the interface offers to optimise it
+- **THEN** the offer's hint says the subtool is resampled at the surface's own spacing and that detail finer than one sample is softened
+
+#### Scenario: Every locale says it
+- **WHEN** the interface is in any of its locales
+- **THEN** the hint is present and translated rather than copied from another locale

@@ -285,6 +285,18 @@ where the first entry had it — do not collapse a chain by default — and this
 time for a measured reason, with a tripwire that says when it stops holding.
 See "The decay" above for the figures.
 
+Two pins later the picture is settled, and the figures live in a test rather
+than here. ClayCore v0.120.1 (#648) made the undo of a grab refill the grab's
+own reach instead of its node's bound, so the region an undo re-meshes no
+longer grows with the chain: `crates/clayspace-engine/tests/undo_series.rs`
+pins it flat at 144 bricks over forty gestures, and the undo itself at a few
+milliseconds. What is left of the growth is the price of one brick over a
+longer chain, and that is the one thing a baked patch raises rather than
+lowers: on v0.120.1 and again on v0.126.0, an undo over the collapsed patch
+costs more than one over the chain at every checkpoint past the first
+gesture. The tables are in `crates/clayspace-engine/src/compaction.rs`. The
+collapse stays built and off.
+
 ---
 
 ## What the investigation itself got wrong

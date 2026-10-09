@@ -93,6 +93,33 @@
 //! still left 32–47 µs and 58–133 µs. On this pin the floor stays at zero, and
 //! `a_baked_patch_has_no_decisive_per_brick_win` holds the price of a brick
 //! apart from the brick count the undo series already pins.
+//!
+//! ## Re-measured on v0.126.0
+//!
+//! The same measurement on the pin that followed. ClayCore v0.120.1 to
+//! v0.126.0 is 76 commits, and none of them names the cost of consolidation,
+//! the baked volume or the chain's evaluation (#659 only makes consolidation
+//! refuse a voxel or mesh layer by name). Mac, release, on a host sharing its
+//! cores with another build:
+//!
+//! | brush | gesture | undo, chain | undo, collapsing | a brick, chain | a brick, collapsing |
+//! |---|---:|---:|---:|---:|---:|
+//! | 0.45 | 1 | 1.7 ms | 1.7 ms | 1.9 µs | 1.8 µs |
+//! | 0.45 | 10 | 8.2 ms | 35 ms (a collapse, 9,152 bricks) | 8.4 µs | 3.8 µs |
+//! | 0.45 | 20 | 16.3 ms | 24 ms | 16.7 µs | 24.3 µs |
+//! | 0.45 | 40 | 13.4 ms | 185 ms (a collapse, 10,752 bricks) | 13.7 µs | 17.2 µs |
+//! | 0.12 | 1 | 0.36 ms | 0.30 ms | 2.5 µs | 2.1 µs |
+//! | 0.12 | 10 | 0.89 ms | 76 ms (a collapse, 6,384 bricks) | 6.2 µs | 11.9 µs |
+//! | 0.12 | 20 | 0.70 ms | 76 ms (a collapse) | 4.8 µs | 11.9 µs |
+//! | 0.12 | 40 | 1.23 ms | 257 ms (a collapse) | 8.5 µs | 40.3 µs |
+//!
+//! Nothing moved. The chain's undo stays in its class over forty gestures,
+//! 1.7 to 13.4 ms (0.45) and 0.36 to 1.23 ms (0.12), on a region that does
+//! not grow (980 and 144 bricks). Every collapsing checkpoint past the first
+//! gesture costs more than the chain: 1.5x between collapses, and 4x to 210x
+//! on a gesture that collapsed, whose undo re-meshes the whole closure. A
+//! brick over the baked patch is dearer than one over the chain from gesture
+//! 20 on. The floor stays at zero on this pin too.
 
 use std::collections::HashMap;
 use std::time::Duration;

@@ -20,7 +20,6 @@ the reasoning in them rather than as status.
 | change | what is left |
 |---|---|
 | `retopology-uv-and-baking` | the seam tool and UV view, the retopology benchmark group, and the release checks; one task is blocked upstream, since CyberRemesher reports no solver |
-| `bound-the-chain-by-region` | all of it: consolidate a gesture's region with `clay_layer_consolidate_region`, which is wrapped and tested in `claycore` and called by nothing in the application |
 | `route-layer-reorder-and-protection` | all of it: the specification promises reordering and protecting a layer from the stack, and no command reaches `SceneViewModel::reorder` or `set_protection` |
 | `a-cut-drawn-on-the-view` | a perspective-error bound and an inversion modifier, both deferred with their reasons in the tasks file |
 | `gates-that-can-fail` | wiring the remaining ViewModels and splitting `App` and `ClayDocument` |
@@ -661,9 +660,12 @@ and two diagnostics that would sit beside the ones already exported —
 `clay_document_extent_stats` and `clay_layer_warp_cost_get`.
 
 Also wrapped in `claycore` and not yet offered by the application: the adaptive
-surface, `clay_dynamic_*`, wrapped in #219; and `clay_layer_consolidate_region`
-with its plan, which `bound-the-chain-by-region` is built around. And
-`clay_mesh_concat`, which a voxel export that keeps its grids would use.
+surface, `clay_dynamic_*`, wrapped in #219; and `clay_mesh_concat`, which a
+voxel export that keeps its grids would use. `clay_layer_consolidate_region`
+with its plan is wrapped *and* called, by the end-of-gesture collapse that
+`bound-the-chain-by-region` built and left switched off: measured on three
+pins, a baked patch refills dearer per brick than the chain it replaces
+(`crates/clayspace-engine/src/compaction.rs`).
 
 ### Upstream: available and not needed
 
@@ -1877,8 +1879,12 @@ parametric items outside it alone, which would make repeated work on one patch
 O(1) in gestures rather than O(n). The engine has it now —
 `clay_layer_consolidate_region`, with `clay_layer_plan_region_merge` to show
 what it would absorb first — wrapped and tested in `claycore`
-(`consolidate_region.rs`) and not yet called by the application. Adopting it is
-`bound-the-chain-by-region`.
+(`consolidate_region.rs`), and adopted by `bound-the-chain-by-region` behind a
+floor the application leaves at zero. Measured on v0.120.0, v0.120.1 and
+v0.126.0, a baked patch refills dearer per brick than the chain it replaces, so
+the collapse bounds the chain and not the cost; the undo region that made the
+chain hurt was fixed upstream instead (ClayCore #648), and the series is pinned
+in `tests/undo_series.rs`.
 
 **The Move transaction's preview is not carried by the C ABI.** ClayCore's C++
 `SdfMoveTransaction` exposes `preview_layer()` — a private copy of the layer

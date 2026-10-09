@@ -45,6 +45,18 @@ layer pull are pinned at 1, 10, 20 and 40 edits
 `a_stroke_on_a_grown_layer_begins_near_the_first`). The full table is in
 `compaction.rs`.
 
+**Re-measured on v0.126.0, and unchanged.** The pin moved 76 engine commits,
+none touching consolidation cost, the baked volume or the chain's evaluation.
+The same forty-gesture run on this pin (design.md, *Re-measured on v0.126.0*)
+has the chain's undo at 1.7–13.4 ms (0.45) and 0.36–1.23 ms (0.12) over
+forty gestures, and the collapse dearer at every checkpoint past the first:
+1.5x between collapses, 4x to 210x on a gesture that collapsed. All thirteen
+pinned tests pass. The floor stays at zero. The change is archived in this
+state: the mechanism is built, reachable and tested, the cure for the undo
+region landed upstream, and what a collapse could still lower — the price of
+one brick over a longer chain — it raises instead. The five unchecked tasks
+below only make sense once a baked brick is cheap, and each keeps its reason.
+
 ## 1. Calibrate the floor, before anything is wired
 
 - [x] 1.1 Extend the existing decay fixture to record, per gesture on a worked patch: chain length, `safe_step_scale`, and whether a raycast still finds the surface. Mirrored and unmirrored. — `tests/chain_compaction.rs`, `calibrate_the_floor_on_a_worked_patch`, 512 rays through the engine's own march.
@@ -75,6 +87,7 @@ layer pull are pinned at 1, 10, 20 and 40 edits
 - [ ] 5.1 Replace the refusal at `consolidate_layer` with the regional collapse, using the last gesture's region for that layer. — Not done, deliberately: measured, the regional bake slows the layer the sculptor asked to speed up, so the refusal is the right answer on this pin. The sculpting-tools delta now says so.
 - [ ] 5.2 Keep the refusal only where no region is known, with a message that says so rather than the current one about brush chains. — Follows 5.1.
 - [x] 5.3 Leave the whole-layer path untouched for a stack of volumes or a long edit list.
+- [x] 5.4 Say what the whole-layer bake costs in detail where the offer is made, so a sculptor who accepts it knows the tolerance (#174, acceptance 6). — The Optimise button's hover, in all three locales: the subtool is resampled at the surface's own spacing, and detail finer than one sample is softened. `optimize_hint` in `strings.rs`, pinned by `the_optimise_offer_states_its_price_in_every_language`.
 
 ## 6. Tests, each failing before its change
 

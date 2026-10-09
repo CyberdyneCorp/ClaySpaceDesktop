@@ -1158,7 +1158,7 @@ pub(super) fn field_health_control(
             .color(Tokens::accent()),
     );
     ui.horizontal(|ui| {
-        let button = ui.button(s.optimize_action);
+        let button = ui.button(s.optimize_action).on_hover_text(s.optimize_hint);
         ui.ctx()
             .memory_mut(|memory| memory.data.insert_temp(optimize_button_id(), button.rect));
         if button.clicked() {
